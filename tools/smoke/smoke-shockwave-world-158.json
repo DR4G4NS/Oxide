@@ -1,0 +1,62 @@
+{
+  "version": 6,
+  "map_name": "maze",
+  "tiles": [
+    {
+      "position": 1310820, "block": 308, "rotation": 0, "team": 1,
+      "config": [0], "occupied": [1310820], "stored_item": 15, "stored_amount": 1,
+      "production_progress": 1000.0, "transport_progress": 0.0, "ammo_units": 0.0,
+      "inventory": [[15,1]], "power_stored": 0.0, "stored_liquid": -1,
+      "liquid_amount": 0.0, "output_liquid_amount": 0.0, "junction_items": [],
+      "mass_driver_incoming": [], "mass_driver_rotation": 90.0,
+      "mass_driver_waiting": [], "health": 40.0
+    },
+    {
+      "position": 1376356, "block": 306, "rotation": 0, "team": 1,
+      "config": [0], "occupied": [1376356], "stored_item": -1, "stored_amount": 0,
+      "production_progress": 0.0, "transport_progress": 0.0, "ammo_units": 0.0,
+      "inventory": [], "power_stored": 4000.0, "stored_liquid": -1,
+      "liquid_amount": 0.0, "output_liquid_amount": 0.0, "junction_items": [],
+      "mass_driver_incoming": [], "mass_driver_rotation": 90.0,
+      "mass_driver_waiting": [], "health": 40.0
+    },
+    {
+      "position": 1441892, "block": 304, "rotation": 0, "team": 1,
+      "config": [0], "occupied": [1441892,1507428,1441893,1507429],
+      "stored_item": -1, "stored_amount": 0,
+      "production_progress": 0.0, "transport_progress": 0.0, "ammo_units": 0.0,
+      "inventory": [], "power_stored": 0.0, "stored_liquid": -1,
+      "liquid_amount": 0.0, "output_liquid_amount": 0.0, "junction_items": [],
+      "mass_driver_incoming": [], "mass_driver_rotation": 90.0,
+      "mass_driver_waiting": [], "health": 200.0
+    },
+    {
+      "position": 3276900, "block": 254, "rotation": 0, "team": 1,
+      "config": [0],
+      "occupied": [3211363,3276899,3342435,3211364,3276900,3342436,3211365,3276901,3342437],
+      "stored_item": -1, "stored_amount": 0,
+      "production_progress": 74.0, "transport_progress": 0.0, "ammo_units": 0.0,
+      "inventory": [], "power_stored": 0.0, "stored_liquid": 10,
+      "liquid_amount": 15.0, "output_liquid_amount": 0.0, "junction_items": [],
+      "mass_driver_incoming": [], "mass_driver_rotation": 90.0,
+      "mass_driver_waiting": [], "health": 915.0
+    }
+  ],
+  "core_items": [10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,
+                 10000,10000,10000,10000,10000,10000,10000,10000,10000,10000],
+  "wave": 1,
+  "wave_time": 10000.0,
+  "core_health": 6000.0,
+  "game_over": false,
+  "enemies": [{
+    "id": 3000200, "unit_type": 18, "entity_class": 3,
+    "x": 520.0, "y": 800.0, "rotation": 180.0,
+    "health": 7200.0, "shield": 0.0, "status_effect": -1,
+    "velocity_x": 0.0, "velocity_y": 0.0,
+    "attack_reload": 0.0, "secondary_attack_reload": 0.0,
+    "tertiary_attack_reload": 0.0, "move_speed": 0.8,
+    "attack_damage": 110.0, "attack_reload_time": 20.0, "attack_range": 200.0
+  }],
+  "base_building_health": [],
+  "players": []
+}

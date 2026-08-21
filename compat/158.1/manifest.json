@@ -1,0 +1,31 @@
+{
+  "blocks_count": 446,
+  "build": "158.1",
+  "capabilities": {
+    "entity_mapping": true,
+    "packetIdAssetStream": false,
+    "packetIdWorldStream": false,
+    "packet_classes": true,
+    "save_versions": true,
+    "typeio_methods": true
+  },
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "items_count": 22,
+  "jar": {
+    "filename": "desktop.jar",
+    "sha256": "95b525b548512aa713c4d040bbdc4bfe582e2827dfce037f597e0bb5f1a5c06a",
+    "size_bytes": 80935962
+  },
+  "liquids_count": 11,
+  "packet_count": 158,
+  "save_versions_count": 11,
+  "schema_version": 2,
+  "source_commit": "05b2ecd4eb578ac38cace8118dbecc1bd548ff4a",
+  "source_ref": "v158.1",
+  "status_effects_count": 23,
+  "units_count": 69,
+  "version_properties": "#Sun May 24 20:12:55 EDT 2026\nnumber=8\nbuild=158.1\nmodifier=release\nandroidBuildCode=30432\nbuildDate=May 24, 2026 20\\:12 PM\ntype=official\ncommitHash=unknown\n"
+}

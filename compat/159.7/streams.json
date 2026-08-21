@@ -1,0 +1,57 @@
+{
+  "build": "159.7",
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "159.7.jar",
+    "sha256": "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05",
+    "size_bytes": 82540141
+  },
+  "schema_version": 2,
+  "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
+  "source_ref": "v159.7",
+  "streams": [
+    {
+      "class": "mindustry.net.Packets$StreamBegin",
+      "class_name": "StreamBegin",
+      "incremental": false,
+      "lifecycle": "framing",
+      "packet_id": 0,
+      "registration_order": 0
+    },
+    {
+      "class": "mindustry.net.Packets$StreamChunk",
+      "class_name": "StreamChunk",
+      "incremental": false,
+      "lifecycle": "framing",
+      "packet_id": 1,
+      "registration_order": 1
+    },
+    {
+      "class": "mindustry.net.Packets$WorldStream",
+      "class_name": "WorldStream",
+      "incremental": false,
+      "lifecycle": "world_join",
+      "packet_id": 2,
+      "registration_order": 2
+    },
+    {
+      "class": "mindustry.net.Packets$AssetRequirementStream",
+      "class_name": "AssetRequirementStream",
+      "incremental": false,
+      "lifecycle": "asset_join",
+      "packet_id": 4,
+      "registration_order": 4
+    },
+    {
+      "class": "mindustry.net.Packets$AssetStream",
+      "class_name": "AssetStream",
+      "incremental": true,
+      "lifecycle": "asset_join",
+      "packet_id": 5,
+      "registration_order": 5
+    }
+  ]
+}

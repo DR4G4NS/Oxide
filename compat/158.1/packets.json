@@ -1,0 +1,807 @@
+{
+  "build": "158.1",
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "desktop.jar",
+    "sha256": "95b525b548512aa713c4d040bbdc4bfe582e2827dfce037f597e0bb5f1a5c06a",
+    "size_bytes": 80935962
+  },
+  "packets": [
+    {
+      "class": "mindustry.net.Packets$StreamBegin",
+      "id": 0,
+      "name": "StreamBegin"
+    },
+    {
+      "class": "mindustry.net.Packets$StreamChunk",
+      "id": 1,
+      "name": "StreamChunk"
+    },
+    {
+      "class": "mindustry.net.Packets$WorldStream",
+      "id": 2,
+      "name": "WorldStream"
+    },
+    {
+      "class": "mindustry.net.Packets$ConnectPacket",
+      "id": 3,
+      "name": "ConnectPacket"
+    },
+    {
+      "class": "mindustry.gen.AdminRequestCallPacket",
+      "id": 4,
+      "name": "AdminRequestCallPacket"
+    },
+    {
+      "class": "mindustry.gen.AnnounceCallPacket",
+      "id": 5,
+      "name": "AnnounceCallPacket"
+    },
+    {
+      "class": "mindustry.gen.AssemblerDroneSpawnedCallPacket",
+      "id": 6,
+      "name": "AssemblerDroneSpawnedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.AssemblerUnitSpawnedCallPacket",
+      "id": 7,
+      "name": "AssemblerUnitSpawnedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.AutoDoorToggleCallPacket",
+      "id": 8,
+      "name": "AutoDoorToggleCallPacket"
+    },
+    {
+      "class": "mindustry.gen.BeginBreakCallPacket",
+      "id": 9,
+      "name": "BeginBreakCallPacket"
+    },
+    {
+      "class": "mindustry.gen.BeginPlaceCallPacket",
+      "id": 10,
+      "name": "BeginPlaceCallPacket"
+    },
+    {
+      "class": "mindustry.gen.BlockSnapshotCallPacket",
+      "id": 11,
+      "name": "BlockSnapshotCallPacket"
+    },
+    {
+      "class": "mindustry.gen.BuildDestroyedCallPacket",
+      "id": 12,
+      "name": "BuildDestroyedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.BuildHealthUpdateCallPacket",
+      "id": 13,
+      "name": "BuildHealthUpdateCallPacket"
+    },
+    {
+      "class": "mindustry.gen.BuildingControlSelectCallPacket",
+      "id": 14,
+      "name": "BuildingControlSelectCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClearItemsCallPacket",
+      "id": 15,
+      "name": "ClearItemsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClearLiquidsCallPacket",
+      "id": 16,
+      "name": "ClearLiquidsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClearObjectivesCallPacket",
+      "id": 17,
+      "name": "ClearObjectivesCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientBinaryPacketReliableCallPacket",
+      "id": 18,
+      "name": "ClientBinaryPacketReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientBinaryPacketUnreliableCallPacket",
+      "id": 19,
+      "name": "ClientBinaryPacketUnreliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientLogicDataReliableCallPacket",
+      "id": 20,
+      "name": "ClientLogicDataReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientLogicDataUnreliableCallPacket",
+      "id": 21,
+      "name": "ClientLogicDataUnreliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientPacketReliableCallPacket",
+      "id": 22,
+      "name": "ClientPacketReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientPacketUnreliableCallPacket",
+      "id": 23,
+      "name": "ClientPacketUnreliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientPlanSnapshotCallPacket",
+      "id": 24,
+      "name": "ClientPlanSnapshotCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientPlanSnapshotReceivedCallPacket",
+      "id": 25,
+      "name": "ClientPlanSnapshotReceivedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ClientSnapshotCallPacket",
+      "id": 26,
+      "name": "ClientSnapshotCallPacket"
+    },
+    {
+      "class": "mindustry.gen.CommandBuildingCallPacket",
+      "id": 27,
+      "name": "CommandBuildingCallPacket"
+    },
+    {
+      "class": "mindustry.gen.CommandUnitsCallPacket",
+      "id": 28,
+      "name": "CommandUnitsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.CompleteObjectiveCallPacket",
+      "id": 29,
+      "name": "CompleteObjectiveCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ConnectCallPacket",
+      "id": 30,
+      "name": "ConnectCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ConnectConfirmCallPacket",
+      "id": 31,
+      "name": "ConnectConfirmCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ConstructFinishCallPacket",
+      "id": 32,
+      "name": "ConstructFinishCallPacket"
+    },
+    {
+      "class": "mindustry.gen.CopyToClipboardCallPacket",
+      "id": 33,
+      "name": "CopyToClipboardCallPacket"
+    },
+    {
+      "class": "mindustry.gen.CreateBulletCallPacket",
+      "id": 34,
+      "name": "CreateBulletCallPacket"
+    },
+    {
+      "class": "mindustry.gen.CreateMarkerCallPacket",
+      "id": 35,
+      "name": "CreateMarkerCallPacket"
+    },
+    {
+      "class": "mindustry.gen.CreateWeatherCallPacket",
+      "id": 36,
+      "name": "CreateWeatherCallPacket"
+    },
+    {
+      "class": "mindustry.gen.DebugStatusClientCallPacket",
+      "id": 37,
+      "name": "DebugStatusClientCallPacket"
+    },
+    {
+      "class": "mindustry.gen.DebugStatusClientUnreliableCallPacket",
+      "id": 38,
+      "name": "DebugStatusClientUnreliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.DeconstructFinishCallPacket",
+      "id": 39,
+      "name": "DeconstructFinishCallPacket"
+    },
+    {
+      "class": "mindustry.gen.DeletePlansCallPacket",
+      "id": 40,
+      "name": "DeletePlansCallPacket"
+    },
+    {
+      "class": "mindustry.gen.DestroyPayloadCallPacket",
+      "id": 41,
+      "name": "DestroyPayloadCallPacket"
+    },
+    {
+      "class": "mindustry.gen.DropItemCallPacket",
+      "id": 42,
+      "name": "DropItemCallPacket"
+    },
+    {
+      "class": "mindustry.gen.EffectCallPacket",
+      "id": 43,
+      "name": "EffectCallPacket"
+    },
+    {
+      "class": "mindustry.gen.EffectCallPacket2",
+      "id": 44,
+      "name": "EffectCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.EffectReliableCallPacket",
+      "id": 45,
+      "name": "EffectReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.EntitySnapshotCallPacket",
+      "id": 46,
+      "name": "EntitySnapshotCallPacket"
+    },
+    {
+      "class": "mindustry.gen.FollowUpMenuCallPacket",
+      "id": 47,
+      "name": "FollowUpMenuCallPacket"
+    },
+    {
+      "class": "mindustry.gen.GameOverCallPacket",
+      "id": 48,
+      "name": "GameOverCallPacket"
+    },
+    {
+      "class": "mindustry.gen.HiddenSnapshotCallPacket",
+      "id": 49,
+      "name": "HiddenSnapshotCallPacket"
+    },
+    {
+      "class": "mindustry.gen.HideFollowUpMenuCallPacket",
+      "id": 50,
+      "name": "HideFollowUpMenuCallPacket"
+    },
+    {
+      "class": "mindustry.gen.HideHudTextCallPacket",
+      "id": 51,
+      "name": "HideHudTextCallPacket"
+    },
+    {
+      "class": "mindustry.gen.InfoMessageCallPacket",
+      "id": 52,
+      "name": "InfoMessageCallPacket"
+    },
+    {
+      "class": "mindustry.gen.InfoPopupCallPacket",
+      "id": 53,
+      "name": "InfoPopupCallPacket"
+    },
+    {
+      "class": "mindustry.gen.InfoPopupCallPacket2",
+      "id": 54,
+      "name": "InfoPopupCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.InfoPopupReliableCallPacket",
+      "id": 55,
+      "name": "InfoPopupReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.InfoPopupReliableCallPacket2",
+      "id": 56,
+      "name": "InfoPopupReliableCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.InfoToastCallPacket",
+      "id": 57,
+      "name": "InfoToastCallPacket"
+    },
+    {
+      "class": "mindustry.gen.KickCallPacket",
+      "id": 58,
+      "name": "KickCallPacket"
+    },
+    {
+      "class": "mindustry.gen.KickCallPacket2",
+      "id": 59,
+      "name": "KickCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.LabelCallPacket",
+      "id": 60,
+      "name": "LabelCallPacket"
+    },
+    {
+      "class": "mindustry.gen.LabelCallPacket2",
+      "id": 61,
+      "name": "LabelCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.LabelReliableCallPacket",
+      "id": 62,
+      "name": "LabelReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.LabelReliableCallPacket2",
+      "id": 63,
+      "name": "LabelReliableCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.LandingPadLandedCallPacket",
+      "id": 64,
+      "name": "LandingPadLandedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.LogicExplosionCallPacket",
+      "id": 65,
+      "name": "LogicExplosionCallPacket"
+    },
+    {
+      "class": "mindustry.gen.MenuCallPacket",
+      "id": 66,
+      "name": "MenuCallPacket"
+    },
+    {
+      "class": "mindustry.gen.MenuChooseCallPacket",
+      "id": 67,
+      "name": "MenuChooseCallPacket"
+    },
+    {
+      "class": "mindustry.gen.OpenURICallPacket",
+      "id": 68,
+      "name": "OpenURICallPacket"
+    },
+    {
+      "class": "mindustry.gen.PayloadDroppedCallPacket",
+      "id": 69,
+      "name": "PayloadDroppedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.PickedBuildPayloadCallPacket",
+      "id": 70,
+      "name": "PickedBuildPayloadCallPacket"
+    },
+    {
+      "class": "mindustry.gen.PickedUnitPayloadCallPacket",
+      "id": 71,
+      "name": "PickedUnitPayloadCallPacket"
+    },
+    {
+      "class": "mindustry.gen.PingCallPacket",
+      "id": 72,
+      "name": "PingCallPacket"
+    },
+    {
+      "class": "mindustry.gen.PingLocationCallPacket",
+      "id": 73,
+      "name": "PingLocationCallPacket"
+    },
+    {
+      "class": "mindustry.gen.PingResponseCallPacket",
+      "id": 74,
+      "name": "PingResponseCallPacket"
+    },
+    {
+      "class": "mindustry.gen.PlayerDisconnectCallPacket",
+      "id": 75,
+      "name": "PlayerDisconnectCallPacket"
+    },
+    {
+      "class": "mindustry.gen.PlayerSpawnCallPacket",
+      "id": 76,
+      "name": "PlayerSpawnCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RemoveMarkerCallPacket",
+      "id": 77,
+      "name": "RemoveMarkerCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RemoveQueueBlockCallPacket",
+      "id": 78,
+      "name": "RemoveQueueBlockCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RemoveTileCallPacket",
+      "id": 79,
+      "name": "RemoveTileCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RemoveWorldLabelCallPacket",
+      "id": 80,
+      "name": "RemoveWorldLabelCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RequestBlockSnapshotCallPacket",
+      "id": 81,
+      "name": "RequestBlockSnapshotCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RequestBuildPayloadCallPacket",
+      "id": 82,
+      "name": "RequestBuildPayloadCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RequestDebugStatusCallPacket",
+      "id": 83,
+      "name": "RequestDebugStatusCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RequestDropPayloadCallPacket",
+      "id": 84,
+      "name": "RequestDropPayloadCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RequestItemCallPacket",
+      "id": 85,
+      "name": "RequestItemCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RequestUnitPayloadCallPacket",
+      "id": 86,
+      "name": "RequestUnitPayloadCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ResearchedCallPacket",
+      "id": 87,
+      "name": "ResearchedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.RotateBlockCallPacket",
+      "id": 88,
+      "name": "RotateBlockCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SectorCaptureCallPacket",
+      "id": 89,
+      "name": "SectorCaptureCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SendChatMessageCallPacket",
+      "id": 90,
+      "name": "SendChatMessageCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SendMessageCallPacket",
+      "id": 91,
+      "name": "SendMessageCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SendMessageCallPacket2",
+      "id": 92,
+      "name": "SendMessageCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.ServerBinaryPacketReliableCallPacket",
+      "id": 93,
+      "name": "ServerBinaryPacketReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ServerBinaryPacketUnreliableCallPacket",
+      "id": 94,
+      "name": "ServerBinaryPacketUnreliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ServerPacketReliableCallPacket",
+      "id": 95,
+      "name": "ServerPacketReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.ServerPacketUnreliableCallPacket",
+      "id": 96,
+      "name": "ServerPacketUnreliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetCameraPositionCallPacket",
+      "id": 97,
+      "name": "SetCameraPositionCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetFlagCallPacket",
+      "id": 98,
+      "name": "SetFlagCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetFloorCallPacket",
+      "id": 99,
+      "name": "SetFloorCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetHudTextCallPacket",
+      "id": 100,
+      "name": "SetHudTextCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetHudTextReliableCallPacket",
+      "id": 101,
+      "name": "SetHudTextReliableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetItemCallPacket",
+      "id": 102,
+      "name": "SetItemCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetItemsCallPacket",
+      "id": 103,
+      "name": "SetItemsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetLiquidCallPacket",
+      "id": 104,
+      "name": "SetLiquidCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetLiquidsCallPacket",
+      "id": 105,
+      "name": "SetLiquidsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetMapAreaCallPacket",
+      "id": 106,
+      "name": "SetMapAreaCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetObjectivesCallPacket",
+      "id": 107,
+      "name": "SetObjectivesCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetOverlayCallPacket",
+      "id": 108,
+      "name": "SetOverlayCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetPlayerTeamEditorCallPacket",
+      "id": 109,
+      "name": "SetPlayerTeamEditorCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetPositionCallPacket",
+      "id": 110,
+      "name": "SetPositionCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetRuleCallPacket",
+      "id": 111,
+      "name": "SetRuleCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetRulesCallPacket",
+      "id": 112,
+      "name": "SetRulesCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTeamCallPacket",
+      "id": 113,
+      "name": "SetTeamCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTeamsCallPacket",
+      "id": 114,
+      "name": "SetTeamsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTileCallPacket",
+      "id": 115,
+      "name": "SetTileCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTileBlocksCallPacket",
+      "id": 116,
+      "name": "SetTileBlocksCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTileFloorsCallPacket",
+      "id": 117,
+      "name": "SetTileFloorsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTileItemsCallPacket",
+      "id": 118,
+      "name": "SetTileItemsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTileLiquidsCallPacket",
+      "id": 119,
+      "name": "SetTileLiquidsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetTileOverlaysCallPacket",
+      "id": 120,
+      "name": "SetTileOverlaysCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetUnitCommandCallPacket",
+      "id": 121,
+      "name": "SetUnitCommandCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SetUnitStanceCallPacket",
+      "id": 122,
+      "name": "SetUnitStanceCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SoundCallPacket",
+      "id": 123,
+      "name": "SoundCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SoundAtCallPacket",
+      "id": 124,
+      "name": "SoundAtCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SpawnEffectCallPacket",
+      "id": 125,
+      "name": "SpawnEffectCallPacket"
+    },
+    {
+      "class": "mindustry.gen.StateSnapshotCallPacket",
+      "id": 126,
+      "name": "StateSnapshotCallPacket"
+    },
+    {
+      "class": "mindustry.gen.SyncVariableCallPacket",
+      "id": 127,
+      "name": "SyncVariableCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TakeItemsCallPacket",
+      "id": 128,
+      "name": "TakeItemsCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TextInputCallPacket",
+      "id": 129,
+      "name": "TextInputCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TextInputCallPacket2",
+      "id": 130,
+      "name": "TextInputCallPacket2"
+    },
+    {
+      "class": "mindustry.gen.TextInputResultCallPacket",
+      "id": 131,
+      "name": "TextInputResultCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TileConfigCallPacket",
+      "id": 132,
+      "name": "TileConfigCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TileTapCallPacket",
+      "id": 133,
+      "name": "TileTapCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TraceInfoCallPacket",
+      "id": 134,
+      "name": "TraceInfoCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TransferInventoryCallPacket",
+      "id": 135,
+      "name": "TransferInventoryCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TransferItemEffectCallPacket",
+      "id": 136,
+      "name": "TransferItemEffectCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TransferItemToCallPacket",
+      "id": 137,
+      "name": "TransferItemToCallPacket"
+    },
+    {
+      "class": "mindustry.gen.TransferItemToUnitCallPacket",
+      "id": 138,
+      "name": "TransferItemToUnitCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitBlockSpawnCallPacket",
+      "id": 139,
+      "name": "UnitBlockSpawnCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitBuildingControlSelectCallPacket",
+      "id": 140,
+      "name": "UnitBuildingControlSelectCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitCapDeathCallPacket",
+      "id": 141,
+      "name": "UnitCapDeathCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitClearCallPacket",
+      "id": 142,
+      "name": "UnitClearCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitControlCallPacket",
+      "id": 143,
+      "name": "UnitControlCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitDeathCallPacket",
+      "id": 144,
+      "name": "UnitDeathCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitDespawnCallPacket",
+      "id": 145,
+      "name": "UnitDespawnCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitDestroyCallPacket",
+      "id": 146,
+      "name": "UnitDestroyCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitEnteredPayloadCallPacket",
+      "id": 147,
+      "name": "UnitEnteredPayloadCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitEnvDeathCallPacket",
+      "id": 148,
+      "name": "UnitEnvDeathCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitSafeDeathCallPacket",
+      "id": 149,
+      "name": "UnitSafeDeathCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitSpawnCallPacket",
+      "id": 150,
+      "name": "UnitSpawnCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UnitTetherBlockSpawnedCallPacket",
+      "id": 151,
+      "name": "UnitTetherBlockSpawnedCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UpdateGameOverCallPacket",
+      "id": 152,
+      "name": "UpdateGameOverCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UpdateMarkerCallPacket",
+      "id": 153,
+      "name": "UpdateMarkerCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UpdateMarkerTextCallPacket",
+      "id": 154,
+      "name": "UpdateMarkerTextCallPacket"
+    },
+    {
+      "class": "mindustry.gen.UpdateMarkerTextureCallPacket",
+      "id": 155,
+      "name": "UpdateMarkerTextureCallPacket"
+    },
+    {
+      "class": "mindustry.gen.WarningToastCallPacket",
+      "id": 156,
+      "name": "WarningToastCallPacket"
+    },
+    {
+      "class": "mindustry.gen.WorldDataBeginCallPacket",
+      "id": 157,
+      "name": "WorldDataBeginCallPacket"
+    }
+  ],
+  "schema_version": 2,
+  "source_commit": "05b2ecd4eb578ac38cace8118dbecc1bd548ff4a",
+  "source_ref": "v158.1"
+}

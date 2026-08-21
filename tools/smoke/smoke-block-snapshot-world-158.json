@@ -1,0 +1,42 @@
+{
+  "version": 6,
+  "map_name": "maze",
+  "tiles": [
+    {
+      "position": 2949220,
+      "block": 181,
+      "rotation": 0,
+      "team": 1,
+      "config": [0],
+      "occupied": [2949220, 3014756, 2949221, 3014757],
+      "stored_item": -1,
+      "stored_amount": 0,
+      "production_progress": 30.0,
+      "transport_progress": 0.0,
+      "ammo_units": 0.0,
+      "inventory": [[0, 12], [3, 3]],
+      "power_stored": 0.0,
+      "stored_liquid": -1,
+      "liquid_amount": 0.0,
+      "output_liquid_amount": 0.0,
+      "junction_items": [],
+      "mass_driver_incoming": [],
+      "mass_driver_rotation": 90.0,
+      "mass_driver_waiting": [],
+      "health": 160.0
+    }
+  ],
+  "core_items": [
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000
+  ],
+  "wave": 1,
+  "wave_time": 10000.0,
+  "core_health": 6000.0,
+  "game_over": false,
+  "enemies": [],
+  "base_building_health": [],
+  "players": []
+}

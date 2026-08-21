@@ -1,0 +1,13 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "logic-601",
+  "tick": 601,
+  "executions": 601,
+  "program": "op add n n 1\nprint \"n=\"\nprint n\nop add m m 2\njump 0 lessThan n 50\nstop",
+  "counter": 5,
+  "text": "n=1n=2n=3n=4n=5n=6n=7n=8n=9n=10n=11n=12n=13n=14n=15n=16n=17n=18n=19n=20n=21n=22n=23n=24n=25n=26n=27n=28n=29n=30n=31n=32n=33n=34n=35n=36n=37n=38n=39n=40n=41n=42n=43n=44n=45n=46n=47n=48n=49n=50",
+  "vars": {
+    "m": {"isobj": false, "num": 100.0},
+    "n": {"isobj": false, "num": 50.0}
+  }
+}

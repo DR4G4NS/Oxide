@@ -1,0 +1,16 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "ubind-20",
+  "tick": 200,
+  "executions": 200,
+  "program": "ubind @dagger\nsensor n @unit @flag\nprint n\nprint \" \"\nop add i i 1\njump 0 lessThan i 20\nstop",
+  "processor_team": 1,
+  "unit_count": 5,
+  "cache_flags": [11, 12, 13, 14, 15],
+  "counter": 6,
+  "text": "11 12 13 14 15 11 12 13 14 15 11 12 13 14 15 11 12 13 14 15 ",
+  "vars": {
+    "i": {"isobj": false, "num": 20.0},
+    "n": {"isobj": false, "num": 15.0}
+  }
+}

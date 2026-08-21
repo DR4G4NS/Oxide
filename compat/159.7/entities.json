@@ -1,0 +1,202 @@
+{
+  "build": "159.7",
+  "entities": [
+    {
+      "class_id": 0,
+      "class_name": "mindustry.gen.UnitEntityLegacyAlpha",
+      "serialize": true
+    },
+    {
+      "class_id": 2,
+      "class_name": "mindustry.gen.BlockUnitUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 3,
+      "class_name": "mindustry.gen.UnitEntity",
+      "serialize": true
+    },
+    {
+      "class_id": 4,
+      "class_name": "mindustry.gen.MechUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 5,
+      "class_name": "mindustry.gen.PayloadUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 6,
+      "class_name": "mindustry.gen.Building",
+      "serialize": true
+    },
+    {
+      "class_id": 7,
+      "class_name": "mindustry.gen.Bullet",
+      "serialize": true
+    },
+    {
+      "class_id": 8,
+      "class_name": "mindustry.gen.Decal",
+      "serialize": true
+    },
+    {
+      "class_id": 9,
+      "class_name": "mindustry.gen.EffectState",
+      "serialize": true
+    },
+    {
+      "class_id": 10,
+      "class_name": "mindustry.gen.Fire",
+      "serialize": true
+    },
+    {
+      "class_id": 11,
+      "class_name": "mindustry.gen.LaunchCore",
+      "serialize": true
+    },
+    {
+      "class_id": 12,
+      "class_name": "mindustry.gen.Player",
+      "serialize": true
+    },
+    {
+      "class_id": 13,
+      "class_name": "mindustry.gen.Puddle",
+      "serialize": true
+    },
+    {
+      "class_id": 14,
+      "class_name": "mindustry.gen.WeatherState",
+      "serialize": true
+    },
+    {
+      "class_id": 15,
+      "class_name": "mindustry.gen.LaunchPayload",
+      "serialize": true
+    },
+    {
+      "class_id": 16,
+      "class_name": "mindustry.gen.UnitEntityLegacyMono",
+      "serialize": true
+    },
+    {
+      "class_id": 17,
+      "class_name": "mindustry.gen.MechUnitLegacyNova",
+      "serialize": true
+    },
+    {
+      "class_id": 18,
+      "class_name": "mindustry.gen.UnitEntityLegacyPoly",
+      "serialize": true
+    },
+    {
+      "class_id": 19,
+      "class_name": "mindustry.gen.MechUnitLegacyPulsar",
+      "serialize": true
+    },
+    {
+      "class_id": 20,
+      "class_name": "mindustry.gen.UnitWaterMove",
+      "serialize": true
+    },
+    {
+      "class_id": 21,
+      "class_name": "mindustry.gen.LegsUnitLegacySpiroct",
+      "serialize": true
+    },
+    {
+      "class_id": 23,
+      "class_name": "mindustry.gen.PayloadUnitLegacyQuad",
+      "serialize": true
+    },
+    {
+      "class_id": 24,
+      "class_name": "mindustry.gen.LegsUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 26,
+      "class_name": "mindustry.gen.PayloadUnitLegacyOct",
+      "serialize": true
+    },
+    {
+      "class_id": 28,
+      "class_name": "mindustry.gen.PosTeam",
+      "serialize": true
+    },
+    {
+      "class_id": 29,
+      "class_name": "mindustry.gen.LegsUnitLegacyArkyid",
+      "serialize": true
+    },
+    {
+      "class_id": 30,
+      "class_name": "mindustry.gen.UnitEntityLegacyBeta",
+      "serialize": true
+    },
+    {
+      "class_id": 31,
+      "class_name": "mindustry.gen.UnitEntityLegacyGamma",
+      "serialize": true
+    },
+    {
+      "class_id": 32,
+      "class_name": "mindustry.gen.MechUnitLegacyQuasar",
+      "serialize": true
+    },
+    {
+      "class_id": 33,
+      "class_name": "mindustry.gen.LegsUnitLegacyToxopid",
+      "serialize": true
+    },
+    {
+      "class_id": 35,
+      "class_name": "mindustry.gen.WorldLabel",
+      "serialize": true
+    },
+    {
+      "class_id": 36,
+      "class_name": "mindustry.gen.BuildingTetherPayloadUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 39,
+      "class_name": "mindustry.gen.TimedKillUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 42,
+      "class_name": "mindustry.gen.PowerGraphUpdater",
+      "serialize": true
+    },
+    {
+      "class_id": 43,
+      "class_name": "mindustry.gen.TankUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 45,
+      "class_name": "mindustry.gen.ElevationMoveUnit",
+      "serialize": true
+    },
+    {
+      "class_id": 46,
+      "class_name": "mindustry.gen.CrawlUnit",
+      "serialize": true
+    }
+  ],
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "159.7.jar",
+    "sha256": "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05",
+    "size_bytes": 82540141
+  },
+  "schema_version": 2,
+  "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
+  "source_ref": "v159.7"
+}

@@ -1,0 +1,85 @@
+# P2-B1 server-authoritative unit AI/pathfinding inventory (Mindustry v158.1 baseline).
+# Columns: id, name, spawnable, default_controller, movement, target_selection,
+# weapons, payload, mine_build, path_cost, rust_status
+# spawnable: YES | CHILD | NO | INTERNAL
+# default_controller: GroundAI | CommandAI | MissileAI | NeoplasmAI | InternalAI
+# movement: ground | flying | legs | naval | hover | missile
+# target_selection: core_buildings | core_direct | nearest_building | command | none
+# weapons: FULL | PARTIAL | REPAIR | PD | NONE
+# payload: YES | NO
+# mine_build: mine | build | repair | none
+# path_cost: flow_field | flow_field_legs | direct | command_astar | none
+# rust_status: FULL | PARTIAL | REJECTED | INTERNAL
+#
+# Re-verify version-sensitive ids against desktop.jar 158.1 when the local
+# Mindustry tree is not exactly v158.1.
+#
+0	dagger	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+1	mace	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+2	fortress	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+3	scepter	YES	GroundAI	ground	core_buildings	PARTIAL	NO	none	flow_field	FULL
+4	reign	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+5	nova	YES	CommandAI	ground	command	FULL	NO	none	command_astar	FULL
+6	pulsar	YES	CommandAI	ground	command	PARTIAL	NO	none	command_astar	FULL
+7	quasar	YES	CommandAI	ground	command	FULL	NO	none	command_astar	FULL
+8	vela	YES	CommandAI	ground	command	REPAIR	NO	none	command_astar	FULL
+9	corvus	YES	CommandAI	hover	command	FULL	NO	none	command_astar	FULL
+10	crawler	YES	GroundAI	ground	core_buildings	NONE	NO	none	flow_field	FULL
+11	atrax	YES	GroundAI	legs	core_buildings	FULL	NO	none	flow_field_legs	FULL
+12	spiroct	YES	GroundAI	legs	core_buildings	FULL	NO	none	flow_field_legs	FULL
+13	arkyid	YES	GroundAI	legs	core_buildings	FULL	NO	none	flow_field_legs	FULL
+14	toxopid	YES	GroundAI	legs	core_buildings	FULL	NO	none	flow_field_legs	FULL
+15	flare	YES	GroundAI	flying	core_direct	FULL	NO	none	direct	FULL
+16	horizon	YES	GroundAI	flying	nearest_building	FULL	NO	none	direct	FULL
+17	zenith	YES	GroundAI	flying	core_direct	PARTIAL	NO	none	direct	FULL
+18	antumbra	YES	GroundAI	flying	core_direct	FULL	NO	none	direct	FULL
+19	eclipse	YES	GroundAI	flying	core_direct	PARTIAL	NO	none	direct	FULL
+20	mono	YES	CommandAI	ground	command	NONE	NO	mine	command_astar	FULL
+21	poly	YES	CommandAI	flying	command	FULL	NO	build	command_astar	FULL
+22	mega	YES	CommandAI	flying	command	REPAIR	YES	repair	command_astar	FULL
+23	quad	YES	CommandAI	flying	command	FULL	YES	none	command_astar	FULL
+24	oct	YES	CommandAI	flying	command	PD	YES	none	command_astar	PARTIAL
+25	risso	YES	GroundAI	naval	core_buildings	FULL	NO	none	flow_field	FULL
+26	minke	YES	GroundAI	naval	core_buildings	FULL	NO	none	flow_field	FULL
+27	bryde	YES	GroundAI	naval	core_buildings	FULL	NO	none	flow_field	FULL
+28	sei	YES	GroundAI	naval	core_buildings	FULL	NO	none	flow_field	FULL
+29	omura	YES	GroundAI	naval	core_buildings	FULL	NO	none	flow_field	FULL
+30	retusa	YES	GroundAI	naval	core_buildings	REPAIR	NO	none	flow_field	PARTIAL
+31	oxynoe	YES	GroundAI	naval	core_buildings	PD	NO	none	flow_field	FULL
+32	cyerce	YES	GroundAI	naval	core_buildings	PARTIAL	NO	none	flow_field	FULL
+33	aegires	YES	GroundAI	naval	core_buildings	PD	NO	none	flow_field	FULL
+34	navanax	YES	GroundAI	naval	core_buildings	PARTIAL	NO	none	flow_field	FULL
+35	alpha	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+36	beta	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+37	gamma	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+38	stell	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+39	locus	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+40	precept	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+41	vanquish	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+42	conquer	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
+43	merui	YES	GroundAI	hover	core_buildings	FULL	NO	none	flow_field	FULL
+44	cleroi	YES	GroundAI	hover	core_buildings	PD	NO	none	flow_field	FULL
+45	anthicus	NO	CommandAI	flying	command	PARTIAL	NO	none	direct	REJECTED
+46	anthicus-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+47	tecta	YES	GroundAI	hover	core_buildings	FULL	NO	none	flow_field	FULL
+48	collaris	YES	GroundAI	hover	core_buildings	FULL	NO	none	flow_field	FULL
+49	elude	YES	CommandAI	flying	command	FULL	NO	none	direct	FULL
+50	avert	YES	CommandAI	flying	command	FULL	NO	none	direct	FULL
+51	obviate	YES	CommandAI	flying	command	FULL	NO	none	direct	FULL
+52	quell	YES	CommandAI	flying	command	PARTIAL	NO	none	direct	PARTIAL
+53	quell-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+54	disrupt	YES	CommandAI	flying	command	PARTIAL	NO	none	direct	PARTIAL
+55	disrupt-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+56	renale	YES	NeoplasmAI	ground	core_buildings	NONE	NO	none	flow_field	PARTIAL
+57	latum	YES	NeoplasmAI	ground	core_buildings	NONE	NO	none	flow_field	PARTIAL
+58	evoke	NO	NeoplasmAI	ground	none	REPAIR	NO	none	flow_field	REJECTED
+59	incite	NO	NeoplasmAI	ground	none	REPAIR	NO	build	flow_field	REJECTED
+60	emanate	NO	NeoplasmAI	ground	none	REPAIR	NO	repair	flow_field	REJECTED
+61	block	NO	NeoplasmAI	ground	none	NONE	NO	none	none	REJECTED
+62	manifold	NO	InternalAI	ground	none	NONE	NO	none	none	REJECTED
+63	assembly-drone	NO	InternalAI	flying	none	NONE	NO	none	direct	REJECTED
+64	scathe-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+65	scathe-missile-phase	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+66	scathe-missile-surge	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+67	scathe-missile-surge-split	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+68	turret-unit-build-tower	INTERNAL	InternalAI	ground	none	NONE	NO	none	none	INTERNAL

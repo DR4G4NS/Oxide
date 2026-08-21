@@ -1,0 +1,15 @@
+[target]
+build = "159.7"
+source_tag = "v159.7"
+source_commit = "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c"
+jar_filename = "159.7.jar"
+jar_size_bytes = 82540141
+jar_sha256 = "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05"
+
+[historical]
+certified_builds = ["158.1"]
+
+[historical.158_1]
+build = "158.1"
+source_tag = "v158.1"
+jar_sha256 = "95b525b548512aa713c4d040bbdc4bfe582e2827dfce037f597e0bb5f1a5c06a"

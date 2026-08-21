@@ -1,0 +1,16 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "ubind-reinsert",
+  "tick": 12,
+  "executions": 12,
+  "program": "ubind @dagger\nsensor n @unit @flag\nprint n\nprint \" \"\nop add i i 1\njump 0 lessThan i 12\nstop",
+  "processor_team": 1,
+  "scenarios": {
+    "baseline": {"cache_flags": [11, 12, 13], "groups_dagger_flags": [11, 12, 13], "id_sorted_flags": [11, 12, 13], "differs_from_id_sort": false, "unit_count": 3, "text": "11 12 13 11 12 13 11 12 13 11 12 13 "},
+    "readd": {"cache_flags": [11, 13, 12], "groups_dagger_flags": [11, 13, 12], "id_sorted_flags": [11, 12, 13], "differs_from_id_sort": true, "unit_count": 3, "text": "11 13 12 11 13 12 11 13 12 11 13 12 "},
+    "payload": {"cache_flags": [11, 13, 12], "groups_dagger_flags": [11, 13, 12], "id_sorted_flags": [11, 13, 12], "differs_from_id_sort": false, "unit_count": 3, "text": "11 13 12 11 13 12 11 13 12 11 13 12 ", "payload_path": "groups-equivalent (NullPointerException)"},
+    "death_spawn": {"cache_flags": [11, 13, 14], "groups_dagger_flags": [11, 13, 14], "id_sorted_flags": [11, 13, 14], "differs_from_id_sort": false, "unit_count": 3, "text": "11 13 14 11 13 14 11 13 14 11 13 14 "},
+    "cursor_len": {"cache_flags": [13, 12], "groups_dagger_flags": [13, 12], "id_sorted_flags": [12, 13], "differs_from_id_sort": true, "seq_len": 2, "text_before": "11 12 ", "text_after": "13 12 13 12 ", "text": "11 12 13 12 13 12 "},
+    "four_remove_b": {"cache_flags": [11, 14, 13], "groups_dagger_flags": [11, 14, 13], "id_sorted_flags": [11, 13, 14], "differs_from_id_sort": true, "unit_count": 3, "text": "11 14 13 11 14 13 11 14 13 11 14 13 "}
+  }
+}

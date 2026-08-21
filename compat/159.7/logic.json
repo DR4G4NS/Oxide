@@ -1,0 +1,1027 @@
+{
+  "build": "159.7",
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "159.7.jar",
+    "sha256": "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05",
+    "size_bytes": 82540141
+  },
+  "logic": {
+    "access": [
+      {
+        "isObj": false,
+        "key": "totalItems",
+        "name": "totalItems",
+        "ordinal": 0
+      },
+      {
+        "isObj": false,
+        "key": "firstItem",
+        "name": "firstItem",
+        "ordinal": 1
+      },
+      {
+        "isObj": false,
+        "key": "totalLiquids",
+        "name": "totalLiquids",
+        "ordinal": 2
+      },
+      {
+        "isObj": false,
+        "key": "totalPower",
+        "name": "totalPower",
+        "ordinal": 3
+      },
+      {
+        "isObj": false,
+        "key": "itemCapacity",
+        "name": "itemCapacity",
+        "ordinal": 4
+      },
+      {
+        "isObj": false,
+        "key": "liquidCapacity",
+        "name": "liquidCapacity",
+        "ordinal": 5
+      },
+      {
+        "isObj": false,
+        "key": "powerCapacity",
+        "name": "powerCapacity",
+        "ordinal": 6
+      },
+      {
+        "isObj": false,
+        "key": "powerNetStored",
+        "name": "powerNetStored",
+        "ordinal": 7
+      },
+      {
+        "isObj": false,
+        "key": "powerNetCapacity",
+        "name": "powerNetCapacity",
+        "ordinal": 8
+      },
+      {
+        "isObj": false,
+        "key": "powerNetIn",
+        "name": "powerNetIn",
+        "ordinal": 9
+      },
+      {
+        "isObj": false,
+        "key": "powerNetOut",
+        "name": "powerNetOut",
+        "ordinal": 10
+      },
+      {
+        "isObj": false,
+        "key": "ammo",
+        "name": "ammo",
+        "ordinal": 11
+      },
+      {
+        "isObj": false,
+        "key": "ammoCapacity",
+        "name": "ammoCapacity",
+        "ordinal": 12
+      },
+      {
+        "isObj": false,
+        "key": "currentAmmoType",
+        "name": "currentAmmoType",
+        "ordinal": 13
+      },
+      {
+        "isObj": false,
+        "key": "memoryCapacity",
+        "name": "memoryCapacity",
+        "ordinal": 14
+      },
+      {
+        "isObj": false,
+        "key": "health",
+        "name": "health",
+        "ordinal": 15
+      },
+      {
+        "isObj": false,
+        "key": "maxHealth",
+        "name": "maxHealth",
+        "ordinal": 16
+      },
+      {
+        "isObj": false,
+        "key": "heat",
+        "name": "heat",
+        "ordinal": 17
+      },
+      {
+        "isObj": false,
+        "key": "shield",
+        "name": "shield",
+        "ordinal": 18
+      },
+      {
+        "isObj": false,
+        "key": "armor",
+        "name": "armor",
+        "ordinal": 19
+      },
+      {
+        "isObj": false,
+        "key": "efficiency",
+        "name": "efficiency",
+        "ordinal": 20
+      },
+      {
+        "isObj": false,
+        "key": "progress",
+        "name": "progress",
+        "ordinal": 21
+      },
+      {
+        "isObj": false,
+        "key": "timescale",
+        "name": "timescale",
+        "ordinal": 22
+      },
+      {
+        "isObj": false,
+        "key": "rotation",
+        "name": "rotation",
+        "ordinal": 23
+      },
+      {
+        "isObj": false,
+        "key": "x",
+        "name": "x",
+        "ordinal": 24
+      },
+      {
+        "isObj": false,
+        "key": "y",
+        "name": "y",
+        "ordinal": 25
+      },
+      {
+        "isObj": false,
+        "key": "velocityX",
+        "name": "velocityX",
+        "ordinal": 26
+      },
+      {
+        "isObj": false,
+        "key": "velocityY",
+        "name": "velocityY",
+        "ordinal": 27
+      },
+      {
+        "isObj": false,
+        "key": "shootX",
+        "name": "shootX",
+        "ordinal": 28
+      },
+      {
+        "isObj": false,
+        "key": "shootY",
+        "name": "shootY",
+        "ordinal": 29
+      },
+      {
+        "isObj": false,
+        "key": "cameraX",
+        "name": "cameraX",
+        "ordinal": 30
+      },
+      {
+        "isObj": false,
+        "key": "cameraY",
+        "name": "cameraY",
+        "ordinal": 31
+      },
+      {
+        "isObj": false,
+        "key": "cameraWidth",
+        "name": "cameraWidth",
+        "ordinal": 32
+      },
+      {
+        "isObj": false,
+        "key": "cameraHeight",
+        "name": "cameraHeight",
+        "ordinal": 33
+      },
+      {
+        "isObj": false,
+        "key": "displayWidth",
+        "name": "displayWidth",
+        "ordinal": 34
+      },
+      {
+        "isObj": false,
+        "key": "displayHeight",
+        "name": "displayHeight",
+        "ordinal": 35
+      },
+      {
+        "isObj": false,
+        "key": "bufferSize",
+        "name": "bufferSize",
+        "ordinal": 36
+      },
+      {
+        "isObj": false,
+        "key": "operations",
+        "name": "operations",
+        "ordinal": 37
+      },
+      {
+        "isObj": false,
+        "key": "size",
+        "name": "size",
+        "ordinal": 38
+      },
+      {
+        "isObj": false,
+        "key": "solid",
+        "name": "solid",
+        "ordinal": 39
+      },
+      {
+        "isObj": false,
+        "key": "dead",
+        "name": "dead",
+        "ordinal": 40
+      },
+      {
+        "isObj": false,
+        "key": "range",
+        "name": "range",
+        "ordinal": 41
+      },
+      {
+        "isObj": false,
+        "key": "shooting",
+        "name": "shooting",
+        "ordinal": 42
+      },
+      {
+        "isObj": false,
+        "key": "boosting",
+        "name": "boosting",
+        "ordinal": 43
+      },
+      {
+        "isObj": false,
+        "key": "mineX",
+        "name": "mineX",
+        "ordinal": 44
+      },
+      {
+        "isObj": false,
+        "key": "mineY",
+        "name": "mineY",
+        "ordinal": 45
+      },
+      {
+        "isObj": false,
+        "key": "mining",
+        "name": "mining",
+        "ordinal": 46
+      },
+      {
+        "isObj": false,
+        "key": "buildX",
+        "name": "buildX",
+        "ordinal": 47
+      },
+      {
+        "isObj": false,
+        "key": "buildY",
+        "name": "buildY",
+        "ordinal": 48
+      },
+      {
+        "isObj": false,
+        "key": "pingX",
+        "name": "pingX",
+        "ordinal": 49
+      },
+      {
+        "isObj": false,
+        "key": "pingY",
+        "name": "pingY",
+        "ordinal": 50
+      },
+      {
+        "isObj": false,
+        "key": "pingText",
+        "name": "pingText",
+        "ordinal": 51
+      },
+      {
+        "isObj": false,
+        "key": "building",
+        "name": "building",
+        "ordinal": 52
+      },
+      {
+        "isObj": false,
+        "key": "breaking",
+        "name": "breaking",
+        "ordinal": 53
+      },
+      {
+        "isObj": false,
+        "key": "speed",
+        "name": "speed",
+        "ordinal": 54
+      },
+      {
+        "isObj": false,
+        "key": "team",
+        "name": "team",
+        "ordinal": 55
+      },
+      {
+        "isObj": false,
+        "key": "type",
+        "name": "type",
+        "ordinal": 56
+      },
+      {
+        "isObj": false,
+        "key": "flag",
+        "name": "flag",
+        "ordinal": 57
+      },
+      {
+        "isObj": false,
+        "key": "flying",
+        "name": "flying",
+        "ordinal": 58
+      },
+      {
+        "isObj": false,
+        "key": "controlled",
+        "name": "controlled",
+        "ordinal": 59
+      },
+      {
+        "isObj": false,
+        "key": "controller",
+        "name": "controller",
+        "ordinal": 60
+      },
+      {
+        "isObj": false,
+        "key": "name",
+        "name": "name",
+        "ordinal": 61
+      },
+      {
+        "isObj": false,
+        "key": "payloadCount",
+        "name": "payloadCount",
+        "ordinal": 62
+      },
+      {
+        "isObj": false,
+        "key": "payloadType",
+        "name": "payloadType",
+        "ordinal": 63
+      },
+      {
+        "isObj": false,
+        "key": "totalPayload",
+        "name": "totalPayload",
+        "ordinal": 64
+      },
+      {
+        "isObj": false,
+        "key": "payloadCapacity",
+        "name": "payloadCapacity",
+        "ordinal": 65
+      },
+      {
+        "isObj": false,
+        "key": "maxUnits",
+        "name": "maxUnits",
+        "ordinal": 66
+      },
+      {
+        "isObj": false,
+        "key": "id",
+        "name": "id",
+        "ordinal": 67
+      },
+      {
+        "isObj": false,
+        "key": "selectedBlock",
+        "name": "selectedBlock",
+        "ordinal": 68
+      },
+      {
+        "isObj": false,
+        "key": "selectedRotation",
+        "name": "selectedRotation",
+        "ordinal": 69
+      },
+      {
+        "isObj": false,
+        "key": "bulletLifetime",
+        "name": "bulletLifetime",
+        "ordinal": 70
+      },
+      {
+        "isObj": false,
+        "key": "bulletTime",
+        "name": "bulletTime",
+        "ordinal": 71
+      },
+      {
+        "isObj": false,
+        "key": "enabled",
+        "name": "enabled",
+        "ordinal": 72
+      },
+      {
+        "isObj": false,
+        "key": "shoot",
+        "name": "shoot",
+        "ordinal": 73
+      },
+      {
+        "isObj": true,
+        "key": "shootp",
+        "name": "shootp",
+        "ordinal": 74
+      },
+      {
+        "isObj": true,
+        "key": "config",
+        "name": "config",
+        "ordinal": 75
+      },
+      {
+        "isObj": false,
+        "key": "color",
+        "name": "color",
+        "ordinal": 76
+      }
+    ],
+    "instructions": [
+      {
+        "constructor_arity": 4,
+        "name": "ApplyEffectI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "ClientDataI"
+      },
+      {
+        "constructor_arity": 6,
+        "name": "ControlI"
+      },
+      {
+        "constructor_arity": 5,
+        "name": "CutsceneI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "DrawFlushI"
+      },
+      {
+        "constructor_arity": 7,
+        "name": "DrawI"
+      },
+      {
+        "constructor_arity": 6,
+        "name": "EffectI"
+      },
+      {
+        "constructor_arity": 0,
+        "name": "EndI"
+      },
+      {
+        "constructor_arity": 9,
+        "name": "ExplosionI"
+      },
+      {
+        "constructor_arity": 5,
+        "name": "FetchI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "FlushMessageI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "FormatI"
+      },
+      {
+        "constructor_arity": 4,
+        "name": "GetBlockI"
+      },
+      {
+        "constructor_arity": 2,
+        "name": "GetFlagI"
+      },
+      {
+        "constructor_arity": 2,
+        "name": "GetLinkI"
+      },
+      {
+        "constructor_arity": 4,
+        "name": "JumpI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "LocalePrintI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "LookupI"
+      },
+      {
+        "constructor_arity": 5,
+        "name": "MakeMarkerI"
+      },
+      {
+        "constructor_arity": 0,
+        "name": "NoopI"
+      },
+      {
+        "constructor_arity": 4,
+        "name": "OpI"
+      },
+      {
+        "constructor_arity": 5,
+        "name": "PackColorI"
+      },
+      {
+        "constructor_arity": 2,
+        "name": "PlayMusicI"
+      },
+      {
+        "constructor_arity": 8,
+        "name": "PlaySoundI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "PrintCharI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "PrintFlushI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "PrintI"
+      },
+      {
+        "constructor_arity": 7,
+        "name": "QueryI"
+      },
+      {
+        "constructor_arity": 7,
+        "name": "RadarI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "ReadI"
+      },
+      {
+        "constructor_arity": 6,
+        "name": "SelectI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "SenseI"
+      },
+      {
+        "constructor_arity": 2,
+        "name": "SenseWeatherI"
+      },
+      {
+        "constructor_arity": 6,
+        "name": "SetBlockI"
+      },
+      {
+        "constructor_arity": 2,
+        "name": "SetFlagI"
+      },
+      {
+        "constructor_arity": 2,
+        "name": "SetI"
+      },
+      {
+        "constructor_arity": 5,
+        "name": "SetMarkerI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "SetPropI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "SetRateI"
+      },
+      {
+        "constructor_arity": 6,
+        "name": "SetRuleI"
+      },
+      {
+        "constructor_arity": 2,
+        "name": "SetWeatherI"
+      },
+      {
+        "constructor_arity": 13,
+        "name": "SpawnBulletI"
+      },
+      {
+        "constructor_arity": 7,
+        "name": "SpawnUnitI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "SpawnWaveI"
+      },
+      {
+        "constructor_arity": 0,
+        "name": "StopI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "SyncI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "UnitBindI"
+      },
+      {
+        "constructor_arity": 6,
+        "name": "UnitControlI"
+      },
+      {
+        "constructor_arity": 8,
+        "name": "UnitLocateI"
+      },
+      {
+        "constructor_arity": 5,
+        "name": "UnpackColorI"
+      },
+      {
+        "constructor_arity": 1,
+        "name": "WaitI"
+      },
+      {
+        "constructor_arity": 3,
+        "name": "WriteI"
+      }
+    ],
+    "locate": [
+      {
+        "isObj": false,
+        "key": "ore",
+        "name": "ore",
+        "ordinal": 0
+      },
+      {
+        "isObj": false,
+        "key": "building",
+        "name": "building",
+        "ordinal": 1
+      },
+      {
+        "isObj": false,
+        "key": "spawn",
+        "name": "spawn",
+        "ordinal": 2
+      },
+      {
+        "isObj": false,
+        "key": "damaged",
+        "name": "damaged",
+        "ordinal": 3
+      }
+    ],
+    "rules": [
+      {
+        "isObj": false,
+        "key": "currentWaveTime",
+        "name": "currentWaveTime",
+        "ordinal": 0
+      },
+      {
+        "isObj": false,
+        "key": "waveTimer",
+        "name": "waveTimer",
+        "ordinal": 1
+      },
+      {
+        "isObj": false,
+        "key": "waves",
+        "name": "waves",
+        "ordinal": 2
+      },
+      {
+        "isObj": false,
+        "key": "wave",
+        "name": "wave",
+        "ordinal": 3
+      },
+      {
+        "isObj": false,
+        "key": "waveSpacing",
+        "name": "waveSpacing",
+        "ordinal": 4
+      },
+      {
+        "isObj": false,
+        "key": "waveSending",
+        "name": "waveSending",
+        "ordinal": 5
+      },
+      {
+        "isObj": false,
+        "key": "attackMode",
+        "name": "attackMode",
+        "ordinal": 6
+      },
+      {
+        "isObj": false,
+        "key": "enemyCoreBuildRadius",
+        "name": "enemyCoreBuildRadius",
+        "ordinal": 7
+      },
+      {
+        "isObj": false,
+        "key": "dropZoneRadius",
+        "name": "dropZoneRadius",
+        "ordinal": 8
+      },
+      {
+        "isObj": false,
+        "key": "unitCap",
+        "name": "unitCap",
+        "ordinal": 9
+      },
+      {
+        "isObj": false,
+        "key": "mapArea",
+        "name": "mapArea",
+        "ordinal": 10
+      },
+      {
+        "isObj": false,
+        "key": "lighting",
+        "name": "lighting",
+        "ordinal": 11
+      },
+      {
+        "isObj": false,
+        "key": "canGameOver",
+        "name": "canGameOver",
+        "ordinal": 12
+      },
+      {
+        "isObj": false,
+        "key": "ambientLight",
+        "name": "ambientLight",
+        "ordinal": 13
+      },
+      {
+        "isObj": false,
+        "key": "solarMultiplier",
+        "name": "solarMultiplier",
+        "ordinal": 14
+      },
+      {
+        "isObj": false,
+        "key": "dragMultiplier",
+        "name": "dragMultiplier",
+        "ordinal": 15
+      },
+      {
+        "isObj": false,
+        "key": "ban",
+        "name": "ban",
+        "ordinal": 16
+      },
+      {
+        "isObj": false,
+        "key": "unban",
+        "name": "unban",
+        "ordinal": 17
+      },
+      {
+        "isObj": false,
+        "key": "pauseDisabled",
+        "name": "pauseDisabled",
+        "ordinal": 18
+      },
+      {
+        "isObj": false,
+        "key": "musicVolume",
+        "name": "musicVolume",
+        "ordinal": 19
+      },
+      {
+        "isObj": false,
+        "key": "buildSpeed",
+        "name": "buildSpeed",
+        "ordinal": 20
+      },
+      {
+        "isObj": false,
+        "key": "unitHealth",
+        "name": "unitHealth",
+        "ordinal": 21
+      },
+      {
+        "isObj": false,
+        "key": "unitBuildSpeed",
+        "name": "unitBuildSpeed",
+        "ordinal": 22
+      },
+      {
+        "isObj": false,
+        "key": "unitMineSpeed",
+        "name": "unitMineSpeed",
+        "ordinal": 23
+      },
+      {
+        "isObj": false,
+        "key": "unitCost",
+        "name": "unitCost",
+        "ordinal": 24
+      },
+      {
+        "isObj": false,
+        "key": "unitDamage",
+        "name": "unitDamage",
+        "ordinal": 25
+      },
+      {
+        "isObj": false,
+        "key": "blockHealth",
+        "name": "blockHealth",
+        "ordinal": 26
+      },
+      {
+        "isObj": false,
+        "key": "blockDamage",
+        "name": "blockDamage",
+        "ordinal": 27
+      },
+      {
+        "isObj": false,
+        "key": "rtsMinWeight",
+        "name": "rtsMinWeight",
+        "ordinal": 28
+      },
+      {
+        "isObj": false,
+        "key": "rtsMinSquad",
+        "name": "rtsMinSquad",
+        "ordinal": 29
+      }
+    ],
+    "unit_control": [
+      {
+        "isObj": false,
+        "key": "idle",
+        "name": "idle",
+        "ordinal": 0
+      },
+      {
+        "isObj": false,
+        "key": "stop",
+        "name": "stop",
+        "ordinal": 1
+      },
+      {
+        "isObj": false,
+        "key": "move",
+        "name": "move",
+        "ordinal": 2
+      },
+      {
+        "isObj": false,
+        "key": "approach",
+        "name": "approach",
+        "ordinal": 3
+      },
+      {
+        "isObj": false,
+        "key": "pathfind",
+        "name": "pathfind",
+        "ordinal": 4
+      },
+      {
+        "isObj": false,
+        "key": "autoPathfind",
+        "name": "autoPathfind",
+        "ordinal": 5
+      },
+      {
+        "isObj": false,
+        "key": "boost",
+        "name": "boost",
+        "ordinal": 6
+      },
+      {
+        "isObj": false,
+        "key": "target",
+        "name": "target",
+        "ordinal": 7
+      },
+      {
+        "isObj": false,
+        "key": "targetp",
+        "name": "targetp",
+        "ordinal": 8
+      },
+      {
+        "isObj": false,
+        "key": "itemDrop",
+        "name": "itemDrop",
+        "ordinal": 9
+      },
+      {
+        "isObj": false,
+        "key": "itemTake",
+        "name": "itemTake",
+        "ordinal": 10
+      },
+      {
+        "isObj": false,
+        "key": "payDrop",
+        "name": "payDrop",
+        "ordinal": 11
+      },
+      {
+        "isObj": false,
+        "key": "payTake",
+        "name": "payTake",
+        "ordinal": 12
+      },
+      {
+        "isObj": false,
+        "key": "payEnter",
+        "name": "payEnter",
+        "ordinal": 13
+      },
+      {
+        "isObj": false,
+        "key": "mine",
+        "name": "mine",
+        "ordinal": 14
+      },
+      {
+        "isObj": false,
+        "key": "flag",
+        "name": "flag",
+        "ordinal": 15
+      },
+      {
+        "isObj": false,
+        "key": "build",
+        "name": "build",
+        "ordinal": 16
+      },
+      {
+        "isObj": false,
+        "key": "deconstruct",
+        "name": "deconstruct",
+        "ordinal": 17
+      },
+      {
+        "isObj": false,
+        "key": "getBlock",
+        "name": "getBlock",
+        "ordinal": 18
+      },
+      {
+        "isObj": false,
+        "key": "within",
+        "name": "within",
+        "ordinal": 19
+      },
+      {
+        "isObj": false,
+        "key": "unbind",
+        "name": "unbind",
+        "ordinal": 20
+      }
+    ]
+  },
+  "schema_version": 2,
+  "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
+  "source_ref": "v159.7"
+}

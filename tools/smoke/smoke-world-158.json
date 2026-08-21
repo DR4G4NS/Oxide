@@ -1,0 +1,73 @@
+{
+  "version": 6,
+  "map_name": "maze",
+  "tiles": [],
+  "core_items": [
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000
+  ],
+  "wave": 1,
+  "wave_time": 10000.0,
+  "core_health": 240.0,
+  "game_over": false,
+  "enemies": [
+    {
+      "id": 3000000,
+      "unit_type": 0,
+      "entity_class": 4,
+      "x": 470.0,
+      "y": 800.0,
+      "rotation": 180.0,
+      "health": 11.0,
+      "shield": 0.0,
+      "status_effect": -1,
+      "velocity_x": 0.0,
+      "velocity_y": 0.0,
+      "attack_reload": 0.0,
+      "secondary_attack_reload": 0.0,
+      "tertiary_attack_reload": 0.0,
+      "move_speed": 0.5,
+      "attack_damage": 9.0,
+      "attack_reload_time": 13.0,
+      "attack_range": 145.0
+    },
+    {
+      "id": 3000001,
+      "unit_type": 16,
+      "entity_class": 3,
+      "x": 1200.0,
+      "y": 800.0,
+      "rotation": -90.0,
+      "health": 340.0,
+      "shield": 0.0,
+      "status_effect": -1,
+      "velocity_x": 0.0,
+      "velocity_y": 0.0,
+      "attack_reload": 0.0,
+      "secondary_attack_reload": 0.0,
+      "tertiary_attack_reload": 0.0,
+      "move_speed": 1.65,
+      "attack_damage": 27.0,
+      "attack_reload_time": 24.0,
+      "attack_range": 140.0
+    }
+  ],
+  "base_building_health": [],
+  "players": [
+    {
+      "uuid": "AQIDBAUGBwg=",
+      "player_id": 1000001,
+      "unit_id": 2000001,
+      "x": 320.0,
+      "y": 800.0,
+      "health": 40.0,
+      "shield": 0.0,
+      "status_effect": -1,
+      "status_duration": 0.0,
+      "dead": false,
+      "respawn_timer": 0.0
+    }
+  ]
+}

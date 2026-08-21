@@ -1,0 +1,29 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "power-unlink",
+  "tick": 601,
+  "source_pos": 131074,
+  "node_pos": 262146,
+  "linked": {
+    "source_links": [262146],
+    "node_links": [131074],
+    "same_graph": true,
+    "source_graph_buildings": 2,
+    "node_graph_buildings": 2,
+    "graph_produced": 277.77777,
+    "graph_needed": 0.0,
+    "source_power_status": 0.0,
+    "node_power_status": 0.0
+  },
+  "unlinked": {
+    "source_links": [],
+    "node_links": [],
+    "same_graph": false,
+    "source_graph_buildings": 1,
+    "node_graph_buildings": 1,
+    "graph_produced": 277.77777,
+    "graph_needed": 0.0,
+    "source_power_status": 0.0,
+    "node_power_status": 0.0
+  }
+}

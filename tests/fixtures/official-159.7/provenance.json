@@ -1,0 +1,26 @@
+{
+  "fixtures": [
+    {
+      "path": "official-save12-empty.msav",
+      "sha256": "ebd62f66e0d1c926aaa3a9b2bfce9f43440a6ddb7afada1f4ec9c8b80116c30c",
+      "size_bytes": 3118,
+      "producer": "engine::save_io::write_msav_complete version=12 (Save12.java empty readDataPatches layout)",
+      "official_jar_sha256": "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05",
+      "source_ref": "v159.7",
+      "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
+      "jar_validation": "tools/inspect/ProbeSave159.java load-msav + read-save12-patches via tools/compat_jar_probes.py",
+      "patch_header_bytes": 12,
+      "patch_header_note": "Save12.readDataPatches: ignored version int + patchAmount 0 + imageAmount 0"
+    },
+    {
+      "path": "official-save13-empty.msav",
+      "producer": "official Mindustry 159.7 desktop JAR export",
+      "official_jar_sha256": "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05",
+      "source_ref": "v159.7",
+      "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
+      "jar_validation": "tools/inspect/ProbeSave159.java load-msav via tools/compat_jar_probes.py",
+      "patch_header_bytes": 8,
+      "patch_header_note": "SaveVersion.writeDataPatches patchFormatVersion=2 + total 0"
+    }
+  ]
+}

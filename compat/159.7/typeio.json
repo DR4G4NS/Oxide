@@ -1,0 +1,878 @@
+{
+  "build": "159.7",
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "159.7.jar",
+    "sha256": "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05",
+    "size_bytes": 82540141
+  },
+  "schema_version": 2,
+  "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
+  "source_ref": "v159.7",
+  "typeio": {
+    "methods": [
+      {
+        "name": "getMaxPlans",
+        "params": [
+          "arc.struct.Queue"
+        ],
+        "return": "int"
+      },
+      {
+        "name": "readAbilities",
+        "params": [
+          "arc.util.io.Reads",
+          "mindustry.entities.abilities.Ability[]"
+        ],
+        "return": "mindustry.entities.abilities.Ability[]"
+      },
+      {
+        "name": "readAbilities",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.abilities.Ability[]"
+      },
+      {
+        "name": "readAction",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.net.Packets$AdminAction"
+      },
+      {
+        "name": "readBlock",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.world.Block"
+      },
+      {
+        "name": "readBuilding",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.gen.Building"
+      },
+      {
+        "name": "readBulletType",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.bullet.BulletType"
+      },
+      {
+        "name": "readBytes",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "byte[]"
+      },
+      {
+        "name": "readClientPlans",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.io.TypeIO$ClientBuildPlans"
+      },
+      {
+        "name": "readColor",
+        "params": [
+          "arc.util.io.Reads",
+          "arc.graphics.Color"
+        ],
+        "return": "arc.graphics.Color"
+      },
+      {
+        "name": "readColor",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "arc.graphics.Color"
+      },
+      {
+        "name": "readCommand",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.ai.UnitCommand"
+      },
+      {
+        "name": "readContent",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.ctype.Content"
+      },
+      {
+        "name": "readController",
+        "params": [
+          "arc.util.io.Reads",
+          "mindustry.entities.units.UnitController"
+        ],
+        "return": "mindustry.entities.units.UnitController"
+      },
+      {
+        "name": "readEffect",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.Effect"
+      },
+      {
+        "name": "readEntity",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.gen.Entityc"
+      },
+      {
+        "name": "readIntSeq",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "arc.struct.IntSeq"
+      },
+      {
+        "name": "readInts",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "int[]"
+      },
+      {
+        "name": "readItem",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.type.Item"
+      },
+      {
+        "name": "readItemStacks",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.type.ItemStack[]"
+      },
+      {
+        "name": "readItems",
+        "params": [
+          "arc.util.io.Reads",
+          "mindustry.type.ItemStack"
+        ],
+        "return": "mindustry.type.ItemStack"
+      },
+      {
+        "name": "readItems",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.type.ItemStack"
+      },
+      {
+        "name": "readKick",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.net.Packets$KickReason"
+      },
+      {
+        "name": "readLiquid",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.type.Liquid"
+      },
+      {
+        "name": "readLiquidStacks",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.type.LiquidStack[]"
+      },
+      {
+        "name": "readMarkerControl",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.logic.LMarkerControl"
+      },
+      {
+        "name": "readMounts",
+        "params": [
+          "arc.util.io.Reads",
+          "mindustry.entities.units.WeaponMount[]"
+        ],
+        "return": "mindustry.entities.units.WeaponMount[]"
+      },
+      {
+        "name": "readMounts",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.units.WeaponMount[]"
+      },
+      {
+        "name": "readObject",
+        "params": [
+          "arc.util.io.Reads",
+          "boolean",
+          "mindustry.io.TypeIO$ContentMapper",
+          "boolean",
+          "boolean"
+        ],
+        "return": "java.lang.Object"
+      },
+      {
+        "name": "readObject",
+        "params": [
+          "arc.util.io.Reads",
+          "boolean",
+          "mindustry.io.TypeIO$ContentMapper",
+          "boolean"
+        ],
+        "return": "java.lang.Object"
+      },
+      {
+        "name": "readObject",
+        "params": [
+          "arc.util.io.Reads",
+          "boolean",
+          "mindustry.io.TypeIO$ContentMapper"
+        ],
+        "return": "java.lang.Object"
+      },
+      {
+        "name": "readObject",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "java.lang.Object"
+      },
+      {
+        "name": "readObjectBoxed",
+        "params": [
+          "arc.util.io.Reads",
+          "boolean"
+        ],
+        "return": "java.lang.Object"
+      },
+      {
+        "name": "readObjectSafe",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "java.lang.Object"
+      },
+      {
+        "name": "readObjectiveMarker",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.game.MapObjectives$ObjectiveMarker"
+      },
+      {
+        "name": "readObjectives",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.game.MapObjectives"
+      },
+      {
+        "name": "readPayload",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.world.blocks.payloads.Payload"
+      },
+      {
+        "name": "readPlan",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.units.BuildPlan"
+      },
+      {
+        "name": "readPlans",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.units.BuildPlan[]"
+      },
+      {
+        "name": "readPlansQueue",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "arc.struct.Queue"
+      },
+      {
+        "name": "readPlansQueueNet",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "arc.struct.Queue"
+      },
+      {
+        "name": "readPosEntity",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.gen.Posc"
+      },
+      {
+        "name": "readRules",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.game.Rules"
+      },
+      {
+        "name": "readShorts",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "short[]"
+      },
+      {
+        "name": "readSound",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "arc.audio.Sound"
+      },
+      {
+        "name": "readStance",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.ai.UnitStance"
+      },
+      {
+        "name": "readStatus",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.units.StatusEntry"
+      },
+      {
+        "name": "readString",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "java.lang.String"
+      },
+      {
+        "name": "readString",
+        "params": [
+          "java.nio.ByteBuffer"
+        ],
+        "return": "java.lang.String"
+      },
+      {
+        "name": "readStringArray",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "java.lang.String[][]"
+      },
+      {
+        "name": "readStringData",
+        "params": [
+          "java.io.DataInput"
+        ],
+        "return": "java.lang.String"
+      },
+      {
+        "name": "readStrings",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "java.lang.String[]"
+      },
+      {
+        "name": "readTeam",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.game.Team"
+      },
+      {
+        "name": "readTile",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.world.Tile"
+      },
+      {
+        "name": "readTraceInfo",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.net.Administration$TraceInfo"
+      },
+      {
+        "name": "readUnit",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.gen.Unit"
+      },
+      {
+        "name": "readUnitContainer",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.entities.Units$UnitSyncContainer"
+      },
+      {
+        "name": "readUnitType",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.type.UnitType"
+      },
+      {
+        "name": "readVec2",
+        "params": [
+          "arc.util.io.Reads",
+          "arc.math.geom.Vec2"
+        ],
+        "return": "arc.math.geom.Vec2"
+      },
+      {
+        "name": "readVec2",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "arc.math.geom.Vec2"
+      },
+      {
+        "name": "readVecNullable",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "arc.math.geom.Vec2"
+      },
+      {
+        "name": "readWeather",
+        "params": [
+          "arc.util.io.Reads"
+        ],
+        "return": "mindustry.type.Weather"
+      },
+      {
+        "name": "writeAbilities",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.abilities.Ability[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeAction",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.net.Packets$AdminAction"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeBlock",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.world.Block"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeBuilding",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.gen.Building"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeBulletType",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.bullet.BulletType"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeBytes",
+        "params": [
+          "arc.util.io.Writes",
+          "byte[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeClientPlans",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.io.TypeIO$ClientBuildPlans"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeColor",
+        "params": [
+          "arc.util.io.Writes",
+          "arc.graphics.Color"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeCommand",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.ai.UnitCommand"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeContent",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.ctype.Content"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeController",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.units.UnitController"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeEffect",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.Effect"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeEntity",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.gen.Entityc"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeIntSeq",
+        "params": [
+          "arc.util.io.Writes",
+          "arc.struct.IntSeq"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeInts",
+        "params": [
+          "arc.util.io.Writes",
+          "int[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeItem",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.type.Item"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeItemStacks",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.type.ItemStack[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeItems",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.type.ItemStack"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeKick",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.net.Packets$KickReason"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeLiquid",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.type.Liquid"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeLiquidStacks",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.type.LiquidStack[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeMarkerControl",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.logic.LMarkerControl"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeMounts",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.units.WeaponMount[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeObject",
+        "params": [
+          "arc.util.io.Writes",
+          "java.lang.Object"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeObjectiveMarker",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.game.MapObjectives$ObjectiveMarker"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeObjectives",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.game.MapObjectives"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writePayload",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.world.blocks.payloads.Payload"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writePlan",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.units.BuildPlan"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writePlans",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.units.BuildPlan[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writePlansQueueNet",
+        "params": [
+          "arc.util.io.Writes",
+          "arc.struct.Queue"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writePosEntity",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.gen.Posc"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeRules",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.game.Rules"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeShorts",
+        "params": [
+          "arc.util.io.Writes",
+          "short[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeSound",
+        "params": [
+          "arc.util.io.Writes",
+          "arc.audio.Sound"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeStance",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.ai.UnitStance"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeStatus",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.units.StatusEntry"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeString",
+        "params": [
+          "arc.util.io.Writes",
+          "java.lang.String"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeString",
+        "params": [
+          "java.nio.ByteBuffer",
+          "java.lang.String"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeStringArray",
+        "params": [
+          "arc.util.io.Writes",
+          "java.lang.String[][]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeStringData",
+        "params": [
+          "java.io.DataOutput",
+          "java.lang.String"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeStrings",
+        "params": [
+          "arc.util.io.Writes",
+          "java.lang.String[]",
+          "int"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeStrings",
+        "params": [
+          "arc.util.io.Writes",
+          "java.lang.String[]"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeTeam",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.game.Team"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeTile",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.world.Tile"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeTraceInfo",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.net.Administration$TraceInfo"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeUnit",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.gen.Unit"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeUnitContainer",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.entities.Units$UnitSyncContainer"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeUnitType",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.type.UnitType"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeVec2",
+        "params": [
+          "arc.util.io.Writes",
+          "arc.math.geom.Vec2"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeVecNullable",
+        "params": [
+          "arc.util.io.Writes",
+          "arc.math.geom.Vec2"
+        ],
+        "return": "void"
+      },
+      {
+        "name": "writeWeather",
+        "params": [
+          "arc.util.io.Writes",
+          "mindustry.type.Weather"
+        ],
+        "return": "void"
+      }
+    ]
+  }
+}

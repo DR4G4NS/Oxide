@@ -1,0 +1,41 @@
+{
+  "build": "158.1",
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "desktop.jar",
+    "sha256": "95b525b548512aa713c4d040bbdc4bfe582e2827dfce037f597e0bb5f1a5c06a",
+    "size_bytes": 80935962
+  },
+  "schema_version": 2,
+  "source_commit": "05b2ecd4eb578ac38cace8118dbecc1bd548ff4a",
+  "source_ref": "v158.1",
+  "streams": [
+    {
+      "class": "mindustry.net.Packets$StreamBegin",
+      "class_name": "StreamBegin",
+      "incremental": false,
+      "lifecycle": "framing",
+      "packet_id": 0,
+      "registration_order": 0
+    },
+    {
+      "class": "mindustry.net.Packets$StreamChunk",
+      "class_name": "StreamChunk",
+      "incremental": false,
+      "lifecycle": "framing",
+      "packet_id": 1,
+      "registration_order": 1
+    },
+    {
+      "class": "mindustry.net.Packets$WorldStream",
+      "class_name": "WorldStream",
+      "incremental": false,
+      "lifecycle": "world_join",
+      "packet_id": 2,
+      "registration_order": 2
+    }
+  ]
+}

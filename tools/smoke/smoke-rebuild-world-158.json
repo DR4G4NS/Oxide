@@ -1,0 +1,72 @@
+{
+  "version": 7,
+  "map_name": "maze",
+  "tiles": [
+    {
+      "position": 3276900,
+      "block": 0,
+      "rotation": 2,
+      "team": 1,
+      "config": [0],
+      "occupied": [3276900],
+      "stored_item": -1,
+      "stored_amount": 217,
+      "production_progress": 0.0,
+      "transport_progress": 0.0,
+      "ammo_units": 0.0,
+      "inventory": [],
+      "power_stored": 0.0,
+      "stored_liquid": -1,
+      "liquid_amount": 0.0,
+      "output_liquid_amount": 0.0,
+      "junction_items": [],
+      "mass_driver_incoming": [],
+      "mass_driver_rotation": 90.0,
+      "mass_driver_waiting": [],
+      "health": 0.0
+    }
+  ],
+  "core_items": [10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000,10000],
+  "wave": 1,
+  "wave_time": 10000.0,
+  "core_health": 6000.0,
+  "game_over": false,
+  "enemies": [
+    {
+      "id": 3100021,
+      "unit_type": 21,
+      "entity_class": 18,
+      "team": 1,
+      "x": 350.0,
+      "y": 700.0,
+      "rotation": 0.0,
+      "health": 400.0,
+      "shield": 0.0,
+      "status_effect": -1,
+      "velocity_x": 0.0,
+      "velocity_y": 0.0,
+      "attack_reload": 0.0,
+      "secondary_attack_reload": 0.0,
+      "tertiary_attack_reload": 0.0,
+      "move_speed": 2.6,
+      "attack_damage": 12.0,
+      "attack_reload_time": 30.0,
+      "attack_range": 130.0
+    }
+  ],
+  "base_building_health": [],
+  "players": [],
+  "building_commands": [],
+  "unit_orders": [
+    {
+      "unit_id": 3100021,
+      "command": 1,
+      "stances": 0,
+      "target_kind": 0,
+      "target_id": -1,
+      "target_x": null,
+      "target_y": null,
+      "queue": []
+    }
+  ]
+}

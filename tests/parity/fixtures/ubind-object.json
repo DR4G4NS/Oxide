@@ -1,0 +1,16 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "ubind-object",
+  "tick": 6,
+  "executions": 6,
+  "program": "ubind u",
+  "processor_team": 1,
+  "cases": {
+    "same_team_default_ai": {"bound": true, "type_logic_controllable": true, "controller_logic_controllable": true, "controller_unchanged": true, "acquired_logic": false, "controller": "GroundAI", "flag": 11},
+    "same_team_command_ai_active": {"bound": true, "type_logic_controllable": true, "controller_logic_controllable": false, "controller_unchanged": true, "acquired_logic": false, "controller": "CommandAI", "flag": 12},
+    "same_team_player": {"bound": true, "type_logic_controllable": true, "controller_logic_controllable": false, "controller_unchanged": true, "acquired_logic": false, "controller": "Player", "flag": 13},
+    "enemy_nonprivileged": {"bound": false, "type_logic_controllable": true, "controller_logic_controllable": true, "controller_unchanged": true, "acquired_logic": false, "controller": "GroundAI"},
+    "enemy_privileged": {"bound": true, "type_logic_controllable": true, "controller_logic_controllable": true, "controller_unchanged": true, "acquired_logic": false, "controller": "GroundAI", "flag": 15},
+    "not_logic_controllable": {"bound": false, "type_logic_controllable": false, "controller_logic_controllable": true, "controller_unchanged": true, "acquired_logic": false, "controller": "AssemblerAI"}
+  }
+}

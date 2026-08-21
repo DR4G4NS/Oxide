@@ -1,0 +1,92 @@
+# unit_id	unit_name	weapon	reload	shots	bullet_id	speed	damage	lifetime	splash_damage	splash_radius	pierce	pierce_building	status_id	status_duration
+0	dagger	large-weapon	13.0	1	6	2.5	9.0	60.0	0.0	-1.0	false	false	0	480.0
+1	mace	flamethrower	22.0	1	7	4.2	74.0	13.0	0.0	-1.0	true	true	1	300.0
+2	fortress	artillery	60.0	1	8	2.0	20.0	106.5	80.0	35.0	false	false	0	480.0
+3	scepter	scepter-weapon	45.0	3	10	8.0	70.0	27.0	0.0	-1.0	false	false	0	480.0
+3	scepter	scepter-mount	12.0	1	9	12.0	20.0	17.333334	0.0	-1.0	false	false	0	480.0
+3	scepter	scepter-mount	15.0	1	9	12.0	20.0	17.333334	0.0	-1.0	false	false	0	480.0
+4	reign	reign-weapon	9.0	1	12	13.0	80.0	15.0	18.0	13.0	true	false	0	480.0
+5	nova	heal-weapon	24.0	1	14	5.2	13.0	30.0	0.0	-1.0	false	false	0	480.0
+6	pulsar	heal-shotgun-weapon	36.0	3	15	0.0	15.0	1.0	0.0	-1.0	false	false	17	480.0
+7	quasar	beam-weapon	55.0	1	17	0.0	45.0	16.0	0.0	-1.0	true	false	0	480.0
+8	vela	vela-weapon	155.0	1	18	0.0	35.0	160.0	0.0	-1.0	true	false	0	480.0
+8	vela	repair-beam-weapon-center-large	1.0	1	19	1.0	1.0	40.0	0.0	-1.0	false	false	0	480.0
+9	corvus	corvus-weapon	350.0	1	20	0.0	560.0	65.0	0.0	-1.0	true	false	0	480.0
+10	crawler		24.0	1	21	0.0	1.0	40.0	80.0	44.0	false	false	0	480.0
+11	atrax	atrax-weapon	9.0	1	22	2.5	13.0	57.0	0.0	-1.0	false	false	8	120.0
+12	spiroct	spiroct-weapon	14.0	1	23	0.0	23.0	35.0	0.0	-1.0	true	false	9	180.0
+12	spiroct	mount-purple-weapon	18.0	1	24	0.0	18.0	25.0	0.0	-1.0	true	false	9	180.0
+13	arkyid	spiroct-weapon	9.0	1	25	0.0	40.0	30.0	0.0	-1.0	true	false	9	180.0
+13	arkyid	spiroct-weapon	14.0	1	25	0.0	40.0	30.0	0.0	-1.0	true	false	9	180.0
+13	arkyid	spiroct-weapon	22.0	1	25	0.0	40.0	30.0	0.0	-1.0	true	false	9	180.0
+13	arkyid	large-purple-mount	45.0	1	26	2.0	12.0	70.0	65.0	70.0	false	false	9	600.0
+14	toxopid	large-purple-mount	30.0	2	27	0.0	110.0	10.0	0.0	-1.0	true	false	0	480.0
+14	toxopid	toxopid-cannon	210.0	1	28	3.0	50.0	80.0	75.0	80.0	false	false	9	600.0
+15	flare		80.0	3	30	2.5	9.0	32.0	0.0	-1.0	false	false	0	480.0
+16	horizon		12.0	1	31	0.7	13.5	30.0	27.0	25.0	false	false	18	60.0
+17	zenith	zenith-missiles	40.0	2	32	3.0	14.0	50.0	15.0	25.0	false	false	0	480.0
+18	antumbra	missiles-mount	20.0	1	33	2.7	18.0	50.0	37.0	20.0	false	false	18	60.0
+18	antumbra	missiles-mount	35.0	1	33	2.7	18.0	50.0	37.0	20.0	false	false	18	60.0
+18	antumbra	large-bullet-mount	12.0	1	34	7.0	55.0	25.0	0.0	-1.0	false	false	0	480.0
+19	eclipse	large-laser-mount	45.0	1	36	0.0	115.0	16.0	0.0	-1.0	true	false	0	480.0
+19	eclipse	large-artillery	9.0	1	35	4.0	15.0	47.0	65.0	25.0	false	false	18	60.0
+19	eclipse	large-artillery	12.0	1	35	4.0	15.0	47.0	65.0	25.0	false	false	18	60.0
+21	poly	poly-weapon	30.0	1	37	4.0	12.0	50.0	0.0	-1.0	false	false	0	480.0
+22	mega	heal-weapon-mount	24.0	1	38	5.2	10.0	35.0	0.0	-1.0	false	false	0	480.0
+22	mega	heal-weapon-mount	15.0	1	39	5.2	8.0	35.0	0.0	-1.0	false	false	0	480.0
+23	quad		55.0	1	40	0.0	154.0	70.0	220.0	80.0	false	false	0	480.0
+25	risso	mount-weapon	13.0	1	41	2.5	9.0	60.0	0.0	-1.0	false	false	0	480.0
+25	risso	missiles-mount	25.0	1	42	2.7	12.0	65.0	10.0	25.0	false	false	0	480.0
+26	minke	mount-weapon	10.0	1	43	4.2	3.0	52.5	40.5	15.0	false	false	0	480.0
+26	minke	artillery-mount	30.0	1	44	3.0	20.0	73.5	40.0	22.5	false	false	0	480.0
+27	bryde	large-artillery	65.0	1	45	3.2	15.0	84.0	70.0	40.0	false	false	18	60.0
+27	bryde	missiles-mount	20.0	2	46	2.7	12.0	70.0	10.0	25.0	false	false	0	480.0
+28	sei	sei-launcher	45.0	6	47	4.2	42.0	62.0	45.0	35.0	false	false	0	480.0
+28	sei	large-bullet-mount	60.0	3	48	7.0	57.0	35.0	0.0	-1.0	false	false	0	480.0
+29	omura	omura-cannon	110.0	1	49	0.0	1250.0	1.0	0.0	-1.0	true	true	0	480.0
+30	retusa	repair-beam-weapon-center	1.0	1	50	1.0	1.0	40.0	0.0	-1.0	false	false	0	480.0
+30	retusa	retusa-weapon	22.0	1	51	5.2	12.0	30.0	0.0	-1.0	false	false	0	480.0
+30	retusa		90.0	3	52	0.7	1.0	87.0	40.0	32.0	false	false	0	480.0
+31	oxynoe	plasma-mount-weapon	5.0	1	53	3.4	23.0	18.0	0.0	-1.0	true	false	1	240.0
+31	oxynoe	point-defense-mount	9.0	1	54	1.0	17.0	40.0	0.0	-1.0	false	false	0	480.0
+32	cyerce	repair-beam-weapon-center	1.0	1	55	1.0	1.0	40.0	0.0	-1.0	false	false	0	480.0
+32	cyerce	plasma-missile-mount	60.0	1	56	2.5	25.0	80.0	25.0	30.0	false	false	0	480.0
+33	aegires	point-defense-mount	4.0	1	58	1.0	30.0	40.0	0.0	-1.0	false	false	0	480.0
+33	aegires	point-defense-mount	4.0	1	59	1.0	30.0	40.0	0.0	-1.0	false	false	0	480.0
+34	navanax	emp-cannon-mount	65.0	1	60	5.0	60.0	60.0	70.0	100.0	false	false	10	480.0
+34	navanax	plasma-laser-mount	170.0	1	61	0.0	27.0	155.0	0.0	-1.0	true	false	0	480.0
+34	navanax	plasma-laser-mount	170.0	1	62	0.0	27.0	155.0	0.0	-1.0	true	false	0	480.0
+34	navanax	plasma-laser-mount	170.0	1	63	0.0	27.0	155.0	0.0	-1.0	true	false	0	480.0
+34	navanax	plasma-laser-mount	170.0	1	64	0.0	27.0	155.0	0.0	-1.0	true	false	0	480.0
+35	alpha	small-basic-weapon	17.0	1	65	2.5	11.0	60.0	0.0	-1.0	false	false	0	480.0
+36	beta	small-mount-weapon	20.0	2	66	3.0	11.0	60.0	0.0	-1.0	false	false	0	480.0
+37	gamma	small-mount-weapon	15.0	2	67	3.5	11.0	70.0	0.0	-1.0	false	false	0	480.0
+38	stell	stell-weapon	50.0	1	68	4.0	30.0	40.0	0.0	-1.0	false	false	0	480.0
+39	locus	locus-weapon	18.0	1	69	0.0	36.0	1.0	0.0	-1.0	true	true	0	480.0
+40	precept	precept-weapon	80.0	1	70	7.0	90.0	28.0	50.0	20.0	true	true	0	480.0
+41	vanquish	vanquish-weapon	80.0	1	72	8.0	112.5	16.0	50.0	20.0	true	true	0	480.0
+41	vanquish	vanquish-point-weapon	22.0	1	74	12.0	37.5	15.0	0.0	-1.0	false	false	0	480.0
+41	vanquish	vanquish-point-weapon	27.0	1	75	12.0	37.5	15.0	0.0	-1.0	false	false	0	480.0
+42	conquer	conquer-weapon	100.0	1	76	8.0	270.0	35.0	0.0	-1.0	true	true	0	480.0
+43	merui	merui-weapon	63.0	1	89	3.0	30.0	46.0	30.0	19.0	false	false	0	480.0
+44	cleroi	cleroi-weapon	33.0	1	90	3.5	22.5	40.0	43.0	30.0	false	false	0	480.0
+44	cleroi	cleroi-point-defense	9.0	1	91	1.0	28.5	40.0	0.0	-1.0	false	false	0	480.0
+45	anthicus	anthicus-weapon	130.0	2	92	0.0	0.75	40.0	0.0	-1.0	false	false	0	480.0
+46	anthicus-missile		1.0	1	93	0.0	1.0	1.0	140.0	25.0	false	false	0	480.0
+47	tecta	tecta-weapon	40.0	3	94	4.2	38.25	55.0	60.0	30.0	false	false	0	480.0
+48	collaris	collaris-weapon	130.0	1	95	5.5	195.0	60.0	120.0	36.0	false	false	0	480.0
+49	elude	elude-weapon	40.0	2	97	5.0	12.0	30.0	0.0	-1.0	false	false	0	480.0
+50	avert	avert-weapon	35.0	1	98	5.0	22.0	18.0	0.0	-1.0	false	false	0	480.0
+51	obviate		140.0	1	100	3.0	56.25	60.0	0.0	-1.0	false	false	0	480.0
+52	quell	quell-weapon	55.0	1	103	4.3	52.5	29.76	0.0	-1.0	false	false	0	480.0
+53	quell-missile		1.0	1	105	0.0	1.0	1.0	110.0	25.0	false	false	0	480.0
+54	disrupt	disrupt-weapon	70.0	3	106	0.0	0.75	40.0	0.0	-1.0	false	false	0	480.0
+55	disrupt-missile		1.0	1	107	0.0	1.0	1.0	140.0	25.0	false	false	0	480.0
+58	evoke		20.0	1	108	1.0	0.75	40.0	0.0	-1.0	false	false	0	480.0
+59	incite		20.0	1	109	1.0	0.75	40.0	0.0	-1.0	false	false	0	480.0
+59	incite	build-weapon	1.0	1	110	1.0	0.75	40.0	0.0	-1.0	false	false	0	480.0
+60	emanate		20.0	1	111	1.0	0.75	40.0	0.0	-1.0	false	false	0	480.0
+64	scathe-missile		1.0	1	187	0.0	1.0	1.0	1000.0	65.0	false	false	0	480.0
+65	scathe-missile-phase		1.0	1	190	0.0	1.0	1.0	320.0	120.0	false	false	0	480.0
+66	scathe-missile-surge		1.0	1	193	0.0	1.0	1.0	1800.0	40.0	false	false	0	480.0
+67	scathe-missile-surge-split		1.0	1	195	0.0	1.0	1.0	180.0	35.0	false	false	0	480.0

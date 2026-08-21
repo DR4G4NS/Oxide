@@ -1,0 +1,69 @@
+{
+  "build": "159.7",
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "159.7.jar",
+    "sha256": "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05",
+    "size_bytes": 82540141
+  },
+  "saves": [
+    {
+      "class": "Save1",
+      "version": 1
+    },
+    {
+      "class": "Save2",
+      "version": 2
+    },
+    {
+      "class": "Save3",
+      "version": 3
+    },
+    {
+      "class": "Save4",
+      "version": 4
+    },
+    {
+      "class": "Save5",
+      "version": 5
+    },
+    {
+      "class": "Save6",
+      "version": 6
+    },
+    {
+      "class": "Save7",
+      "version": 7
+    },
+    {
+      "class": "Save8",
+      "version": 8
+    },
+    {
+      "class": "Save9",
+      "version": 9
+    },
+    {
+      "class": "Save10",
+      "version": 10
+    },
+    {
+      "class": "Save11",
+      "version": 11
+    },
+    {
+      "class": "Save12",
+      "version": 12
+    },
+    {
+      "class": "Save13",
+      "version": 13
+    }
+  ],
+  "schema_version": 2,
+  "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
+  "source_ref": "v159.7"
+}

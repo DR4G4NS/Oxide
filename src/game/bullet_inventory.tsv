@@ -1,0 +1,111 @@
+# P2-A1 server-authoritative bullet inventory (Mindustry v158.1 baseline).
+# Columns: bullet_id, consumers, direct, splash, pierce, status, frag, continuous,
+# lightning, heal, point_defense, spawnUnit, sticky
+# Values: IMPLEMENTED | DEVIATION | — (not applicable / not used by this bullet)
+#
+# Turret families (113-196) share one row per family; see tools/BULLET_INVENTORY.md.
+# Generated from unit_weapons.tsv, listener.rs turret tables, economy.rs Erekir tables,
+# and combat.rs special-case handlers. Re-verify version-sensitive ids against
+# desktop.jar 158.1 when the local Mindustry tree is not exactly v158.1.
+#
+6	dagger,large-weapon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+7	mace,flamethrower	IMPLEMENTED	—	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—
+8	fortress,artillery	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+9	scepter,scepter-mount	IMPLEMENTED	—	—	—	—	—	DEVIATION	—	—	—	—
+10	scepter,scepter-weapon	IMPLEMENTED	—	—	—	—	—	DEVIATION	—	—	—	—
+12	reign,reign-weapon	IMPLEMENTED	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—
+13	reign-frag-child	IMPLEMENTED	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—
+14	nova,heal-weapon	IMPLEMENTED	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+15	pulsar,heal-shotgun	—	—	—	IMPLEMENTED	—	—	DEVIATION	—	—	—	—
+17	quasar,beam-weapon	IMPLEMENTED	—	IMPLEMENTED	—	—	DEVIATION	—	IMPLEMENTED	—	—	—
+18	vela,vela-weapon	IMPLEMENTED	—	IMPLEMENTED	—	—	DEVIATION	—	IMPLEMENTED	—	—	—
+19	vela,repair-beam	—	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+20	corvus,corvus-weapon	IMPLEMENTED	—	IMPLEMENTED	—	—	DEVIATION	—	IMPLEMENTED	—	—	—
+21	crawler,suicide	—	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+22	atrax,atrax-weapon	IMPLEMENTED	—	—	IMPLEMENTED	—	—	—	—	—	—	—
+23	spiroct,spiroct-weapon	IMPLEMENTED	—	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—
+24	spiroct,mount-purple	IMPLEMENTED	—	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—
+25	arkyid,spiroct-weapon×3	IMPLEMENTED	—	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—
+26	arkyid,large-purple-mount	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	—	—	DEVIATION	—	—	—	—
+27	toxopid,shrapnel-mount	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—	—
+28	toxopid,cannon	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—
+29	toxopid,frag-child	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—
+30	flare,basic×3	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+31	horizon,bomb	—	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—
+32	zenith,missiles	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+33	antumbra,missiles	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—
+34	antumbra,large-bullet	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+35	eclipse,large-artillery	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—
+36	eclipse,large-laser	IMPLEMENTED	—	IMPLEMENTED	—	—	DEVIATION	—	—	—	—	—
+37	poly,poly-weapon	IMPLEMENTED	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+38	mega,heal-mount-a	IMPLEMENTED	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+39	mega,heal-mount-b	IMPLEMENTED	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+40	quad,bomb	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	IMPLEMENTED	—	—	—
+41	risso,mount	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+42	risso,missiles	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+43	minke,mount	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+44	minke,artillery	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+45	bryde,artillery	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—
+46	bryde,missiles	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+47	sei,launcher	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+48	sei,cannon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+49	omura,cannon	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—	—
+50	retusa,repair-beam	—	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+51	retusa,retusa-weapon	IMPLEMENTED	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+52	retusa,mine	—	IMPLEMENTED	—	—	—	—	—	IMPLEMENTED	—	—	—
+53	oxynoe,plasma-mount	IMPLEMENTED	—	IMPLEMENTED	IMPLEMENTED	—	—	—	IMPLEMENTED	—	—	—
+54	oxynoe,point-defense	—	—	—	—	—	—	—	—	IMPLEMENTED	—	—
+55	cyerce,repair-beam	—	—	—	—	—	—	—	IMPLEMENTED	—	—	—
+56	cyerce,plasma-missile	IMPLEMENTED	IMPLEMENTED	—	—	IMPLEMENTED	—	—	—	—	—	—
+57	cyerce,frag-child	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+58	aegires,point-defense	—	—	—	—	—	—	—	—	IMPLEMENTED	—	—
+59	aegires,point-defense-b	—	—	—	—	—	—	—	—	IMPLEMENTED	—	—
+60	navanax,emp-cannon	IMPLEMENTED	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—
+61-64	navanax,plasma-laser×4	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—	—
+65	alpha,small-basic	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+66-67	beta/gamma,mount	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+68	stell,stell-weapon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+69	locus,locus-weapon	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—	—
+70	precept,precept-weapon	IMPLEMENTED	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—
+72	vanquish,vanquish-weapon	IMPLEMENTED	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—
+74-75	vanquish,point-weapons	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+76	conquer,conquer-weapon	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—	—
+89	merui,merui-weapon	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+90	cleroi,cleroi-weapon	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+91	cleroi,point-defense	—	—	—	—	—	—	—	—	IMPLEMENTED	—	—
+92	anthicus,launcher	—	—	—	—	—	—	—	—	—	DEVIATION	—
+93	anthicus-missile,terminal	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—
+94	tecta,tecta-weapon	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+95	collaris,collaris-weapon	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+97	elude,elude-weapon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+98	avert,avert-weapon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+100	obviate,bomb	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+103	quell,quell-weapon	—	—	—	—	—	—	—	—	—	DEVIATION	—
+105-107	quell/disrupt-missiles	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—
+106	disrupt,launcher	—	—	—	—	—	—	—	—	—	DEVIATION	—
+108-111	evoke/incite/emanate	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+113-115	duo-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+116-118	scatter-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+120-121	scorch-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+122-124	hail-turret	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+125-128	tsunami-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+129	lancer-turret	IMPLEMENTED	—	—	—	—	IMPLEMENTED	—	—	—	—	—
+130	arc-turret	IMPLEMENTED	—	—	—	—	IMPLEMENTED	—	—	—	—	—
+132-134	swarmer-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+135-139	salvo-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+140-143	wave-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+144-145	fuse-turret	IMPLEMENTED	—	—	—	—	IMPLEMENTED	—	—	—	—	—
+146-150	ripple-turret	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+152-157	cyclone-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+158	foreshadow-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+159-161	spectre-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+162	segment-turret	IMPLEMENTED	—	—	—	—	IMPLEMENTED	—	—	—	—	—
+163-165	breach-turret	IMPLEMENTED	—	IMPLEMENTED	—	—	—	—	—	—	—	—
+167-169	diffuse-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+170-171	sublimate-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+172-179	titan-turret	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
+181-182	afflict-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+183	lustre-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+185-195	scathe/smite payloads	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—
+196	malign-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+187-195	scathe-missile-family	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—

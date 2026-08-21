@@ -1,0 +1,44 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "logic-move-timing",
+  "tick": 5,
+  "start_x": 80.0,
+  "start_y": 80.0,
+  "target_x": 200.0,
+  "target_y": 80.0,
+  "flying": {
+    "n_minus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true},
+    "n_after_ucontrol": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.2160, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_2": {"x": 80.2160, "y": 80.0000, "vel_x": 0.4224, "vel_y": 0.0204, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true}
+  },
+  "grounded": {
+    "n_minus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true},
+    "n_after_ucontrol": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.2346, "vel_y": 0.0864, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_2": {"x": 80.2346, "y": 80.0864, "vel_x": 0.3988, "vel_y": 0.1469, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true}
+  },
+  "stop_to_move": {
+    "n_minus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true},
+    "n_after_ucontrol": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.2346, "vel_y": 0.0864, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_2": {"x": 80.2346, "y": 80.0864, "vel_x": 0.3988, "vel_y": 0.1469, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true}
+  },
+  "move_to_stop": {
+    "n_minus_1": {"x": 80.6334, "y": 80.2334, "vel_x": 0.4692, "vel_y": 0.1729, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": true},
+    "n_after_ucontrol": {"x": 81.1026, "y": 80.4062, "vel_x": 0.4692, "vel_y": 0.1729, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true},
+    "end_n": {"x": 81.1026, "y": 80.4062, "vel_x": 0.4692, "vel_y": 0.1729, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_1": {"x": 81.5717, "y": 80.5791, "vel_x": 0.3284, "vel_y": 0.1210, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true},
+    "end_n_plus_2": {"x": 81.9001, "y": 80.7001, "vel_x": 0.2299, "vel_y": 0.0847, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true}
+  },
+  "proc_destroyed": {
+    "n_minus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "stop", "move_x": 0.0000, "move_y": 0.0000, "is_logic": true, "processor_valid": true},
+    "n_after_ucontrol": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": false},
+    "end_n": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "move", "move_x": 1600.0000, "move_y": 640.0000, "is_logic": true, "processor_valid": false},
+    "end_n_plus_1": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "none", "move_x": null, "move_y": null, "is_logic": false, "processor_valid": false},
+    "end_n_plus_2": {"x": 80.0000, "y": 80.0000, "vel_x": 0.0000, "vel_y": 0.0000, "control": "none", "move_x": null, "move_y": null, "is_logic": false, "processor_valid": false}
+  }
+}

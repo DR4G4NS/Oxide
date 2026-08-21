@@ -1,0 +1,20 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "lease-600",
+  "tick": 700,
+  "program": "ubind @dagger\nucontrol flag 7\nstop",
+  "processor_team": 1,
+  "unit_team": 1,
+  "acquire_tick": 2,
+  "timer_at_acquire": 600.0,
+  "timer_at_599": 3.0,
+  "timer_at_600": 2.0,
+  "timer_at_601": 1.0,
+  "timer_at_602": 0.0,
+  "controller_is_build_at_599": true,
+  "release_tick": 603,
+  "destroy_at": 50,
+  "reacquire_tick": 2,
+  "still_logic_at_destroy": true,
+  "destroy_release_tick": 51
+}

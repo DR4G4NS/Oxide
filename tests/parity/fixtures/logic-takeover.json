@@ -1,0 +1,20 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "logic-takeover",
+  "tick": 2,
+  "program": "ubind @poly\nucontrol move 10 10\nucontrol move 20 20\nstop",
+  "first_logic": true,
+  "first_mine_null": true,
+  "first_plans_empty": true,
+  "first_plans": 0,
+  "second_logic": true,
+  "second_mine_kept": true,
+  "second_plans_kept": true,
+  "second_plans": 1,
+  "fail_was_command": true,
+  "fail_has_command": true,
+  "fail_still_command": true,
+  "fail_mine_kept": true,
+  "fail_plans_kept": true,
+  "fail_became_logic": false
+}

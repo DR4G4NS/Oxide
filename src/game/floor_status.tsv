@@ -1,0 +1,12 @@
+# block_id	name	status_id	status_duration
+21	deep-water	6	120
+22	shallow-water	6	90
+23	tainted-water	6	90
+24	deep-tainted-water	6	140
+25	darksand-tainted-water	6	60
+26	sand-water	6	50
+27	darksand-water	6	50
+28	tar	12	240
+29	pooled-cryofluid	2	240
+30	molten-slag	8	240
+42	mud	7	30

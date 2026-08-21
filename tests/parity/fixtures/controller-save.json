@@ -1,0 +1,301 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "controller-save",
+  "tick": 0,
+  "scenarios": {
+    "command_roundtrip": {
+      "before": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 1,
+        "has_target_pos": true,
+        "target_x": 120.000000,
+        "target_y": 120.000000,
+        "has_attack_target": true,
+        "attack_kind": "unit",
+        "attack_building_pos": -1,
+        "attack_unit_id": 0,
+        "read_attack_target": -1,
+        "queue_size": 3,
+        "queue": [{
+          "kind": "building",
+          "pos": 524296
+        }, {
+          "kind": "unit",
+          "id": 0
+        }, {
+          "kind": "vec2",
+          "x": 400.000000,
+          "y": 400.000000
+        }],
+        "stances": [1, 2],
+        "has_command": true,
+        "logic_controllable": false
+      },
+      "after": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 1,
+        "has_target_pos": true,
+        "target_x": 120.000000,
+        "target_y": 120.000000,
+        "has_attack_target": true,
+        "attack_kind": "unit",
+        "attack_building_pos": -1,
+        "attack_unit_id": 0,
+        "read_attack_target": -1,
+        "queue_size": 3,
+        "queue": [{
+          "kind": "building",
+          "pos": 524296
+        }, {
+          "kind": "unit",
+          "id": 0
+        }, {
+          "kind": "vec2",
+          "x": 400.000000,
+          "y": 400.000000
+        }],
+        "stances": [1, 2],
+        "has_command": true,
+        "logic_controllable": false
+      }
+    },
+    "logic_roundtrip": {
+      "before": {
+        "unit_found": true,
+        "controller": "LogicAI",
+        "is_logic_ai": true,
+        "controller_pos": 524296,
+        "controller_valid": true,
+        "control_timer": 123.449997,
+        "control_mode": "move",
+        "move_x": 200.000000,
+        "move_y": 300.000000,
+        "move_rad": 40.000000,
+        "boost": true,
+        "shoot": true,
+        "aim_control": "target"
+      },
+      "after": {
+        "unit_found": true,
+        "controller": "LogicAI",
+        "is_logic_ai": true,
+        "controller_pos": 524296,
+        "controller_valid": true,
+        "control_timer": 600.000000,
+        "control_mode": "idle",
+        "move_x": 0.000000,
+        "move_y": 0.000000,
+        "move_rad": 0.000000,
+        "boost": false,
+        "shoot": false,
+        "aim_control": "stop"
+      }
+    },
+    "missing_attack_unit": {
+      "before": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 120.000000,
+        "target_y": 120.000000,
+        "has_attack_target": true,
+        "attack_kind": "unit",
+        "attack_building_pos": -1,
+        "attack_unit_id": 13,
+        "read_attack_target": -1,
+        "queue_size": 0,
+        "queue": [],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false,
+        "phantom_id": 13
+      },
+      "after": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 120.000000,
+        "target_y": 120.000000,
+        "has_attack_target": false,
+        "attack_kind": "none",
+        "attack_building_pos": -1,
+        "attack_unit_id": -1,
+        "read_attack_target": -1,
+        "queue_size": 0,
+        "queue": [],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false
+      }
+    },
+    "missing_queue_unit": {
+      "before": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 100.000000,
+        "target_y": 100.000000,
+        "has_attack_target": false,
+        "attack_kind": "none",
+        "attack_building_pos": -1,
+        "attack_unit_id": -1,
+        "read_attack_target": -1,
+        "queue_size": 2,
+        "queue": [{
+          "kind": "unit",
+          "id": 16
+        }, {
+          "kind": "vec2",
+          "x": 200.000000,
+          "y": 200.000000
+        }],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false,
+        "removed_queue_unit_id": 16
+      },
+      "after": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 100.000000,
+        "target_y": 100.000000,
+        "has_attack_target": false,
+        "attack_kind": "none",
+        "attack_building_pos": -1,
+        "attack_unit_id": -1,
+        "read_attack_target": -1,
+        "queue_size": 1,
+        "queue": [{
+          "kind": "vec2",
+          "x": 200.000000,
+          "y": 200.000000
+        }],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false
+      }
+    },
+    "building_attack_removed": {
+      "before": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 64.000000,
+        "target_y": 64.000000,
+        "has_attack_target": true,
+        "attack_kind": "building",
+        "attack_building_pos": 524296,
+        "attack_unit_id": -1,
+        "read_attack_target": -1,
+        "queue_size": 0,
+        "queue": [],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false,
+        "wall_pos": 524296
+      },
+      "after": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 64.000000,
+        "target_y": 64.000000,
+        "has_attack_target": false,
+        "attack_kind": "none",
+        "attack_building_pos": -1,
+        "attack_unit_id": -1,
+        "read_attack_target": -1,
+        "queue_size": 0,
+        "queue": [],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false
+      }
+    },
+    "building_queue_removed": {
+      "before": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 100.000000,
+        "target_y": 100.000000,
+        "has_attack_target": false,
+        "attack_kind": "none",
+        "attack_building_pos": -1,
+        "attack_unit_id": -1,
+        "read_attack_target": -1,
+        "queue_size": 2,
+        "queue": [{
+          "kind": "building",
+          "pos": 524296
+        }, {
+          "kind": "vec2",
+          "x": 300.000000,
+          "y": 300.000000
+        }],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false,
+        "wall_pos": 524296
+      },
+      "after": {
+        "unit_found": true,
+        "controller": "CommandAI",
+        "is_command_ai": true,
+        "command_id": 0,
+        "has_target_pos": true,
+        "target_x": 100.000000,
+        "target_y": 100.000000,
+        "has_attack_target": false,
+        "attack_kind": "none",
+        "attack_building_pos": -1,
+        "attack_unit_id": -1,
+        "read_attack_target": -1,
+        "queue_size": 1,
+        "queue": [{
+          "kind": "vec2",
+          "x": 300.000000,
+          "y": 300.000000
+        }],
+        "stances": [],
+        "has_command": true,
+        "logic_controllable": false
+      }
+    }
+  },
+  "outcomes": {
+    "command_ai_survives": true,
+    "command_persisted_id": 1,
+    "command_target_pos_persisted": true,
+    "command_attack_unit_persisted": true,
+    "command_queue_building_persisted": true,
+    "command_queue_vec2_persisted": true,
+    "command_queue_unit_persisted": true,
+    "command_stances_persisted": 2,
+    "logic_ai_survives": true,
+    "logic_controller_pos_persisted": 524296,
+    "logic_control_timer_persisted_non_default": false,
+    "logic_move_mode_persisted": false,
+    "logic_move_coords_persisted": false
+  }
+
+}

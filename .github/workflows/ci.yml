@@ -1,0 +1,448 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# paths-filter needs to read the changed-file list on pull requests. Keep the
+# workflow token least-privileged: no write access is required by CI.
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  gates:
+    name: fmt / clippy / tests
+    runs-on: ubuntu-latest
+    steps:
+      # Full history required so CERTIFIED_RUNTIME_SHA ancestry / drift checks
+      # can run fail-closed (merge-base --is-ancestor + path diff).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # rust-src avoids concurrent rustup component fetches during early
+          # `cargo test --list` from cert_ledger (race with RUSTFLAGS=-D warnings).
+          components: rustfmt, clippy, rust-src
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Each gate runs even if an earlier one failed (`!cancelled()`), so a
+      # fmt failure cannot skip clippy/tests. `Require every gate` then
+      # fails the job if any step was skipped or failed — the job cannot
+      # go green with a skipped clippy/test.
+      #
+      # Architecture self-tests + scan run before DashMap/fmt/clippy so a
+      # capability-guard failure is cheap and independent of the low-core suite.
+      - name: compatibility schema / ledger / current.toml
+        id: compat
+        if: ${{ !cancelled() }}
+        run: |
+          python3 tools/compat_selftest.py
+          python3 tools/mindustry_manifest.py
+          python3 tools/cert_ledger.py --require-certified
+
+      - name: architecture_guard self-tests
+        id: archself
+        run: python3 tools/archguard/selftest.py
+
+      - name: architecture_guard
+        id: arch
+        if: ${{ !cancelled() }}
+        env:
+          # Self-tests ran in the previous step; DashMap G0 runs in the next.
+          ARCHITECTURE_GUARD_SKIP_SELFTEST: "1"
+          ARCHITECTURE_GUARD_SKIP_G0: "1"
+        run: bash tools/architecture_guard.sh
+
+      # Deterministic DashMap guard analyzer (DM001-DM005). Mandatory on every
+      # PR: crate self-tests plus a strict scan (`--deny-warnings`). Frozen
+      # migration infrastructure — not expanded by architecture-guard work.
+      - name: dashmap_guard (deterministic DashMap guard analysis)
+        id: guard
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --quiet --manifest-path tools/dashmap_guard/Cargo.toml
+          cargo run --quiet --manifest-path tools/dashmap_guard/Cargo.toml \
+            -- check . --paths src,tests --deny-warnings
+
+      - name: cargo fmt
+        id: fmt
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        id: clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Watchdog self-test: proves tools/low_core_test.py's timeout + process
+      # group kill works on THIS runner before we trust it with the suite.
+      - name: low-core watchdog self-test
+        id: watchdog
+        if: ${{ !cancelled() }}
+        run: python3 tools/low_core_test.py --self-test --cpus 0,1
+
+      # The full suite runs under the low-core watchdog: pinned to 2 CPUs so
+      # DashMap shard collisions reproduce like on minimal runners, bounded by
+      # a timeout that kills the whole test process tree. A hang is a hard
+      # failure with diagnostics; there are NO flaky retries to turn a hang
+      # green. (No lib/bin duplication: --test-threads=1.)
+      - name: cargo test (low-core, watchdog-bounded)
+        id: test
+        if: ${{ !cancelled() }}
+        run: |
+          python3 tools/low_core_test.py \
+            --cpus 0,1 \
+            --timeout-seconds 1800 \
+            -- cargo test --all-targets -- --test-threads=1
+
+      # JAR-less world-entity framing fixtures (v4–v11). Must actually run:
+      # an ignored/skipped result would hide the archipelago short-chunk bug.
+      - name: MSAV world-entity framing (JAR-less)
+        id: framing
+        if: ${{ !cancelled() }}
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          python3 - <<'PY'
+          import re, subprocess, sys
+          proc = subprocess.run(
+              ["cargo", "test", "--test", "msav_world_entity_framing", "--", "--test-threads=1"],
+              capture_output=True,
+              text=True,
+          )
+          sys.stdout.write(proc.stdout)
+          sys.stderr.write(proc.stderr)
+          ansi = re.compile(r"\x1b\[[0-9;]*m")
+          text = ansi.sub("", proc.stdout + "\n" + proc.stderr)
+          match = re.search(
+              r"test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored",
+              text,
+          )
+          if match is None:
+              sys.exit("could not parse msav_world_entity_framing result")
+          passed, failed, ignored = (int(value) for value in match.groups())
+          if proc.returncode != 0 or failed or ignored or passed < 4:
+              sys.exit(
+                  f"framing gate must run (not skip): passed={passed} failed={failed} ignored={ignored}"
+              )
+          print("msav_world_entity_framing OK")
+          PY
+
+      - name: git diff check
+        id: diff
+        if: ${{ !cancelled() }}
+        run: git diff --check
+
+      - name: Worktree clean
+        id: clean
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Working tree is dirty after the gates:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
+      - name: Manifest sanity (JAR-less current target)
+        id: manifest
+        if: ${{ !cancelled() }}
+        run: python3 tools/mindustry_manifest.py
+
+      - name: Require every gate
+        if: ${{ !cancelled() }}
+        env:
+          COMPAT: ${{ steps.compat.outcome }}
+          ARCHSELF: ${{ steps.archself.outcome }}
+          ARCH: ${{ steps.arch.outcome }}
+          GUARD: ${{ steps.guard.outcome }}
+          FMT: ${{ steps.fmt.outcome }}
+          CLIPPY: ${{ steps.clippy.outcome }}
+          WATCHDOG: ${{ steps.watchdog.outcome }}
+          TEST: ${{ steps.test.outcome }}
+          FRAMING: ${{ steps.framing.outcome }}
+          DIFF: ${{ steps.diff.outcome }}
+          CLEAN: ${{ steps.clean.outcome }}
+          MANIFEST: ${{ steps.manifest.outcome }}
+        run: |
+          set -euo pipefail
+          ok=1
+          for name in COMPAT ARCHSELF ARCH GUARD FMT CLIPPY WATCHDOG TEST FRAMING DIFF CLEAN MANIFEST; do
+            eval "outcome=\$$name"
+            echo "$name=$outcome"
+            if [ "$outcome" != "success" ]; then
+              ok=0
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "A gate was skipped or failed; the job cannot succeed." >&2
+            exit 1
+          fi
+
+  # The current-target JAR is resolved from the official itch.io Linux
+  # distribution (the upload is discovered by exact build/platform metadata)
+  # and verified against compat/current.toml. GitHub still authenticates the
+  # source tag/commit. This is a required PR dependency after normal gates;
+  # workflow_dispatch remains available for reruns.
+  current-jar-certification:
+    name: current-target JAR certification
+    runs-on: ubuntu-latest
+    needs: gates
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Temurin Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Read current target identity
+        id: target
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "tools")
+          from compatlib.release_jar import target_from_file
+
+          target = target_from_file(Path("compat/current.toml"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"tag={target.source_tag}\n")
+              output.write(f"sha={target.jar_sha256}\n")
+              output.write(f"filename={target.jar_filename}\n")
+          PY
+      - name: Cache official current-target JAR
+        uses: actions/cache@v4
+        with:
+          path: .cache/mindustry
+          key: mindustry-${{ steps.target.outputs.tag }}-${{ steps.target.outputs.sha }}
+      - name: Resolve and verify official current-target JAR
+        id: resolve
+        run: |
+          set -euo pipefail
+          jar_path="$(python3 tools/fetch_current_mindustry.py \
+            --output-dir .cache/mindustry --quiet)"
+          test -f "$jar_path"
+          echo "MINDUSTRY_CURRENT_JAR=$jar_path" >> "$GITHUB_ENV"
+          echo "path=$jar_path" >> "$GITHUB_OUTPUT"
+      - name: Official current-target compatibility gate
+        run: bash tools/compat_jar_gate.sh
+
+  # Path-filter the frozen upstream oracle so unrelated Rust/docs PRs do not
+  # pay its Gradle cost.  The aggregate below accepts `skipped` only when this
+  # detector says the oracle was not applicable; a relevant failing oracle
+  # therefore cannot leave compatibility-required green.
+  compatibility-scope:
+    name: compatibility scope detection
+    runs-on: ubuntu-latest
+    outputs:
+      run-upstream: ${{ steps.scope.outputs.run-upstream }}
+    steps:
+      - name: Detect compatibility-sensitive PR paths
+        id: paths
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            compatibility:
+              - 'compat/current.toml'
+              - 'compat/**'
+              - 'tools/compat*'
+              - 'tools/compatlib/**'
+              - 'tools/fetch_current_mindustry.py'
+              - 'tools/mindustry_manifest.py'
+              - '.github/workflows/**'
+              - 'THIRD_PARTY.md'
+      - name: Set upstream applicability
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMPATIBILITY_CHANGED: ${{ steps.paths.outputs.compatibility }}
+        run: |
+          set -euo pipefail
+          run_upstream=false
+          if [ "$EVENT_NAME" = pull_request ] && [ "$COMPATIBILITY_CHANGED" = true ]; then
+            run_upstream=true
+          elif [ "$EVENT_NAME" = workflow_dispatch ]; then
+            run_upstream=true
+          fi
+          echo "run-upstream=$run_upstream" >> "$GITHUB_OUTPUT"
+
+  upstream-v1597-reference:
+    name: upstream-v1597-reference
+    runs-on: ubuntu-latest
+    needs: compatibility-scope
+    if: needs.compatibility-scope.outputs.run-upstream == 'true'
+    steps:
+      - name: Checkout compatibility repository
+        uses: actions/checkout@v4
+      - name: Read exact upstream identity
+        id: target
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "tools")
+          from compatlib.release_jar import target_from_file
+
+          target = target_from_file(Path("compat/current.toml"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"tag={target.source_tag}\n")
+              output.write(f"commit={target.source_commit}\n")
+          PY
+      - name: Checkout exact upstream source tag
+        uses: actions/checkout@v4
+        with:
+          repository: Anuken/Mindustry
+          ref: ${{ steps.target.outputs.tag }}
+          path: upstream
+          fetch-depth: 1
+      - name: Verify upstream commit and read Arc authority
+        working-directory: upstream
+        env:
+          EXPECTED_COMMIT: ${{ steps.target.outputs.commit }}
+        id: arc
+        run: |
+          set -euo pipefail
+          actual_commit="$(git rev-parse HEAD)"
+          test "$actual_commit" = "$EXPECTED_COMMIT"
+          archash="$(sed -n 's/^archash=//p' gradle.properties | head -n 1 | tr -d '[:space:]')"
+          if ! [[ "$archash" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "gradle.properties archash is not a valid commit prefix: $archash" >&2
+            exit 1
+          fi
+          python3 - "$archash" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.request
+
+          prefix = sys.argv[1].lower()
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/Anuken/Arc/commits/{prefix}",
+              headers={"Accept": "application/vnd.github+json", "User-Agent": "mindustry-upstream-reference"},
+          )
+          with urllib.request.urlopen(request, timeout=60) as response:
+              payload = json.load(response)
+          commit = str(payload.get("sha", "")).lower()
+          if not re.fullmatch(r"[0-9a-f]{40}", commit) or not commit.startswith(prefix):
+              raise SystemExit(f"Arc API commit does not match gradle.properties archash={prefix}: {commit!r}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"arc_prefix={prefix}\n")
+              output.write(f"arc_commit={commit}\n")
+          PY
+          echo "upstream=$actual_commit archash=$archash"
+
+      - name: Checkout exact Arc dependency beside upstream
+        env:
+          ARC_COMMIT: ${{ steps.arc.outputs.arc_commit }}
+          ARC_PREFIX: ${{ steps.arc.outputs.arc_prefix }}
+        run: |
+          set -euo pipefail
+          arc_dir="$GITHUB_WORKSPACE/Arc"
+          git init -q "$arc_dir"
+          git -C "$arc_dir" remote add origin https://github.com/Anuken/Arc.git
+          git -C "$arc_dir" fetch --depth=1 origin "$ARC_COMMIT"
+          git -C "$arc_dir" checkout --detach "$ARC_COMMIT"
+          actual_arc="$(git -C "$arc_dir" rev-parse HEAD)"
+          test "$actual_arc" = "$ARC_COMMIT"
+          test "${actual_arc:0:${#ARC_PREFIX}}" = "$ARC_PREFIX"
+          echo "Arc checkout=$actual_arc (gradle.properties prefix=$ARC_PREFIX)"
+      - name: Setup Temurin Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Run exact upstream JUnit reference suite
+        working-directory: upstream
+        env:
+          CI: "true"
+          JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
+        run: ./gradlew tests:test --stacktrace --rerun
+
+  # Branch protection should require this one stable check, not the internal
+  # names of the two jobs above.  `always()` makes skipped dependencies fail
+  # closed instead of allowing a skipped gate to look green.
+  compatibility-required:
+    name: compatibility-required
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs:
+      - gates
+      - current-jar-certification
+      - compatibility-scope
+      - upstream-v1597-reference
+    steps:
+      - name: Require normal gates and current-target certification
+        env:
+          GATES_RESULT: ${{ needs.gates.result }}
+          CURRENT_JAR_RESULT: ${{ needs.current-jar-certification.result }}
+          SCOPE_RESULT: ${{ needs.compatibility-scope.result }}
+          RUN_UPSTREAM: ${{ needs.compatibility-scope.outputs.run-upstream }}
+          UPSTREAM_RESULT: ${{ needs.upstream-v1597-reference.result }}
+        run: |
+          set -euo pipefail
+          printf 'gates=%s\ncurrent-jar-certification=%s\nscope=%s (%s)\nupstream=%s\n' \
+            "$GATES_RESULT" "$CURRENT_JAR_RESULT" "$SCOPE_RESULT" "$RUN_UPSTREAM" "$UPSTREAM_RESULT"
+          if [ "$GATES_RESULT" != success ] || [ "$CURRENT_JAR_RESULT" != success ] || [ "$SCOPE_RESULT" != success ]; then
+            echo "Required compatibility jobs did not both succeed" >&2
+            exit 1
+          fi
+          if [ "$RUN_UPSTREAM" = true ] && [ "$UPSTREAM_RESULT" != success ]; then
+            echo "Compatibility-sensitive change requires a passing upstream reference suite" >&2
+            exit 1
+          fi
+
+  historical-158-smokes:
+    name: desktop-158.1 regression smokes (manual, not current target)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Download the official 158.1 desktop JAR
+        run: |
+          # Pin the documented authority: build 158.1 release jar.
+          # Provide MINDUSTRY_DESKTOP_JAR (e.g. via repo secret) or place the
+          # jar at ./desktop.jar; the manifest records its SHA-256.
+          if [ -z "${MINDUSTRY_DESKTOP_JAR:-}" ] && [ ! -f desktop.jar ]; then
+            echo "Set MINDUSTRY_DESKTOP_JAR or provide desktop.jar" >&2
+            exit 1
+          fi
+          JAR="${MINDUSTRY_DESKTOP_JAR:-$(pwd)/desktop.jar}"
+          echo "MINDUSTRY_DESKTOP_JAR=$JAR" >> "$GITHUB_ENV"
+      - name: VerifyProtocol158 (full, no --construct-only)
+        run: |
+          cargo test --lib export_desktop_158_post_join_fixtures -- --ignored
+          mkdir -p target/protocol-158-classes
+          javac -d target/protocol-158-classes -cp "$MINDUSTRY_DESKTOP_JAR" tools/smoke/VerifyProtocol158.java
+          java -cp "target/protocol-158-classes:$MINDUSTRY_DESKTOP_JAR" \
+            VerifyProtocol158 target/protocol-158-fixtures
+      - name: Smoke gates
+        run: |
+          for smoke in smoke_join_158.sh smoke_multiplayer_158.sh \
+                       smoke_tile_config_158.sh smoke_rotate_block_158.sh \
+                       smoke_rebuild_158.sh smoke_mine_158.sh \
+                       smoke_unit_factory_158.sh smoke_overdrive_158.sh \
+                       smoke_sandbox_continuity_158.sh; do
+            bash "tools/smoke/$smoke" 6600
+          done

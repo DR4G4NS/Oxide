@@ -1,0 +1,28 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "payload-rpc",
+  "tick": 0,
+  "world_size": 80,
+  "scenarios": {
+    "build_in_range": {"success": true, "carrier_payload_count": 1, "carrier_payload_types": ["build"], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 1},
+    "build_out_of_range": {"success": false, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": true, "target_unit_exists": false, "world_buildings": 0, "world_units": 1},
+    "build_hidden": {"success": false, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 1},
+    "build_can_pickup_false": {"success": false, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": true, "target_unit_exists": false, "world_buildings": 1, "world_units": 1},
+    "build_enemy_team": {"success": false, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": true, "target_unit_exists": false, "world_buildings": 0, "world_units": 1},
+    "build_internal_payload": {"success": true, "carrier_payload_count": 1, "carrier_payload_types": ["build"], "origin_building_exists": true, "target_unit_exists": false, "world_buildings": 1, "world_units": 1, "loader_still_exists": true},
+    "build_exact_capacity": {"success": true, "carrier_payload_count": 1, "carrier_payload_types": ["build"], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 1},
+    "build_over_capacity": {"success": false, "carrier_payload_count": 1, "carrier_payload_types": ["build"], "origin_building_exists": true, "target_unit_exists": false, "world_buildings": 0, "world_units": 1, "loader_still_exists": false, "extra_origin_exists": true},
+    "unit_ai_grounded": {"success": true, "carrier_payload_count": 1, "carrier_payload_types": ["unit"], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 1},
+    "unit_player_controller": {"success": false, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": true, "world_buildings": 0, "world_units": 2},
+    "unit_flying": {"success": false, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": true, "world_buildings": 0, "world_units": 2},
+    "unit_out_of_range": {"success": false, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": true, "world_buildings": 0, "world_units": 2},
+    "drop_within_four": {"success": true, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": false, "drop_x": 88.000000, "drop_y": 80.000000, "drop_tile_x": 11, "drop_tile_y": 10, "footprint": [[11, 10]], "world_buildings": 0, "world_units": 1},
+    "drop_clamp_far": {"success": true, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": false, "drop_x": 112.000000, "drop_y": 80.000000, "drop_tile_x": 14, "drop_tile_y": 10, "footprint": [[14, 10]], "world_buildings": 0, "world_units": 1},
+    "drop_blocked": {"success": false, "carrier_payload_count": 1, "carrier_payload_types": ["build"], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 1},
+    "drop_unit_payload": {"success": true, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 2, "dropped_unit_exists": true, "drop_x": 87.691147, "drop_y": 80.270683},
+    "drop_build_payload": {"success": true, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": false, "drop_x": 80.000000, "drop_y": 80.000000, "drop_tile_x": 10, "drop_tile_y": 10, "footprint": [[10, 10]], "world_buildings": 0, "world_units": 1},
+    "power_pickup_drop": {"success": true, "carrier_payload_count": 0, "carrier_payload_types": [], "origin_building_exists": false, "target_unit_exists": false, "drop_x": 80.000000, "drop_y": 80.000000, "drop_tile_x": 10, "drop_tile_y": 10, "node_links_after_pickup": [], "node_links_after_drop": [], "world_buildings": 0, "world_units": 1},
+    "race_two_build": {"success": true, "carrier_payload_count": 1, "carrier_payload_types": ["build"], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 2, "second_success": false, "second_payload_count": 0},
+    "drop_dead_player": {"success": false, "carrier_payload_count": 1, "carrier_payload_types": ["build"], "origin_building_exists": false, "target_unit_exists": false, "world_buildings": 0, "world_units": 1}
+  }
+}

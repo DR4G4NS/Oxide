@@ -1,0 +1,18 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "ParFloorStatus158",
+  "tick": 0,
+  "a_muddy_duration": 29.000000,
+  "a_has_muddy": true,
+  "b_muddy_duration": 0.000000,
+  "b_has_muddy": false,
+  "c_after_one": 29.000000,
+  "c_after_two": 29.000000,
+  "d_wet_duration": 89.000000,
+  "d_has_burning": false,
+  "e_muddy_duration": 24.000000,
+  "f_muddy_duration": 29.000000,
+  "g_melt_duration": 0.000000,
+  "g_has_melt": false,
+  "h_muddy_duration": 29.500000
+}

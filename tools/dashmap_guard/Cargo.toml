@@ -1,0 +1,27 @@
+[package]
+name = "dashmap_guard"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic static guard against DashMap self-deadlocks/reentrancy (DM001-DM005)"
+publish = false
+
+# This crate is intentionally a standalone tool: it never appears in the
+# Oxide crate dependency graph (the server only depends on dashmap).
+# It is built with `cargo run --manifest-path tools/dashmap_guard/Cargo.toml`.
+
+[[bin]]
+name = "dashmap_guard"
+path = "src/main.rs"
+
+[dependencies]
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3

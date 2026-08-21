@@ -1,0 +1,49 @@
+# Rust build artifacts
+/target
+
+# Resolver cache (official JAR is always revalidated; never commit it)
+/.cache/mindustry/
+
+# Agent/session files
+/.agents/
+/.codex/
+/codex resume.txt
+
+# Runtime save artifacts (session-specific).
+/cavesurvival.json
+/cavesurvival.msav
+/frontier.json
+/world-delta.json
+/*.json.bak
+
+# Official vanilla campaign maps at repo root (local extras).
+# The redistributed copies live under third_party/mindustry-maps/ (GPLv3).
+/frontier.msav
+/frozenForest.msav
+/groundZero.msav
+
+# Java class output from tools
+tools/*.class
+tools/**/*.class
+.worktrees/
+
+admin-data.json
+
+# Runtime per-map saves (session-specific)
+/world-*.json
+
+# dashmap_guard build artifacts
+/tools/dashmap_guard/target/
+
+# Python bytecode (architecture guard)
+**/__pycache__/
+*.py[cod]
+
+# Local canonical migration spec (user-provided reference; NOT part of the
+# migration diff). Kept local so the migration gate's clean-tree check is
+# unaffected by this environment-only document.
+/Mindustry_158_1_SOLID_Modular_Migration_Final_Goal.md
+/Mindustry_159_7_Final_Certification_Closure_Goal.md
+
+# Downloaded official server jars for local bench (large binaries)
+/tools/bench/*.jar

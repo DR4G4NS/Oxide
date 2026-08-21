@@ -1,0 +1,18 @@
+{
+  "version": 6,
+  "map_name": "maze",
+  "tiles": [],
+  "core_items": [
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000,
+    10000, 10000, 10000, 10000, 10000
+  ],
+  "wave": 1,
+  "wave_time": 10000.0,
+  "core_health": 6000.0,
+  "game_over": false,
+  "enemies": [],
+  "base_building_health": [],
+  "players": []
+}

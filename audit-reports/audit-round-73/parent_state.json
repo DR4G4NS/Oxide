@@ -1,0 +1,103 @@
+{
+ "gates": {
+  "cargo test --all-targets": "OK: 378 passed (288 lib + 11 hot-host + 3 property + 28 server + 48 snapshot), 2 ignored",
+  "clippy/fmt/diff": "OK limpios",
+  "manifest regen": "OK, 154 packets, SHA-256 JAR match, diff limpio",
+  "VerifyProtocol158 completo": "OK (35 units, 49 codecs, payloads, comandos, wave)",
+  "smoke_join_158": "OK reconnect/worldBytes/connectConfirm/postJoin",
+  "smoke_multiplayer_158": "OK simultaneous/crossSnapshots/despawn"
+ },
+ "findings": [
+  [
+   "F1",
+   "HIGH",
+   "puddles.rs docs falsos (no writeSync) vs JAR Puddle writeSync/serialize/Groups.sync; port no sincroniza ni persiste puddles; SOL-AUDIT corrigió la justificación pero el código no"
+  ],
+  [
+   "F2",
+   "HIGH",
+   "TeamRule: 10/15 campos parsed-but-dead; team-level infiniteResources no aplicado en build/break (ConstructBlock bytecode sí lo comprueba); P0-5 \"TeamRule completo\" exagerado"
+  ],
+  [
+   "F3",
+   "MED",
+   "ARCHITECTURE.md obsoleto: StackConveyor \"no equivalente\" (cerrado 72x) y Puddle \"cliente predice\" (falso)"
+  ],
+  [
+   "F4",
+   "MED",
+   "PROTOCOL-RULES.md obsoleto: SetMode \"no reescribe atómicamente\" (cerrado 72a) y párrafo Puddle con justificación falsa"
+  ],
+  [
+   "F5",
+   "LOW",
+   "STATUS.md sin rondas 70.1-72am; entrada superior contradice SOL-AUDIT (StackConveyor/Puddle \"abierta\")"
+  ],
+  [
+   "F6",
+   "LOW",
+   "SOL-AUDIT dice 53 clases statement; conté 54 en LStatements.java local"
+  ],
+  [
+   "F7",
+   "LOW",
+   ".gitignore lista /frontier.msav pero está trackeado como fixture"
+  ],
+  [
+   "F8",
+   "INFO",
+   "SOL-AUDIT §4.1 vs §11: SetMode contradicción interna histórica"
+  ]
+ ],
+ "verified_positive": [
+  "Bytecode: blockSyncTime=6.0s/healthSync=0.5/planPreview=0.5 (NetServer)",
+  "Bytecode: preset Sandbox = infiniteResources+allowEditRules+waves+waveTimer=false",
+  "Bytecode: Drill.warmupSpeed=0.015f + approachDelta; Rust 0.015*delta",
+  "Bytecode: ConstructBlock.construct infiniteResources (team+global)",
+  "71 constantes _PACKET_ID Rust vs registry JAR: consistentes",
+  "unit_control_allowed/request_block_snapshot_target con team actor OK",
+  "allowAction en ~10 rutas OK; strict mode OK; persistencia worker+fsync OK",
+  "BLOCK_SNAPSHOT_INTERVAL=6s; snapshots 50ms; UDP prefer+fallback TCP OK",
+  "bounded queues 2048 + slow-consumer; regla 9 con id/peer/fase/longitud",
+  "insert(0) backpressure del usuario conservado con 2 tests",
+  "main.rs consume lib; CI con gates; SetMode transaccional; comandos consola"
+ ],
+ "children": {
+  "audit-authority": "sub-c23648e8",
+  "audit-economy": "sub-cfebcb23",
+  "audit-saves": "sub-ff9813fd",
+  "audit-logic-units": "sub-6b1d6aba"
+ },
+ "child_economy": {
+  "ALTO-1": "Puddles: writeSync/readSync/serialize/afterRead/Groups.sync en JAR; port no sincroniza ni persiste; puddles.rs:9-15 y simulation.rs:423-424 con docs falsos (contradicen SOL-AUDIT §11:1230-1244 que ya corrigió la justificación)",
+  "ALTO-2": "Conduits: JAR moveLiquidForward a 1 Hz discreto (timer(timerFlow,1)); Rust cada tick con delta → igualación ~60x, vaciado 5-12 ticks vs ~5 s oficial. No documentado",
+  "BAJO-3": "gate fuga exige base==0 vs tile no-sólido sin líquidos (economy.rs:867-869)",
+  "BAJO-4": "spread puddles sin pasabilidad ni amount-=deposited*targets (puddles.rs:102-118)",
+  "BAJO-5": "PowerDiode sobre tiles adyacentes, no totales PowerGraph (economy.rs:3156-3210)",
+  "BAJO-6": "reactor batch sin cap min(delta,4) del JAR (reactor.rs, deliberado no citado en SOL-AUDIT)",
+  "BAJO-7": "docs obsoletos: SOL-AUDIT.md:619 \"no existe PuddleState\"; ARCHITECTURE.md:185-189 diode/reacciones/StackConveyor",
+  "OK": "StackConveyor 279 completa+QA fixes; Drill warmup+writeSync OK; NuclearReactor OK; fugas OK; fuentes OK; BlockSnapshots 6s/800B/cores OK; Conveyor inversión OK; construcción cost/refund/overlap/last_seen/assist/clamp OK; buildCostMultiplier/deconstructRefundMultiplier/placeRangeCheck ausentes (documentado)"
+ },
+ "child_saves": {
+  "H1 MEDIA": "Writer v4-v9 usa chunks de edificio con prefijo i32; oficial v4-v9 exige u16 (readLegacyShortChunk). Verificado empírico: MSAV v7 con muro → desktop.jar rechaza (\"Expected length: 65535\"). v10/v11 cargan OK. Test round-trip no lo detecta (sin buildings). Claim 72ae \"modern i32-prefixed v4-v11\" incorrecto (solo v10+). save_io read despacha 4..=10 como u16 pero oficial v10 es i32 — inconsistente.",
+  "H2 MEDIA": "Rechazo v12/v13 solo en SaveIO::read_meta/read_map; path real de hosting (extract_msav_regions) acepta 1..=13 y hostea v13 (verificado). host_map traga error con `if let Ok(meta)`. Objetivo del commit 72m no cumplido en el path de hosting.",
+  "H3 BAJA": "save_io.rs:645 comentario \"official v13 container format\" no corregido; contradice MAX_BASELINE=11",
+  "H4 BAJA": "round-trip v4-v11 solo 4 tiles sin entities (Rust→Rust self, no JAR)",
+  "H5 BAJA": "content region escribe 4/10 tipos mappable (JAR: +status/weather/sector/planet/unitCommand/unitStance); oficial tolera subconjuntos",
+  "H6 BAJA": "Building entities [b 6][i pos]: Building.serialize()=false en JAR; reader oficial crea Building descolgado block=null",
+  "H7 BAJA": "chat payload inválido descartado sin diagnóstico (session.rs:920 if let Ok)",
+  "OK": "versionArray Save1..Save11 + MAX_BASELINE=11; v1-v3 rechazados en host con diagnóstico; 69 nombres = dump JAR línea a línea; JSON v13 privado documentado; TypeIO tags 0-23 vs JAR; TextInputResult MUTF u16; write_unit_entity_body rev 9 campo a campo; MSAV v11 del port carga íntegro en SaveIO.load del JAR; persistencia fsync/rename/worker OK; property tests presentes"
+ },
+ "child_logic_units": {
+  "F1 ALTO": "fetch/format/getblock/setblock usan gramática del árbol POSTERIOR, no del JAR 158.1 (LogicIO del JAR: fetch <type> <result> <team> <index>; Rust descarta team y misbinda index; format sobre textBuffer runtime vs template en compilación; getblock <layer> <result> <x> <y> vs Rust <x> <y> <building> <floor>; setblock <layer> <block> <x> <y> <team> <rotation> vs Rust <x> <y> <block> <rotation> <team>). Programas oficiales miscompilan silenciosamente; strict no lo ve.",
+  "F2 ALTO": "Tabla inmunidades desvía del JAR: navanax(34) burning NO existe en JAR; naval 25-29 burning+melting NO oficial (solo wet; vía opposites pueden arder); faltan precept(40)/vanquish(41)/conquer(42) burning+melting que SÍ están en JAR.",
+  "F3 ALTO": "3 sitios de status por proyectil en combat.rs (2131/2489/3257, players 2302) NO migrados a colección (72q): statuses apilados → status aplicado se pierde al tick siguiente; burning DoT nunca aplica (simulation.rs:893-897).",
+  "F4 MEDIO": "SOL-007 \"ownership restringe memoria/edificios\" FALSO: read/write_memory y write_message sin gate de team (oficial: same-team o privileged); control enabled hardcodea team==1.",
+  "F5 MEDIO": "apply_status sobrescribe duración; oficial Math.max(existing, new).",
+  "F6 MEDIO": "setblock sobrescribe tile siempre; oficial setNet solo si block/team cambian + clamp rotación.",
+  "F7 BAJO": "SOL-AUDIT SOL-007/009 obsoleto (lista format/fetch/getblock/setblock como ausentes; \"unit_name_from_id 0..37\"; \"parse_spawn_group usa ?\"; \"degradación silenciosa\").",
+  "F8 BAJO": "17 ids sin enemy_spec; spawn de lógica/console no rechaza en strict (solo spawn groups de mapas).",
+  "F9 BAJO": "write_unit_payload sigue emitiendo status legacy único en vez de colección.",
+  "OK": "69 IDs 0..=68 == dump JAR; límites container (102400/16000/6000/32) == ConstantValue de LogicBlock.class + compress() byte-exacto + zlib adversarial; privilegio setblock=442 == LParser/LStatement.privileged; write_unit_entity_body rev 9 byte-exacto + unit_save_revision legacy 5/7/8/3/2; StatusContainer (colección/expiración/migración/composición) con wire MSAV completo; multi-mount timers + 2 tests; content region 69 nombres; strict rechaza spawn groups y processors degradados."
+ }
+}

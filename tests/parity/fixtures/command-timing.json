@@ -1,0 +1,34 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "command-timing",
+  "tick": 4,
+  "unit_team": 1,
+  "building": {
+    "t0": {"has_command": false, "attack_target": false, "target_pos": false, "logic_controllable": true},
+    "t1": {"has_command": false, "attack_target": true, "target_pos": false, "logic_controllable": true},
+    "t2": {"has_command": true, "attack_target": true, "target_pos": true, "logic_controllable": false},
+    "t3": {"has_command": true, "attack_target": true, "target_pos": true, "logic_controllable": false, "ucontrol_became_logic": false},
+    "t4": {"has_command": true, "attack_target": true, "target_pos": true, "logic_controllable": false}
+  },
+  "unit": {
+    "t0": {"has_command": false, "attack_target": false, "target_pos": false, "logic_controllable": true},
+    "t1": {"has_command": false, "attack_target": true, "target_pos": false, "logic_controllable": true},
+    "t2": {"has_command": true, "attack_target": true, "target_pos": true, "logic_controllable": false},
+    "t3": {"has_command": true, "attack_target": true, "target_pos": true, "logic_controllable": false, "ucontrol_became_logic": false},
+    "t4": {"has_command": true, "attack_target": true, "target_pos": true, "logic_controllable": false}
+  },
+  "vec2": {
+    "t0": {"has_command": false, "attack_target": false, "target_pos": false, "logic_controllable": true},
+    "t1": {"has_command": true, "attack_target": false, "target_pos": true, "logic_controllable": false},
+    "t2": {"has_command": true, "attack_target": false, "target_pos": true, "logic_controllable": false},
+    "t3": {"has_command": true, "attack_target": false, "target_pos": true, "logic_controllable": false, "ucontrol_became_logic": false},
+    "t4": {"has_command": true, "attack_target": false, "target_pos": true, "logic_controllable": false}
+  },
+  "invalid": {
+    "t0": {"has_command": false, "attack_target": false, "target_pos": false, "logic_controllable": true},
+    "t1": {"has_command": false, "attack_target": true, "target_pos": false, "logic_controllable": true},
+    "t2": {"has_command": false, "attack_target": false, "target_pos": false, "logic_controllable": true},
+    "t3": {"has_command": false, "attack_target": false, "target_pos": false, "logic_controllable": true, "ucontrol_became_logic": true},
+    "t4": {"has_command": false, "attack_target": false, "target_pos": false, "logic_controllable": true}
+  }
+}

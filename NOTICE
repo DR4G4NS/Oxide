@@ -1,0 +1,24 @@
+Oxide
+
+This repository contains an independently authored Rust server
+implementation.  Contributions intended to be part of that implementation
+are offered under the Apache License, Version 2.0, subject to the exclusions
+and provenance notes in THIRD_PARTY.md.
+
+Mindustry attribution
+---------------------
+
+Mindustry is authored by Anuken and is released under the GNU General Public
+License, version 3 (GPLv3).  Mindustry source trees and release binaries are
+used by this repository only as compatibility references and behavioral
+oracles.  They are not relicensed by this project, and the official JAR and
+Java source are not part of this repository.
+
+The repository includes a small number of compatibility fixtures derived from
+or exported with Mindustry, and verbatim official campaign maps under
+third_party/mindustry-maps/.  Those files remain separately identified in
+THIRD_PARTY.md and are licensed GPLv3 by Anuken; the Apache-2.0 project
+license does not purport to cover them.
+
+There is no affiliation with, sponsorship by, or endorsement from Anuken or
+the Mindustry project implied by this repository.

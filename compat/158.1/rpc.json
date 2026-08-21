@@ -1,0 +1,1999 @@
+{
+  "build": "158.1",
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "desktop.jar",
+    "sha256": "95b525b548512aa713c4d040bbdc4bfe582e2827dfce037f597e0bb5f1a5c06a",
+    "size_bytes": 80935962
+  },
+  "rpc": [
+    {
+      "direction": "client_to_server",
+      "generated_class": "AdminRequestCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 4,
+      "parameter_types": [
+        "mindustry.gen.Player:other",
+        "mindustry.net.Packets$AdminAction:action",
+        "java.lang.Object:params"
+      ],
+      "priority": 1,
+      "source_remote": "adminRequest"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "AnnounceCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 5,
+      "parameter_types": [
+        "java.lang.String:message"
+      ],
+      "priority": 1,
+      "source_remote": "announce"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "AssemblerDroneSpawnedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 6,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "int:id"
+      ],
+      "priority": 1,
+      "source_remote": "assemblerDroneSpawned"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "AssemblerUnitSpawnedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 7,
+      "parameter_types": [
+        "mindustry.world.Tile:tile"
+      ],
+      "priority": 1,
+      "source_remote": "assemblerUnitSpawned"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "AutoDoorToggleCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 8,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "boolean:open"
+      ],
+      "priority": 1,
+      "source_remote": "autoDoorToggle"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "BeginBreakCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 9,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "mindustry.game.Team:team",
+        "int:x",
+        "int:y"
+      ],
+      "priority": 1,
+      "source_remote": "beginBreak"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "BeginPlaceCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 10,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "mindustry.world.Block:result",
+        "mindustry.game.Team:team",
+        "int:x",
+        "int:y",
+        "int:rotation",
+        "java.lang.Object:placeConfig"
+      ],
+      "priority": 1,
+      "source_remote": "beginPlace"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "BlockSnapshotCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 11,
+      "parameter_types": [
+        "short:amount",
+        "byte[]:data"
+      ],
+      "priority": 0,
+      "source_remote": "blockSnapshot"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "BuildDestroyedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 12,
+      "parameter_types": [
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "buildDestroyed"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "BuildHealthUpdateCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 13,
+      "parameter_types": [
+        "arc.struct.IntSeq:buildings"
+      ],
+      "priority": 1,
+      "source_remote": "buildHealthUpdate"
+    },
+    {
+      "direction": "both",
+      "generated_class": "BuildingControlSelectCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 14,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "buildingControlSelect"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClearItemsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 15,
+      "parameter_types": [
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "clearItems"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClearLiquidsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 16,
+      "parameter_types": [
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "clearLiquids"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClearObjectivesCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 17,
+      "parameter_types": [],
+      "priority": 1,
+      "source_remote": "clearObjectives"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClientBinaryPacketReliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 18,
+      "parameter_types": [
+        "java.lang.String:type",
+        "byte[]:contents"
+      ],
+      "priority": 1,
+      "source_remote": "clientBinaryPacketReliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClientBinaryPacketUnreliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 19,
+      "parameter_types": [
+        "java.lang.String:type",
+        "byte[]:contents"
+      ],
+      "priority": 1,
+      "source_remote": "clientBinaryPacketUnreliable"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ClientLogicDataReliableCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 20,
+      "parameter_types": [
+        "java.lang.String:channel",
+        "java.lang.Object:value"
+      ],
+      "priority": 1,
+      "source_remote": "clientLogicDataReliable"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ClientLogicDataUnreliableCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 21,
+      "parameter_types": [
+        "java.lang.String:channel",
+        "java.lang.Object:value"
+      ],
+      "priority": 1,
+      "source_remote": "clientLogicDataUnreliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClientPacketReliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 22,
+      "parameter_types": [
+        "java.lang.String:type",
+        "java.lang.String:contents"
+      ],
+      "priority": 1,
+      "source_remote": "clientPacketReliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClientPacketUnreliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 23,
+      "parameter_types": [
+        "java.lang.String:type",
+        "java.lang.String:contents"
+      ],
+      "priority": 1,
+      "source_remote": "clientPacketUnreliable"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ClientPlanSnapshotCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 24,
+      "parameter_types": [
+        "int:groupId",
+        "mindustry.io.TypeIO$ClientBuildPlans:plans"
+      ],
+      "priority": 0,
+      "source_remote": "clientPlanSnapshot"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ClientPlanSnapshotReceivedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 25,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int:groupId",
+        "mindustry.io.TypeIO$ClientBuildPlans:plans"
+      ],
+      "priority": 0,
+      "source_remote": "clientPlanSnapshotReceived"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ClientSnapshotCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 26,
+      "parameter_types": [
+        "int:snapshotID",
+        "int:unitID",
+        "boolean:dead",
+        "float:x",
+        "float:y",
+        "float:pointerX",
+        "float:pointerY",
+        "float:rotation",
+        "float:baseRotation",
+        "float:xVelocity",
+        "float:yVelocity",
+        "mindustry.world.Tile:mining",
+        "boolean:boosting",
+        "boolean:shooting",
+        "boolean:chatting",
+        "boolean:building",
+        "mindustry.world.Block:selectedBlock",
+        "int:selectedRotation",
+        "arc.struct.Queue:plans",
+        "float:viewX",
+        "float:viewY",
+        "float:viewWidth",
+        "float:viewHeight"
+      ],
+      "priority": 2,
+      "source_remote": "clientSnapshot"
+    },
+    {
+      "direction": "both",
+      "generated_class": "CommandBuildingCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 27,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int[]:buildings",
+        "arc.math.geom.Vec2:target"
+      ],
+      "priority": 1,
+      "source_remote": "commandBuilding"
+    },
+    {
+      "direction": "both",
+      "generated_class": "CommandUnitsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 28,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int[]:unitIds",
+        "mindustry.gen.Building:buildTarget",
+        "mindustry.gen.Unit:unitTarget",
+        "arc.math.geom.Vec2:posTarget",
+        "boolean:queueCommand",
+        "boolean:finalBatch"
+      ],
+      "priority": 1,
+      "source_remote": "commandUnits"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "CompleteObjectiveCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 29,
+      "parameter_types": [
+        "int:index"
+      ],
+      "priority": 1,
+      "source_remote": "completeObjective"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ConnectCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 30,
+      "parameter_types": [
+        "java.lang.String:ip",
+        "int:port"
+      ],
+      "priority": 1,
+      "source_remote": "connect"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ConnectConfirmCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 31,
+      "parameter_types": [],
+      "priority": 2,
+      "source_remote": "connectConfirm"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ConstructFinishCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 32,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "mindustry.world.Block:block",
+        "mindustry.gen.Unit:builder",
+        "byte:rotation",
+        "mindustry.game.Team:team",
+        "java.lang.Object:config"
+      ],
+      "priority": 1,
+      "source_remote": "constructFinish"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "CopyToClipboardCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 33,
+      "parameter_types": [
+        "java.lang.String:text"
+      ],
+      "priority": 1,
+      "source_remote": "copyToClipboard"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "CreateBulletCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 34,
+      "parameter_types": [
+        "mindustry.entities.bullet.BulletType:type",
+        "mindustry.game.Team:team",
+        "float:x",
+        "float:y",
+        "float:angle",
+        "float:damage",
+        "float:velocityScl",
+        "float:lifetimeScl"
+      ],
+      "priority": 1,
+      "source_remote": "createBullet"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "CreateMarkerCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 35,
+      "parameter_types": [
+        "int:id",
+        "mindustry.game.MapObjectives$ObjectiveMarker:marker"
+      ],
+      "priority": 1,
+      "source_remote": "createMarker"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "CreateWeatherCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 36,
+      "parameter_types": [
+        "mindustry.type.Weather:weather",
+        "float:intensity",
+        "float:duration",
+        "float:windX",
+        "float:windY"
+      ],
+      "priority": 1,
+      "source_remote": "createWeather"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "DebugStatusClientCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 37,
+      "parameter_types": [
+        "int:value",
+        "int:lastClientSnapshot",
+        "int:snapshotsSent"
+      ],
+      "priority": 2,
+      "source_remote": "debugStatusClient"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "DebugStatusClientUnreliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 38,
+      "parameter_types": [
+        "int:value",
+        "int:lastClientSnapshot",
+        "int:snapshotsSent"
+      ],
+      "priority": 2,
+      "source_remote": "debugStatusClientUnreliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "DeconstructFinishCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 39,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "mindustry.world.Block:block",
+        "mindustry.gen.Unit:builder"
+      ],
+      "priority": 1,
+      "source_remote": "deconstructFinish"
+    },
+    {
+      "direction": "both",
+      "generated_class": "DeletePlansCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 40,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int[]:positions"
+      ],
+      "priority": 1,
+      "source_remote": "deletePlans"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "DestroyPayloadCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 41,
+      "parameter_types": [
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "destroyPayload"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "DropItemCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 42,
+      "parameter_types": [
+        "float:angle"
+      ],
+      "priority": 1,
+      "source_remote": "dropItem"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "EffectCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 43,
+      "parameter_types": [
+        "mindustry.entities.Effect:effect",
+        "float:x",
+        "float:y",
+        "float:rotation",
+        "arc.graphics.Color:color"
+      ],
+      "priority": 1,
+      "source_remote": "effect"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "EffectReliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 45,
+      "parameter_types": [
+        "mindustry.entities.Effect:effect",
+        "float:x",
+        "float:y",
+        "float:rotation",
+        "arc.graphics.Color:color"
+      ],
+      "priority": 1,
+      "source_remote": "effectReliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "EntitySnapshotCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 46,
+      "parameter_types": [
+        "short:amount",
+        "byte[]:data"
+      ],
+      "priority": 0,
+      "source_remote": "entitySnapshot"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "FollowUpMenuCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 47,
+      "parameter_types": [
+        "int:menuId",
+        "java.lang.String:title",
+        "java.lang.String:message",
+        "java.lang.String[][]:options"
+      ],
+      "priority": 1,
+      "source_remote": "followUpMenu"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "GameOverCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 48,
+      "parameter_types": [
+        "mindustry.game.Team:winner"
+      ],
+      "priority": 1,
+      "source_remote": "gameOver"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "HiddenSnapshotCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 49,
+      "parameter_types": [
+        "arc.struct.IntSeq:ids"
+      ],
+      "priority": 0,
+      "source_remote": "hiddenSnapshot"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "HideFollowUpMenuCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 50,
+      "parameter_types": [
+        "int:menuId"
+      ],
+      "priority": 1,
+      "source_remote": "hideFollowUpMenu"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "HideHudTextCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 51,
+      "parameter_types": [],
+      "priority": 1,
+      "source_remote": "hideHudText"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "InfoMessageCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 52,
+      "parameter_types": [
+        "java.lang.String:message"
+      ],
+      "priority": 1,
+      "source_remote": "infoMessage"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "InfoPopupCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 53,
+      "parameter_types": [
+        "java.lang.String:message",
+        "float:duration",
+        "int:align",
+        "int:top",
+        "int:left",
+        "int:bottom",
+        "int:right"
+      ],
+      "priority": 1,
+      "source_remote": "infoPopup"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "InfoPopupReliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 55,
+      "parameter_types": [
+        "java.lang.String:message",
+        "float:duration",
+        "int:align",
+        "int:top",
+        "int:left",
+        "int:bottom",
+        "int:right"
+      ],
+      "priority": 1,
+      "source_remote": "infoPopupReliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "InfoToastCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 57,
+      "parameter_types": [
+        "java.lang.String:message",
+        "float:duration"
+      ],
+      "priority": 1,
+      "source_remote": "infoToast"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "KickCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 58,
+      "parameter_types": [
+        "java.lang.String:reason"
+      ],
+      "priority": 2,
+      "source_remote": "kick"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "LabelCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 60,
+      "parameter_types": [
+        "java.lang.String:message",
+        "float:duration",
+        "float:worldx",
+        "float:worldy"
+      ],
+      "priority": 1,
+      "source_remote": "label"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "LabelReliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 62,
+      "parameter_types": [
+        "java.lang.String:message",
+        "float:duration",
+        "float:worldx",
+        "float:worldy"
+      ],
+      "priority": 1,
+      "source_remote": "labelReliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "LandingPadLandedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 64,
+      "parameter_types": [
+        "mindustry.world.Tile:tile"
+      ],
+      "priority": 1,
+      "source_remote": "landingPadLanded"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "LogicExplosionCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 65,
+      "parameter_types": [
+        "mindustry.game.Team:team",
+        "float:x",
+        "float:y",
+        "float:radius",
+        "float:damage",
+        "boolean:air",
+        "boolean:ground",
+        "boolean:pierce",
+        "boolean:effect"
+      ],
+      "priority": 1,
+      "source_remote": "logicExplosion"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "MenuCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 66,
+      "parameter_types": [
+        "int:menuId",
+        "java.lang.String:title",
+        "java.lang.String:message",
+        "java.lang.String[][]:options"
+      ],
+      "priority": 1,
+      "source_remote": "menu"
+    },
+    {
+      "direction": "both",
+      "generated_class": "MenuChooseCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 67,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int:menuId",
+        "int:option"
+      ],
+      "priority": 1,
+      "source_remote": "menuChoose"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "OpenURICallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 68,
+      "parameter_types": [
+        "java.lang.String:uri"
+      ],
+      "priority": 1,
+      "source_remote": "openURI"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "PayloadDroppedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 69,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "float:x",
+        "float:y"
+      ],
+      "priority": 1,
+      "source_remote": "payloadDropped"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "PickedBuildPayloadCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 70,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "mindustry.gen.Building:build",
+        "boolean:onGround"
+      ],
+      "priority": 1,
+      "source_remote": "pickedBuildPayload"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "PickedUnitPayloadCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 71,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "mindustry.gen.Unit:target"
+      ],
+      "priority": 1,
+      "source_remote": "pickedUnitPayload"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "PingCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 72,
+      "parameter_types": [
+        "long:time"
+      ],
+      "priority": 2,
+      "source_remote": "ping"
+    },
+    {
+      "direction": "both",
+      "generated_class": "PingLocationCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 73,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "float:x",
+        "float:y",
+        "java.lang.String:text"
+      ],
+      "priority": 1,
+      "source_remote": "pingLocation"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "PingResponseCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 74,
+      "parameter_types": [
+        "long:time"
+      ],
+      "priority": 1,
+      "source_remote": "pingResponse"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "PlayerDisconnectCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 75,
+      "parameter_types": [
+        "int:playerid"
+      ],
+      "priority": 1,
+      "source_remote": "playerDisconnect"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "PlayerSpawnCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 76,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "mindustry.gen.Player:player"
+      ],
+      "priority": 1,
+      "source_remote": "playerSpawn"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "RemoveMarkerCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 77,
+      "parameter_types": [
+        "int:id"
+      ],
+      "priority": 1,
+      "source_remote": "removeMarker"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "RemoveQueueBlockCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 78,
+      "parameter_types": [
+        "int:x",
+        "int:y",
+        "boolean:breaking"
+      ],
+      "priority": 1,
+      "source_remote": "removeQueueBlock"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "RemoveTileCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 79,
+      "parameter_types": [
+        "mindustry.world.Tile:tile"
+      ],
+      "priority": 1,
+      "source_remote": "removeTile"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "RemoveWorldLabelCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 80,
+      "parameter_types": [
+        "int:id"
+      ],
+      "priority": 1,
+      "source_remote": "removeWorldLabel"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "RequestBlockSnapshotCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 81,
+      "parameter_types": [
+        "int:pos"
+      ],
+      "priority": 0,
+      "source_remote": "requestBlockSnapshot"
+    },
+    {
+      "direction": "both",
+      "generated_class": "RequestBuildPayloadCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 82,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "requestBuildPayload"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "RequestDebugStatusCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 83,
+      "parameter_types": [],
+      "priority": 1,
+      "source_remote": "requestDebugStatus"
+    },
+    {
+      "direction": "both",
+      "generated_class": "RequestDropPayloadCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 84,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "float:x",
+        "float:y"
+      ],
+      "priority": 1,
+      "source_remote": "requestDropPayload"
+    },
+    {
+      "direction": "both",
+      "generated_class": "RequestItemCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 85,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Building:build",
+        "mindustry.type.Item:item",
+        "int:amount"
+      ],
+      "priority": 1,
+      "source_remote": "requestItem"
+    },
+    {
+      "direction": "both",
+      "generated_class": "RequestUnitPayloadCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 86,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Unit:target"
+      ],
+      "priority": 1,
+      "source_remote": "requestUnitPayload"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "ResearchedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 87,
+      "parameter_types": [
+        "mindustry.ctype.Content:content"
+      ],
+      "priority": 1,
+      "source_remote": "researched"
+    },
+    {
+      "direction": "both",
+      "generated_class": "RotateBlockCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 88,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Building:build",
+        "boolean:direction"
+      ],
+      "priority": 1,
+      "source_remote": "rotateBlock"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SectorCaptureCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 89,
+      "parameter_types": [],
+      "priority": 1,
+      "source_remote": "sectorCapture"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "SendChatMessageCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 90,
+      "parameter_types": [
+        "java.lang.String:message"
+      ],
+      "priority": 1,
+      "source_remote": "sendChatMessage"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SendMessageCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 91,
+      "parameter_types": [
+        "java.lang.String:message"
+      ],
+      "priority": 1,
+      "source_remote": "sendMessage"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ServerBinaryPacketReliableCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 93,
+      "parameter_types": [
+        "java.lang.String:type",
+        "byte[]:contents"
+      ],
+      "priority": 1,
+      "source_remote": "serverBinaryPacketReliable"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ServerBinaryPacketUnreliableCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 94,
+      "parameter_types": [
+        "java.lang.String:type",
+        "byte[]:contents"
+      ],
+      "priority": 1,
+      "source_remote": "serverBinaryPacketUnreliable"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ServerPacketReliableCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 95,
+      "parameter_types": [
+        "java.lang.String:type",
+        "java.lang.String:contents"
+      ],
+      "priority": 1,
+      "source_remote": "serverPacketReliable"
+    },
+    {
+      "direction": "client_to_server",
+      "generated_class": "ServerPacketUnreliableCallPacket",
+      "has_handle_client": false,
+      "has_handle_server": true,
+      "packet_id": 96,
+      "parameter_types": [
+        "java.lang.String:type",
+        "java.lang.String:contents"
+      ],
+      "priority": 1,
+      "source_remote": "serverPacketUnreliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetCameraPositionCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 97,
+      "parameter_types": [
+        "float:x",
+        "float:y"
+      ],
+      "priority": 1,
+      "source_remote": "setCameraPosition"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetFlagCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 98,
+      "parameter_types": [
+        "java.lang.String:flag",
+        "boolean:add"
+      ],
+      "priority": 1,
+      "source_remote": "setFlag"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetFloorCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 99,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "mindustry.world.Block:floor",
+        "mindustry.world.Block:overlay"
+      ],
+      "priority": 1,
+      "source_remote": "setFloor"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetHudTextCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 100,
+      "parameter_types": [
+        "java.lang.String:message"
+      ],
+      "priority": 1,
+      "source_remote": "setHudText"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetHudTextReliableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 101,
+      "parameter_types": [
+        "java.lang.String:message"
+      ],
+      "priority": 1,
+      "source_remote": "setHudTextReliable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetItemCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 102,
+      "parameter_types": [
+        "mindustry.gen.Building:build",
+        "mindustry.type.Item:item",
+        "int:amount"
+      ],
+      "priority": 1,
+      "source_remote": "setItem"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetItemsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 103,
+      "parameter_types": [
+        "mindustry.gen.Building:build",
+        "mindustry.type.ItemStack[]:items"
+      ],
+      "priority": 1,
+      "source_remote": "setItems"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetLiquidCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 104,
+      "parameter_types": [
+        "mindustry.gen.Building:build",
+        "mindustry.type.Liquid:liquid",
+        "float:amount"
+      ],
+      "priority": 1,
+      "source_remote": "setLiquid"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetLiquidsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 105,
+      "parameter_types": [
+        "mindustry.gen.Building:build",
+        "mindustry.type.LiquidStack[]:liquids"
+      ],
+      "priority": 1,
+      "source_remote": "setLiquids"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetMapAreaCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 106,
+      "parameter_types": [
+        "int:x",
+        "int:y",
+        "int:w",
+        "int:h"
+      ],
+      "priority": 1,
+      "source_remote": "setMapArea"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetObjectivesCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 107,
+      "parameter_types": [
+        "mindustry.game.MapObjectives:executor"
+      ],
+      "priority": 1,
+      "source_remote": "setObjectives"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetOverlayCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 108,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "mindustry.world.Block:overlay"
+      ],
+      "priority": 1,
+      "source_remote": "setOverlay"
+    },
+    {
+      "direction": "both",
+      "generated_class": "SetPlayerTeamEditorCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 109,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.game.Team:team"
+      ],
+      "priority": 1,
+      "source_remote": "setPlayerTeamEditor"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetPositionCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 110,
+      "parameter_types": [
+        "float:x",
+        "float:y"
+      ],
+      "priority": 1,
+      "source_remote": "setPosition"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetRuleCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 111,
+      "parameter_types": [
+        "java.lang.String:rule",
+        "java.lang.String:jsonData"
+      ],
+      "priority": 1,
+      "source_remote": "setRule"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetRulesCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 112,
+      "parameter_types": [
+        "mindustry.game.Rules:rules"
+      ],
+      "priority": 1,
+      "source_remote": "setRules"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTeamCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 113,
+      "parameter_types": [
+        "mindustry.gen.Building:build",
+        "mindustry.game.Team:team"
+      ],
+      "priority": 1,
+      "source_remote": "setTeam"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTeamsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 114,
+      "parameter_types": [
+        "int[]:positions",
+        "mindustry.game.Team:team"
+      ],
+      "priority": 1,
+      "source_remote": "setTeams"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTileCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 115,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "mindustry.world.Block:block",
+        "mindustry.game.Team:team",
+        "int:rotation"
+      ],
+      "priority": 1,
+      "source_remote": "setTile"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTileBlocksCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 116,
+      "parameter_types": [
+        "mindustry.world.Block:block",
+        "mindustry.game.Team:team",
+        "int[]:positions"
+      ],
+      "priority": 1,
+      "source_remote": "setTileBlocks"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTileFloorsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 117,
+      "parameter_types": [
+        "mindustry.world.Block:block",
+        "int[]:positions"
+      ],
+      "priority": 1,
+      "source_remote": "setTileFloors"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTileItemsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 118,
+      "parameter_types": [
+        "mindustry.type.Item:item",
+        "int:amount",
+        "int[]:positions"
+      ],
+      "priority": 1,
+      "source_remote": "setTileItems"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTileLiquidsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 119,
+      "parameter_types": [
+        "mindustry.type.Liquid:liquid",
+        "float:amount",
+        "int[]:positions"
+      ],
+      "priority": 1,
+      "source_remote": "setTileLiquids"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SetTileOverlaysCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 120,
+      "parameter_types": [
+        "mindustry.world.Block:block",
+        "int[]:positions"
+      ],
+      "priority": 1,
+      "source_remote": "setTileOverlays"
+    },
+    {
+      "direction": "both",
+      "generated_class": "SetUnitCommandCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 121,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int[]:unitIds",
+        "mindustry.ai.UnitCommand:command"
+      ],
+      "priority": 1,
+      "source_remote": "setUnitCommand"
+    },
+    {
+      "direction": "both",
+      "generated_class": "SetUnitStanceCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 122,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int[]:unitIds",
+        "mindustry.ai.UnitStance:stance",
+        "boolean:enable"
+      ],
+      "priority": 1,
+      "source_remote": "setUnitStance"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SoundCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 123,
+      "parameter_types": [
+        "arc.audio.Sound:sound",
+        "float:volume",
+        "float:pitch",
+        "float:pan"
+      ],
+      "priority": 1,
+      "source_remote": "sound"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SoundAtCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 124,
+      "parameter_types": [
+        "arc.audio.Sound:sound",
+        "float:x",
+        "float:y",
+        "float:volume",
+        "float:pitch"
+      ],
+      "priority": 1,
+      "source_remote": "soundAt"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SpawnEffectCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 125,
+      "parameter_types": [
+        "float:x",
+        "float:y",
+        "float:rotation",
+        "mindustry.type.UnitType:u"
+      ],
+      "priority": 1,
+      "source_remote": "spawnEffect"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "StateSnapshotCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 126,
+      "parameter_types": [
+        "float:waveTime",
+        "int:wave",
+        "int:enemies",
+        "boolean:paused",
+        "boolean:gameOver",
+        "int:timeData",
+        "byte:tps",
+        "long:rand0",
+        "long:rand1",
+        "byte[]:coreData"
+      ],
+      "priority": 0,
+      "source_remote": "stateSnapshot"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "SyncVariableCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 127,
+      "parameter_types": [
+        "mindustry.gen.Building:building",
+        "int:variable",
+        "java.lang.Object:value"
+      ],
+      "priority": 1,
+      "source_remote": "syncVariable"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "TakeItemsCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 128,
+      "parameter_types": [
+        "mindustry.gen.Building:build",
+        "mindustry.type.Item:item",
+        "int:amount",
+        "mindustry.gen.Unit:to"
+      ],
+      "priority": 1,
+      "source_remote": "takeItems"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "TextInputCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 129,
+      "parameter_types": [
+        "int:textInputId",
+        "java.lang.String:title",
+        "java.lang.String:message",
+        "int:textLength",
+        "java.lang.String:def",
+        "boolean:numeric"
+      ],
+      "priority": 1,
+      "source_remote": "textInput"
+    },
+    {
+      "direction": "both",
+      "generated_class": "TextInputResultCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 131,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "int:textInputId",
+        "java.lang.String:text"
+      ],
+      "priority": 1,
+      "source_remote": "textInputResult"
+    },
+    {
+      "direction": "both",
+      "generated_class": "TileConfigCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 132,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Building:build",
+        "java.lang.Object:value"
+      ],
+      "priority": 1,
+      "source_remote": "tileConfig"
+    },
+    {
+      "direction": "both",
+      "generated_class": "TileTapCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 133,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.world.Tile:tile"
+      ],
+      "priority": 1,
+      "source_remote": "tileTap"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "TraceInfoCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 134,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.net.Administration$TraceInfo:info"
+      ],
+      "priority": 1,
+      "source_remote": "traceInfo"
+    },
+    {
+      "direction": "both",
+      "generated_class": "TransferInventoryCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 135,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "transferInventory"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "TransferItemEffectCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 136,
+      "parameter_types": [
+        "mindustry.type.Item:item",
+        "float:x",
+        "float:y",
+        "mindustry.gen.Itemsc:to"
+      ],
+      "priority": 1,
+      "source_remote": "transferItemEffect"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "TransferItemToCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 137,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "mindustry.type.Item:item",
+        "int:amount",
+        "float:x",
+        "float:y",
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "transferItemTo"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "TransferItemToUnitCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 138,
+      "parameter_types": [
+        "mindustry.type.Item:item",
+        "float:x",
+        "float:y",
+        "mindustry.gen.Itemsc:to"
+      ],
+      "priority": 1,
+      "source_remote": "transferItemToUnit"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitBlockSpawnCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 139,
+      "parameter_types": [
+        "mindustry.world.Tile:tile"
+      ],
+      "priority": 1,
+      "source_remote": "unitBlockSpawn"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitBuildingControlSelectCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 140,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "unitBuildingControlSelect"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitCapDeathCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 141,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit"
+      ],
+      "priority": 1,
+      "source_remote": "unitCapDeath"
+    },
+    {
+      "direction": "both",
+      "generated_class": "UnitClearCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 142,
+      "parameter_types": [
+        "mindustry.gen.Player:player"
+      ],
+      "priority": 1,
+      "source_remote": "unitClear"
+    },
+    {
+      "direction": "both",
+      "generated_class": "UnitControlCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": true,
+      "packet_id": 143,
+      "parameter_types": [
+        "mindustry.gen.Player:player",
+        "mindustry.gen.Unit:unit"
+      ],
+      "priority": 1,
+      "source_remote": "unitControl"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitDeathCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 144,
+      "parameter_types": [
+        "int:uid"
+      ],
+      "priority": 1,
+      "source_remote": "unitDeath"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitDespawnCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 145,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit"
+      ],
+      "priority": 1,
+      "source_remote": "unitDespawn"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitDestroyCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 146,
+      "parameter_types": [
+        "int:uid"
+      ],
+      "priority": 1,
+      "source_remote": "unitDestroy"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitEnteredPayloadCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 147,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit",
+        "mindustry.gen.Building:build"
+      ],
+      "priority": 1,
+      "source_remote": "unitEnteredPayload"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitEnvDeathCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 148,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit"
+      ],
+      "priority": 1,
+      "source_remote": "unitEnvDeath"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitSafeDeathCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 149,
+      "parameter_types": [
+        "mindustry.gen.Unit:unit"
+      ],
+      "priority": 1,
+      "source_remote": "unitSafeDeath"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitSpawnCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 150,
+      "parameter_types": [
+        "mindustry.entities.Units$UnitSyncContainer:container"
+      ],
+      "priority": 0,
+      "source_remote": "unitSpawn"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UnitTetherBlockSpawnedCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 151,
+      "parameter_types": [
+        "mindustry.world.Tile:tile",
+        "int:id"
+      ],
+      "priority": 1,
+      "source_remote": "unitTetherBlockSpawned"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UpdateGameOverCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 152,
+      "parameter_types": [
+        "mindustry.game.Team:winner"
+      ],
+      "priority": 1,
+      "source_remote": "updateGameOver"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UpdateMarkerCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 153,
+      "parameter_types": [
+        "int:id",
+        "mindustry.logic.LMarkerControl:control",
+        "double:p1",
+        "double:p2",
+        "double:p3"
+      ],
+      "priority": 1,
+      "source_remote": "updateMarker"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UpdateMarkerTextCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 154,
+      "parameter_types": [
+        "int:id",
+        "mindustry.logic.LMarkerControl:type",
+        "boolean:fetch",
+        "java.lang.String:text"
+      ],
+      "priority": 1,
+      "source_remote": "updateMarkerText"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "UpdateMarkerTextureCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 155,
+      "parameter_types": [
+        "int:id",
+        "java.lang.Object:texture"
+      ],
+      "priority": 1,
+      "source_remote": "updateMarkerTexture"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "WarningToastCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 156,
+      "parameter_types": [
+        "int:unicode",
+        "java.lang.String:text"
+      ],
+      "priority": 1,
+      "source_remote": "warningToast"
+    },
+    {
+      "direction": "server_to_client",
+      "generated_class": "WorldDataBeginCallPacket",
+      "has_handle_client": true,
+      "has_handle_server": false,
+      "packet_id": 157,
+      "parameter_types": [],
+      "priority": 1,
+      "source_remote": "worldDataBegin"
+    }
+  ],
+  "schema_version": 2,
+  "source_commit": "05b2ecd4eb578ac38cace8118dbecc1bd548ff4a",
+  "source_ref": "v158.1"
+}

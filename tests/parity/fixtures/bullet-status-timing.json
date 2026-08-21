@@ -1,0 +1,30 @@
+{
+  "probe_version": "158.1",
+  "probe_name": "bullet-status-timing",
+  "tick": 0,
+  "speed_status": {
+    "n_minus_1": {"health": 150.000000, "status_ids": [], "status_times": [], "speed": 1.000000, "x": 80.250000, "y": 80.000000, "shots_fired": 0, "reload": 0.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true},
+    "end_n": {"health": 150.000000, "status_ids": [9], "status_times": [180.000000], "speed": 1.000000, "x": 80.312500, "y": 80.000000, "shots_fired": 0, "reload": 0.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true},
+    "end_n_plus_1": {"health": 150.000000, "status_ids": [9], "status_times": [179.000000], "speed": 0.700000, "x": 80.375000, "y": 80.000000, "shots_fired": 0, "reload": 0.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true},
+    "end_n_plus_2": {"health": 150.000000, "status_ids": [9], "status_times": [178.000000], "speed": 0.700000, "x": 80.418747, "y": 80.000000, "shots_fired": 0, "reload": 0.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true}
+  },
+  "disarmed": {
+    "n_minus_1": {"health": 150.000000, "status_ids": [], "status_times": [], "speed": 1.000000, "x": 80.125000, "y": 80.000000, "shots_fired": 0, "reload": 24.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true},
+    "end_n": {"health": 150.000000, "status_ids": [20], "status_times": [60.000000], "speed": 1.000000, "x": 80.187500, "y": 80.000000, "shots_fired": 0, "reload": 23.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true},
+    "end_n_plus_1": {"health": 150.000000, "status_ids": [20], "status_times": [59.000000], "speed": 1.000000, "x": 80.250000, "y": 80.000000, "shots_fired": 0, "reload": 22.000000, "reload_mult": 1.000000, "disarmed": true, "can_shoot": false},
+    "end_n_plus_2": {"health": 150.000000, "status_ids": [20], "status_times": [58.000000], "speed": 1.000000, "x": 80.312500, "y": 80.000000, "shots_fired": 0, "reload": 21.000000, "reload_mult": 1.000000, "disarmed": true, "can_shoot": false}
+  },
+  "expiry_on_fire": {
+    "n_minus_1": {"health": 150.000000, "status_ids": [20], "status_times": [1.000000], "speed": 1.000000, "x": 80.000000, "y": 80.000000, "shots_fired": 0, "reload": 0.000000, "reload_mult": 1.000000, "disarmed": true, "can_shoot": false},
+    "end_n": {"health": 150.000000, "status_ids": [], "status_times": [], "speed": 1.000000, "x": 80.062500, "y": 80.000000, "shots_fired": 1, "reload": 26.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true},
+    "end_n_plus_1": {"health": 150.000000, "status_ids": [], "status_times": [], "speed": 1.000000, "x": 80.125000, "y": 80.000000, "shots_fired": 0, "reload": 25.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true},
+    "end_n_plus_2": {"health": 150.000000, "status_ids": [], "status_times": [], "speed": 1.000000, "x": 80.187500, "y": 80.000000, "shots_fired": 0, "reload": 24.000000, "reload_mult": 1.000000, "disarmed": false, "can_shoot": true}
+  },
+  "reload_multiplier": {
+    "n_minus_1": {"health": 150.000000, "status_ids": [10], "status_times": [99.000000], "speed": 0.700000, "x": 80.000000, "y": 80.000000, "shots_fired": 0, "reload": 9.400000, "reload_mult": 0.600000, "disarmed": false, "can_shoot": true},
+    "end_n": {"health": 150.000000, "status_ids": [10], "status_times": [98.000000], "speed": 0.700000, "x": 80.043747, "y": 80.000000, "shots_fired": 0, "reload": 8.799999, "reload_mult": 0.600000, "disarmed": false, "can_shoot": true},
+    "end_n_plus_1": {"health": 150.000000, "status_ids": [10], "status_times": [97.000000], "speed": 0.700000, "x": 80.087494, "y": 80.000000, "shots_fired": 0, "reload": 8.199999, "reload_mult": 0.600000, "disarmed": false, "can_shoot": true},
+    "end_n_plus_2": {"health": 150.000000, "status_ids": [10], "status_times": [96.000000], "speed": 0.700000, "x": 80.131241, "y": 80.000000, "shots_fired": 0, "reload": 7.599999, "reload_mult": 0.600000, "disarmed": false, "can_shoot": true}
+  }
+
+}

@@ -1,0 +1,6 @@
+[08-20-2026 19:07:32] [W] Your server is running a custom build, which means that client checking is disabled.
+[08-20-2026 19:07:32] [W] It is highly advised to specify which version you're using by building with gradle args -Pbuildversion=<build>
+[08-20-2026 19:07:32] [I] Server loaded. Type 'help' for help.
+[08-20-2026 19:07:32] [I] Found 1 command-line arguments to parse.
+[08-20-2026 19:07:32] [E] Invalid command argument sent: '--help': unknownCommand
+[08-20-2026 19:07:32] [E] Argument usage: <command-1> <command1-args...>,<command-2> <command-2-args2...>

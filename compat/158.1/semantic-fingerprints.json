@@ -1,0 +1,32 @@
+{
+  "build": "158.1",
+  "fingerprints": {
+    "annotations/src/main/java/mindustry/annotations/entity/EntityProcess.java": "3df8b5a2c90cffbb24dc0e673881ddb6c5413c1484a8ba50962a7fe72792c58d",
+    "core/src/mindustry/ai/ControlPathfinder.java": "d632578b7b7c725644528c8a485e844e1d92d40b371d071ec37575aa519a6c2a",
+    "core/src/mindustry/ai/types/CommandAI.java": "a983c0f5bd6fa9b5691450a70b0f28be9055ec7e6c19ba2ecdf39b8008088272",
+    "core/src/mindustry/ai/types/LogicAI.java": "43901c896a7febb7d0c4e592fe73f1680401ef75e6bca4df8f7394351f726f63",
+    "core/src/mindustry/core/NetServer.java": "079fa5c27208ea33294c63f46b101949b534c9dd5e0d689c3f1c23b5b3786a76",
+    "core/src/mindustry/entities/comp/BuildingComp.java": "a76f85944d845d47b270694eab61e1bd78f710fd26dd96d856f0f41daa9caa8e",
+    "core/src/mindustry/entities/comp/StatusComp.java": "ba716a0a029a2dbabda9fe835df2830c5cdb07ac07525ae02d73b4b31d0a41b3",
+    "core/src/mindustry/entities/comp/UnitComp.java": "661ad3a0c454d0926b137a84680cbd2b5dd816499bae469eebd707308f41d72d",
+    "core/src/mindustry/io/SaveVersion.java": "a4a9c873a28283b073fec8bd50ec37e9a5a2a445a3d9a09f0b085e2c92921cc2",
+    "core/src/mindustry/io/TypeIO.java": "97ed9db0587035a3950b3abfe775b2550edc9201e25653d95e4d47e44db19e94",
+    "core/src/mindustry/logic/LAccess.java": "d4af5d5c10108f6ce5284b02044068ef781ad08868da5d20a78c43b2a5555641",
+    "core/src/mindustry/logic/LExecutor.java": "06ec409002c93080b10172cdc7470013ec265b92aeabfc402dd364bbd223b16f",
+    "core/src/mindustry/net/Net.java": "360a3430e8cb1ee13a0922603c62d507cd06a9a0530a13bb54240fc1f8921b67",
+    "core/src/mindustry/net/NetworkIO.java": "3d9708277d9d66f65318bd3dcd587d1ba58eb27c2f97850205a3a2a2107b0a63",
+    "core/src/mindustry/net/Packets.java": "d1319f17cbfe08b333cc6c6e2cd8ad54785e9a09e85b35698d4550fe48823f0f"
+  },
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "desktop.jar",
+    "sha256": "95b525b548512aa713c4d040bbdc4bfe582e2827dfce037f597e0bb5f1a5c06a",
+    "size_bytes": 80935962
+  },
+  "schema_version": 2,
+  "source_commit": "05b2ecd4eb578ac38cace8118dbecc1bd548ff4a",
+  "source_ref": "v158.1"
+}
