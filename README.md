@@ -109,6 +109,8 @@ Rust sustains construct/deconstruct traffic and waves (peak ~120–180 enemies).
 
 ## Run
 
+Prebuilt binaries for Linux / Windows / macOS (x86-64 and ARM64) are attached to [GitHub Releases](https://github.com/DR4G4NS/Oxide/releases) when a `v*` tag is pushed (workflow: `.github/workflows/release.yml`).
+
 ```bash
 cargo run --release -- --port 6567 --tps 60 --max-players 100 \
   --save-file world-delta.json
@@ -259,7 +261,7 @@ Rust mantiene construct/deconstruct y oleadas (pico ~120–180 enemigos). Java a
 
 ## Ejecutar / verificar / tools
 
-Ver la sección [English — Run](#run) más arriba: mismos comandos.
+Ver la sección [English — Run](#run) más arriba: mismos comandos. Binarios precompilados en [Releases](https://github.com/DR4G4NS/Oxide/releases) al publicar un tag `v*`.
 
 Fuera de alcance de la línea 0.1: mods, plugins, RequestAssets, `SetRules` inbound completo, fuzz de protocolo, exact vanilla de cada bloque Erekir.
 
