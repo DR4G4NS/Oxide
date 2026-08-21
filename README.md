@@ -48,7 +48,7 @@ Docs in this repo:
 
 ## What it is (and is not)
 
-**It is** an authoritative server: the client predicts; Rust validates and advances the state that is then replicated (`EntitySnapshot`, `BlockSnapshot`, RPC). This alpha aims to be **experimentally hostable in production** for vanilla Serpulo (survival / sandbox / pvp / attack) with official 159.7 clients. It is not byte-for-byte behavioral parity of all vanilla.
+**It is** an authoritative server: the client predicts; Rust validates and advances the state that is then replicated (`EntitySnapshot`, `BlockSnapshot`, RPC). This alpha aims to be **experimentally hostable in production** for vanilla Serpulo (survival / sandbox / pvp / attack) with official 159.7 clients. It is not byte-for-byte (this is my favorite words) behavioral parity of all vanilla.
 
 **It is not**
 
@@ -60,7 +60,7 @@ Wire/save certification for the documented scope lives in `compat/159.7/certific
 
 ## Alpha status
 
-Playable today (Serpulo critical path): TCP+UDP on the same port, LAN discovery, join, world stream, `ConnectConfirm`; movement, timed build/break, mining, chat, ping; survival waves, main Serpulo turrets, authoritative projectiles; conveyors/routers/bridges, basic power, liquids, Serpulo factories and reconstructors; Logic `ubind` + `ucontrol` subset (move/stop/within/getBlock/flag/boost/mine/itemDrop/itemTake/shoot/target/build/unbind); operator TUI (`--tui` / `--no-tui`, **out of** vanilla parity); real 158.1 JAR smokes and 159.7 CI certification.
+Playable today... in a way (Serpulo critical path): TCP+UDP on the same port, LAN discovery, join, world stream, `ConnectConfirm`; movement, timed build/break, mining, chat, ping; survival waves, main Serpulo turrets, authoritative projectiles; conveyors/routers/bridges, basic power, liquids, Serpulo factories and reconstructors; Logic `ubind` + `ucontrol` subset (move/stop/within/getBlock/flag/boost/mine/itemDrop/itemTake/shoot/target/build/unbind); operator TUI (`--tui` / `--no-tui`, **out of** vanilla parity); real 158.1 JAR smokes and 159.7 CI certification. (Note this is really experimental)
 
 Gaps below **do** break a full Erekir campaign or “exact vanilla”. They are not hidden by faster snapshots: if the client predicts a block, Rust must simulate it.
 
@@ -198,7 +198,7 @@ Human PRs: [CONTRIBUTING.md](CONTRIBUTING.md). If you use a coding agent on the 
 
 ## Qué es (y qué no)
 
-**Es** un servidor autoritativo: el cliente predice; Rust valida y avanza el estado que luego se replica (`EntitySnapshot`, `BlockSnapshot`, RPC). Objetivo de esta alpha: **hosteable en producción experimental** para partidas vanilla Serpulo (survival / sandbox / pvp / attack) con clientes oficiales 159.7. No es paridad conductual byte-a-byte de todo vanilla.
+**Es** un servidor autoritativo: el cliente predice; Rust valida y avanza el estado que luego se replica (`EntitySnapshot`, `BlockSnapshot`, RPC). Objetivo de esta alpha: **hosteable en producción experimental** para partidas vanilla Serpulo (survival / sandbox / pvp / attack) con clientes oficiales 159.7. No es paridad conductual byte-a-byte (mi palabra favorita xD) de todo vanilla.
 
 **No es**
 
@@ -210,13 +210,13 @@ Certificación de wire/save del scope documentado: ledger `compat/159.7/certific
 
 ## Estado de la alpha
 
-Jugable hoy (Serpulo, camino crítico): TCP+UDP en el mismo puerto, LAN, join, world stream, `ConnectConfirm`; movimiento, construcción/deconstrucción temporizada, minería, chat, ping; oleadas, torretas Serpulo principales, proyectiles autoritativos; cintas/routers/bridges, power básico, líquidos, fábricas y reconstructores; Logic `ubind` + subset de `ucontrol` (move/stop/within/getBlock/flag/boost/mine/itemDrop/itemTake/shoot/target/build/unbind); TUI de operador (`--tui` / `--no-tui`, **fuera** de paridad vanilla); smokes contra el JAR 158.1 y certificación 159.7 en CI.
+Jugable hoy (Serpulo, camino crítico): TCP+UDP en el mismo puerto, LAN, join, world stream, `ConnectConfirm`; movimiento, construcción/deconstrucción temporizada, minería, chat, ping; oleadas, torretas Serpulo principales, proyectiles autoritativos; cintas/routers/bridges, power básico, líquidos, fábricas y reconstructores; Logic `ubind` + subset de `ucontrol` (move/stop/within/getBlock/flag/boost/mine/itemDrop/itemTake/shoot/target/build/unbind); TUI de operador (`--tui` / `--no-tui`, **fuera** de paridad vanilla); smokes contra el JAR 158.1 y certificación 159.7 en CI. (Nota, esto todavia es muy experimental)
 
 Los huecos de abajo **sí rompen** una campaña Erekir completa o “exact vanilla”. No se esconden subiendo la cadencia de snapshots: si el cliente predice un bloque, Rust tiene que simularlo.
 
 ## Huecos — Serpulo
 
-Jugable, **no** exact 158.1/159.7 en todo el contenido.
+Jugable, **no** exactamente 158.1/159.7 en todo el contenido.
 
 | Área | Qué falta |
 |---|---|
