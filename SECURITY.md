@@ -4,7 +4,7 @@ Please **do not** open a public GitHub issue for a vulnerability.
 
 ## Reporting
 
-Use GitHub [private vulnerability reporting](https://github.com/DR4G4NS/Oxide/security/advisories/new) (Settings → Code security, once the repo is public).
+Use GitHub [private vulnerability reporting](https://github.com/DR4G4NS/Oxide/security/advisories/new).
 
 Include:
 
