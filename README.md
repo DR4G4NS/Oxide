@@ -56,7 +56,7 @@ Docs in this repo:
 - compatible with **mods, plugins, scripts, custom packets, or an event bus** — modded clients are rejected
 - a multi-build runtime: one binary, one target (`159.7`)
 
-Wire/save certification for the documented scope lives in `compat/159.7/certification-ledger.json` (`overall=PASS`, `CERTIFIED_RUNTIME_SHA` = `971dde0c…`). That does **not** mean the entire Java game is ported.
+Wire/save certification for the documented scope lives in `compat/159.7/certification-ledger.json` (`overall=PASS`, `CERTIFIED_RUNTIME_SHA` = `f0d5cbb7…`). That does **not** mean the entire Java game is ported.
 
 ## Alpha status
 
@@ -206,7 +206,7 @@ Human PRs: [CONTRIBUTING.md](CONTRIBUTING.md). If you use a coding agent on the 
 - compatible con **mods, plugins, scripts, packets custom o event bus** — los clientes con mods se rechazan
 - un runtime multi-build: un binario, un target (`159.7`)
 
-Certificación de wire/save del scope documentado: ledger `compat/159.7/certification-ledger.json` (`overall=PASS`, `CERTIFIED_RUNTIME_SHA` = `971dde0c…`). Eso **no** significa “todo el juego Java está portado”.
+Certificación de wire/save del scope documentado: ledger `compat/159.7/certification-ledger.json` (`overall=PASS`, `CERTIFIED_RUNTIME_SHA` = `f0d5cbb7…`). Eso **no** significa “todo el juego Java está portado”.
 
 ## Estado de la alpha
 
