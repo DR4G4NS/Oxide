@@ -165,10 +165,12 @@ impl Packet {
                 let uuid = general_purpose::STANDARD.decode(&p.uuid).map_err(|err| {
                     Error::new(ErrorKind::InvalidInput, format!("invalid UUID: {err}"))
                 })?;
-                if uuid.len() != 16 {
+                // Official desktop `Platform.getUUID` is 8 decoded bytes.
+                // Oxide tests and load harnesses also use a 16-byte identity.
+                if uuid.len() != 8 && uuid.len() != 16 {
                     return Err(Error::new(
                         ErrorKind::InvalidInput,
-                        "Mindustry UUID must decode to 16 bytes",
+                        "Mindustry UUID must decode to 8 or 16 bytes",
                     ));
                 }
                 w.write_all(&uuid)?;
@@ -209,25 +211,61 @@ impl Packet {
     }
 }
 
+fn uuid_crc_matches(uuid: &[u8], crc_be: [u8; 8]) -> bool {
+    let sent = i64::from_be_bytes(crc_be) as u64;
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(uuid);
+    sent == u64::from(crc.finalize())
+}
+
+/// Split the ConnectPacket tail after `usid` into base64 uuid + remaining body.
+fn split_connect_uuid(identity: &[u8]) -> std::io::Result<(String, &[u8])> {
+    use base64::{engine::general_purpose, Engine as _};
+    if identity.len() >= 16 {
+        let mut crc = [0u8; 8];
+        crc.copy_from_slice(&identity[8..16]);
+        if uuid_crc_matches(&identity[..8], crc) {
+            return Ok((
+                general_purpose::STANDARD.encode(&identity[..8]),
+                &identity[16..],
+            ));
+        }
+    }
+    if identity.len() >= 24 {
+        let mut crc = [0u8; 8];
+        crc.copy_from_slice(&identity[16..24]);
+        if uuid_crc_matches(&identity[..16], crc) {
+            return Ok((
+                general_purpose::STANDARD.encode(&identity[..16]),
+                &identity[24..],
+            ));
+        }
+    }
+    Err(Error::new(
+        ErrorKind::InvalidData,
+        "invalid ConnectPacket UUID CRC",
+    ))
+}
+
 impl Packet {
     pub fn read<R: Read>(mut r: R, id: u8) -> std::io::Result<Self> {
         match id {
             3 => {
-                use base64::{engine::general_purpose, Engine as _};
                 let version = r.read_i()?;
                 let version_type = r.read_typeio_string()?.unwrap_or_default();
                 let name = r.read_typeio_string()?.unwrap_or_default();
                 let locale = r.read_typeio_string()?.unwrap_or_default();
                 let usid = r.read_typeio_string()?.unwrap_or_default();
-                let mut idbytes = [0u8; 16];
-                r.read_exact(&mut idbytes)?;
-                let uuid = general_purpose::STANDARD.encode(idbytes);
-                let sent_crc = r.read_l()? as u64;
-                let mut crc = crc32fast::Hasher::new();
-                crc.update(&idbytes);
-                if sent_crc != crc.finalize() as u64 {
-                    return Err(Error::new(ErrorKind::InvalidData, "invalid UUID CRC"));
-                }
+                // Official ConnectPacket.write emits `uuid_bytes + CRC32 long`.
+                // Desktop/Android IDs are 8 bytes (`Platform.getUUID`). Java's
+                // ConnectPacket.read then blindly takes 16 bytes, so 8+CRC
+                // accidentally lines up with mobile/color/mods. Reading a
+                // fixed 16-byte UUID plus another CRC over-reads the official
+                // client and dies with UnexpectedEof before join.
+                let mut identity = Vec::new();
+                r.read_to_end(&mut identity)?;
+                let (uuid, after_crc) = split_connect_uuid(&identity)?;
+                let mut r = std::io::Cursor::new(after_crc);
                 let mobile = r.read_b()? == 1;
                 let color = r.read_i()?;
                 let total_mods = r.read_b()?;

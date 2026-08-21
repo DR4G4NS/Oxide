@@ -658,3 +658,76 @@ fn test_connect_packet_decodes_exact_desktop_158_fixture() {
         packet => panic!("unexpected packet: {packet:?}"),
     }
 }
+
+#[test]
+fn test_connect_packet_decodes_official_desktop_8_byte_uuid_write() {
+    use oxide::network::packets::{ConnectPacket, Packet};
+    use std::io::Cursor;
+
+    // Official `Platform.getUUID`: "Must be a base64 string 8 bytes in length."
+    // ConnectPacket.write emits those 8 bytes plus a CRC32 long — not a
+    // 16-byte identity plus a second CRC.
+    let expected = ConnectPacket {
+        version: 159,
+        version_type: "official".into(),
+        name: "Dr4g4n".into(),
+        locale: "es_MX".into(),
+        usid: "session".into(),
+        uuid: "AQIDBAUGBwg=".into(),
+        mobile: false,
+        color: 0xffa6_65ffu32 as i32,
+        mods: vec![],
+    };
+    let mut bytes = Vec::new();
+    Packet::ConnectPacket(expected.clone())
+        .write(&mut bytes)
+        .unwrap();
+    assert_eq!(
+        bytes.len(),
+        4 + 1 + 2 + 8 + 1 + 2 + 6 + 1 + 2 + 5 + 1 + 2 + 7 + 8 + 8 + 1 + 4 + 1,
+        "8-byte uuid + CRC must not be padded to 16 identity bytes"
+    );
+    let decoded = Packet::read(Cursor::new(bytes), 3).unwrap();
+    match decoded {
+        Packet::ConnectPacket(actual) => {
+            assert_eq!(actual.version, expected.version);
+            assert_eq!(actual.version_type, expected.version_type);
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.locale, expected.locale);
+            assert_eq!(actual.usid, expected.usid);
+            assert_eq!(actual.uuid, expected.uuid);
+            assert_eq!(actual.mobile, expected.mobile);
+            assert_eq!(actual.color, expected.color);
+            assert_eq!(actual.mods, expected.mods);
+        }
+        packet => panic!("unexpected packet: {packet:?}"),
+    }
+}
+
+#[test]
+fn test_connect_packet_decodes_exact_desktop_1597_jar_write() {
+    use base64::{engine::general_purpose, Engine as _};
+    use oxide::network::packets::Packet;
+    use std::io::Cursor;
+
+    // Byte-exact `Packets.ConnectPacket.write` from desktop 159.7.jar with
+    // Version.build=159 and Platform 8-byte UUID `AQIDBAUGBwg=`.
+    let object = general_purpose::STANDARD
+        .decode("AAAAnwEACG9mZmljaWFsAQAGRHI0ZzRuAQAFZXNfTVgBAAdzZXNzaW9uAQIDBAUGBwgAAAAAP8qIxQD/pmX/AA==")
+        .unwrap();
+    let decoded = Packet::read(Cursor::new(object), 3).unwrap();
+    match decoded {
+        Packet::ConnectPacket(connect) => {
+            assert_eq!(connect.version, 159);
+            assert_eq!(connect.version_type, "official");
+            assert_eq!(connect.name, "Dr4g4n");
+            assert_eq!(connect.locale, "es_MX");
+            assert_eq!(connect.usid, "session");
+            assert_eq!(connect.uuid, "AQIDBAUGBwg=");
+            assert!(!connect.mobile);
+            assert_eq!(connect.color, 0xffa6_65ffu32 as i32);
+            assert!(connect.mods.is_empty());
+        }
+        packet => panic!("unexpected packet: {packet:?}"),
+    }
+}

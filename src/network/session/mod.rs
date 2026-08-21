@@ -317,7 +317,9 @@ pub async fn handle_tcp(
         }
 
         let id = packet_data[0];
-        match Packet::read(std::io::Cursor::new(&packet_data[1..]), id) {
+        match Packet::read(std::io::Cursor::new(&packet_data[1..]), id)
+            .map_err(|err| Error::new(err.kind(), format!("packet {id}: {err}")))
+        {
             Ok(Packet::ConnectPacket(connect)) => {
                 // P0-11: the 158.1 client does not send ConnectPacket until
                 // RegisterUDP completes. Reject an early ConnectPacket so a
