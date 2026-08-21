@@ -15,10 +15,12 @@
   <img alt="target" src="https://img.shields.io/badge/Mindustry-v8%20159.7-2ea44f">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue">
   <img alt="lang" src="https://img.shields.io/badge/Rust-2021-dea584">
+  <a href="https://discord.gg/AQ6Awkk48w"><img alt="Discord" src="https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white"></a>
 </p>
 
 <p align="center">
   <a href="#english">English</a> · <a href="#español">Español</a>
+  · <strong><a href="https://discord.gg/AQ6Awkk48w">Community Discord</a></strong>
 </p>
 
 | | |
