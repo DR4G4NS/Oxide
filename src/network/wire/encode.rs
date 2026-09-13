@@ -44,10 +44,17 @@ pub(crate) fn encode_block_snapshots_with_threshold(
     use crate::network::codec::{write_tcp_packet, Writes};
     use crate::network::decoders::BuildPlan;
 
+    let breaking_origins: std::collections::HashSet<i32> = world
+        .pending_breaks
+        .iter()
+        .flat_map(|pending| pending.occupied.clone().into_iter())
+        .collect();
     let mut tiles: Vec<_> = world
         .tiles
         .iter()
-        .filter(|tile| is_batch_snapshot_supported(tile.block))
+        .filter(|tile| {
+            is_batch_snapshot_supported(tile.block) && !breaking_origins.contains(&tile.position)
+        })
         .map(|tile| tile.value().clone())
         .collect();
     tiles.sort_unstable_by_key(|tile| tile.position);
@@ -74,7 +81,7 @@ pub(crate) fn encode_block_snapshots_with_threshold(
     for (index, entry) in parallel_indexes.into_iter().zip(mapped.values) {
         encoded[index] = Some(entry);
     }
-    let entries: Vec<Vec<u8>> = encoded
+    let mut entries: Vec<Vec<u8>> = encoded
         .into_iter()
         .map(|entry| {
             entry
@@ -82,6 +89,57 @@ pub(crate) fn encode_block_snapshots_with_threshold(
                 .and_then(|entry| entry)
         })
         .collect::<std::io::Result<_>>()?;
+
+    // Vanilla ConstructBlock.sync = true. Timed deconstruct keeps the original
+    // tile so inventory is not lost; emit a ConstructBuild snapshot instead of
+    // the live block (an id mismatch would abort the whole client batch).
+    let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+    let mut breaks: Vec<_> = world
+        .pending_breaks
+        .iter()
+        .map(|pending| pending.value().clone())
+        .collect();
+    breaks.sort_unstable_by_key(|pending| pending.position);
+    for pending in breaks {
+        let rotation = world
+            .tiles
+            .get(&pending.position)
+            .map(|tile| tile.rotation)
+            .unwrap_or(0);
+        let total =
+            (crate::game::content::block_build_time(pending.block) * cost_mult / 0.5).max(1.0);
+        let progress = (pending.remaining_ticks / total).clamp(0.0, 1.0);
+        let mut entry = Vec::new();
+        let size = crate::game::content::block_size(pending.block).clamp(1, 16);
+        let construct_block = 4 + i16::from(size);
+        entry.write_i(pending.position)?;
+        entry.write_s(construct_block)?;
+        entry.write_f(crate::game::content::block_health(construct_block).max(1.0))?;
+        entry.write_b((rotation % 4) | 128)?;
+        entry.write_b(pending.team)?;
+        entry.write_b(3)?;
+        entry.write_b(1)?;
+        entry.write_b(8)?;
+        entry.write_b(255)?;
+        entry.write_b(255)?;
+        entry.write_f(progress)?;
+        entry.write_s(pending.block)?;
+        entry.write_s(pending.block)?;
+        let requirements = crate::game::content::block_requirements(pending.block);
+        if requirements.is_empty() {
+            entry.write_b(255)?;
+        } else {
+            entry.write_b(u8::try_from(requirements.len()).unwrap_or(u8::MAX))?;
+            let left = (1.0 - progress).max(0.0);
+            for (_item, amount) in requirements {
+                let items_left = (*amount as f32 * cost_mult * left).round().max(0.0) as i32;
+                entry.write_f(0.0)?;
+                entry.write_f(0.0)?;
+                entry.write_i(items_left)?;
+            }
+        }
+        entries.push(entry);
+    }
 
     Ok((batch_block_snapshot_entries(&entries)?, execution))
 }
@@ -92,7 +150,7 @@ pub(crate) fn encode_block_snapshots_with_threshold(
 pub(crate) fn block_snapshot_requires_world(block: i16) -> bool {
     matches!(
         block,
-        261 | 262 | 263 | 271 | 293 | 294 | 302..=304 | 402 | 403 | 410
+        261 | 262 | 263 | 271 | 293 | 294 | 302..=304 | 377..=383 | 386..=395 | 402 | 403 | 410
     ) || is_snapshot_item_turret(block)
         || matches!(block, 353 | 354 | 355 | 360 | 366 | 369 | 372 | 373 | 376)
         || storage_capacity(block).is_some()
@@ -165,22 +223,85 @@ pub(crate) fn encode_construct_block_snapshot(
     rotation: u8,
     team: u8,
 ) -> std::io::Result<Vec<u8>> {
-    use crate::network::codec::{write_tcp_packet, Writes};
-    use crate::network::decoders::BuildPlan;
+    encode_construct_block_snapshot_with_previous(
+        position,
+        target_block,
+        rotation,
+        team,
+        0,
+        0.0,
+        1.0,
+    )
+}
+
+/// `ConstructBuild.write` after `Building.writeBase` (159.7 javap): progress,
+/// previous id, current id, then accumulator (`b -1` or per-item f/f/i).
+/// A RequestBlockSnapshot that omitted this tail left `current = air`, so
+/// BuilderComp dropped the plan (`cb.current != plan.block`) and the Alpha
+/// beam stayed on a survival ghost. Deconstruct uses previous = current.
+pub(crate) fn encode_construct_block_snapshot_with_progress(
+    position: i32,
+    target_block: i16,
+    previous_block: i16,
+    rotation: u8,
+    team: u8,
+    progress: f32,
+    build_cost_multiplier: f32,
+) -> std::io::Result<Vec<u8>> {
+    encode_construct_block_snapshot_with_previous(
+        position,
+        target_block,
+        rotation,
+        team,
+        previous_block,
+        progress,
+        build_cost_multiplier,
+    )
+}
+
+pub(crate) fn encode_construct_block_snapshot_with_previous(
+    position: i32,
+    target_block: i16,
+    rotation: u8,
+    team: u8,
+    previous: i16,
+    progress: f32,
+    build_cost_multiplier: f32,
+) -> std::io::Result<Vec<u8>> {
+    use crate::network::codec::Writes;
 
     let size = crate::game::content::block_size(target_block).clamp(1, 16);
     let construct_block = 4 + i16::from(size); // build1..build16 are IDs 5..20.
     let mut data = Vec::new();
     data.write_i(position)?;
     data.write_s(construct_block)?;
-    data.write_f(crate::game::content::block_health(target_block).max(1.0))?;
+    data.write_f(crate::game::content::block_health(construct_block).max(1.0))?;
     data.write_b((rotation % 4) | 128)?;
     data.write_b(team)?;
     data.write_b(3)?;
     data.write_b(1)?;
-    data.write_b(0)?;
+    // Official moduleBitmask() always sets 1<<3 (8), even without modules.
+    data.write_b(8)?;
     data.write_b(255)?;
     data.write_b(255)?;
+    data.write_f(progress.clamp(0.0, 1.0))?;
+    data.write_s(previous.max(0))?;
+    data.write_s(target_block)?;
+    let requirements = crate::game::content::block_requirements(target_block);
+    if requirements.is_empty() {
+        data.write_b(255)?; // -1: null accumulator
+    } else {
+        data.write_b(u8::try_from(requirements.len()).unwrap_or(u8::MAX))?;
+        let left = (1.0 - progress.clamp(0.0, 1.0)).max(0.0);
+        for (_item, amount) in requirements {
+            let items_left = (*amount as f32 * build_cost_multiplier.max(0.0) * left)
+                .round()
+                .max(0.0) as i32;
+            data.write_f(0.0)?;
+            data.write_f(0.0)?;
+            data.write_i(items_left)?;
+        }
+    }
     let mut payload = Vec::with_capacity(data.len() + 4);
     payload.write_s(1)?;
     payload
@@ -300,9 +421,60 @@ pub(crate) fn state_snapshot_teams(state: &GameState, world: Option<&DynamicWorl
     teams
 }
 
+/// Server copy of the Alpha's `BuilderComp.plans` for `writePlansQueueNet`.
+/// Official NetServer copies ClientSnapshot plans onto `player.unit()`;
+/// Oxide keeps them as `pending_builds` / `pending_breaks`.
+fn player_builder_plans(
+    player: &SessionPlayer,
+    world: Option<&DynamicWorld>,
+) -> Vec<UnitBuildPlan> {
+    let Some(world) = world else {
+        return Vec::new();
+    };
+    let mut plans: Vec<UnitBuildPlan> = world
+        .pending_builds
+        .iter()
+        .filter(|build| build.builder.id == player.id)
+        .map(|build| UnitBuildPlan {
+            breaking: false,
+            position: build.position,
+            block: build.block,
+            rotation: build.rotation,
+            config: build.config.clone(),
+        })
+        .collect();
+    for pending in world.pending_breaks.iter() {
+        if pending.builder.id != player.id {
+            continue;
+        }
+        plans.push(UnitBuildPlan {
+            breaking: true,
+            position: pending.position,
+            block: pending.block,
+            rotation: 0,
+            config: Vec::new(),
+        });
+    }
+    plans.sort_by_key(|plan| (plan.breaking, plan.position, plan.block));
+    plans
+}
+
 pub(crate) fn encode_initial_entity_snapshot(
     player: &SessionPlayer,
     combat: Option<&PlayerCombatState>,
+) -> std::io::Result<Vec<u8>> {
+    encode_initial_entity_snapshot_in(player, combat, None)
+}
+
+/// `UnitEntity.writeSync` writes `TypeIO.writePlansQueueNet` from the
+/// server copy of `BuilderComp.plans`. `@SyncLocal` discards that queue
+/// for the controlling client; writing `0` still consumes as an empty
+/// queue, and if `isLocal()` is false for a tick it would wipe the Alpha's
+/// plans so the next ClientSnapshot never BeginPlace.
+pub(crate) fn encode_initial_entity_snapshot_in(
+    player: &SessionPlayer,
+    combat: Option<&PlayerCombatState>,
+    world: Option<&DynamicWorld>,
 ) -> std::io::Result<Vec<u8>> {
     use crate::network::codec::{write_tcp_packet, Writes};
     use crate::network::decoders::BuildPlan;
@@ -327,12 +499,20 @@ pub(crate) fn encode_initial_entity_snapshot(
     // PvP: the unit and player syncs carry the player's real team
     // (NetServer.assignTeam), not the hardcoded sharded team 1.
     let team = combat.map_or(1, |state| state.team);
+    let (core_class_id, core_content_id) = world
+        .map(|world| {
+            let content = crate::network::wire::unit_control::player_core_unit_content_id(
+                world, team, world_x, world_y,
+            );
+            core_unit_sync_ids(content)
+        })
+        .unwrap_or((ALPHA_CLASS_ID, ALPHA_CONTENT_ID));
     let mut entities = Vec::new();
 
-    // UnitEntityLegacyAlpha / Syncc.writeSync.
+    // UnitEntityLegacyAlpha/Beta/Gamma share UnitEntity.writeSync (ASTRA C07).
     if core_controlled {
         entities.write_i(player.unit_id)?;
-        entities.write_b(ALPHA_CLASS_ID)?;
+        entities.write_b(core_class_id)?;
         entities.write_b(0)?; // abilities
         entities.write_f(player.mouse_x)?; // aim X
         entities.write_f(player.mouse_y)?; // aim Y
@@ -345,9 +525,13 @@ pub(crate) fn encode_initial_entity_snapshot(
         entities.write_i(player.mining_position.unwrap_or(-1))?;
         entities.write_b(1)?; // weapon mounts
         entities.write_b(0)?; // mount flags
-        entities.write_f(world_x)?;
-        entities.write_f(world_y)?;
-        entities.write_i(0)?; // build plans
+        entities.write_f(player.mouse_x)?;
+        entities.write_f(player.mouse_y)?;
+        if core_class_id == PAYLOAD_UNIT_CLASS_ID {
+            // PayloadUnit.writeSync: payload count after mounts, before plans.
+            entities.write_i(0)?;
+        }
+        write_unit_plans_queue(&mut entities, &player_builder_plans(player, world), true)?;
         entities.write_f(player.rotation)?;
         entities.write_f(shield)?;
         entities.write_bool(true)?; // spawned by core
@@ -363,10 +547,10 @@ pub(crate) fn encode_initial_entity_snapshot(
             entities.write_i(0)?;
         }
         entities.write_b(team)?;
-        entities.write_s(ALPHA_CONTENT_ID)?;
-        entities.write_bool(false)?; // update building
-        entities.write_f(0.0)?; // velocity X
-        entities.write_f(3.0)?; // velocity Y
+        entities.write_s(core_content_id)?;
+        entities.write_bool(player.building)?; // updateBuilding (Binding.pauseBuilding / E)
+        entities.write_f(player.velocity_x)?; // velocity X
+        entities.write_f(player.velocity_y)?; // velocity Y
         entities.write_f(world_x)?;
         entities.write_f(world_y)?;
     }
@@ -424,6 +608,15 @@ pub(crate) const ENEMY_SNAPSHOT_BATCH_BYTES: usize =
 /// `NetServer.writeEntitySnapshotsAll`. Returns an empty vec when no enemies
 /// exist.
 pub(crate) fn encode_enemy_entity_snapshots(world: &DynamicWorld) -> std::io::Result<Vec<Vec<u8>>> {
+    encode_enemy_entity_snapshots_visible_to(world, None)
+}
+
+/// Like [`encode_enemy_entity_snapshots`], but when Rules.fog is on, units
+/// the viewer team has not revealed are omitted (audit M11).
+pub(crate) fn encode_enemy_entity_snapshots_visible_to(
+    world: &DynamicWorld,
+    viewer_team: Option<u8>,
+) -> std::io::Result<Vec<Vec<u8>>> {
     use crate::network::codec::{write_tcp_packet, Writes};
     use crate::network::decoders::BuildPlan;
 
@@ -442,14 +635,45 @@ pub(crate) fn encode_enemy_entity_snapshots(world: &DynamicWorld) -> std::io::Re
         list.sort_unstable_by_key(|(position, _)| *position);
         list
     };
-    if enemies.is_empty() && puddles.is_empty() {
+    // Authoritative fires (audit H10): same stream, classId 10,
+    // `Fire.writeSync` = f lifetime, TypeIO.writeTile (i packed pos), f time,
+    // f x, f y (JAR-verified via javap on the official desktop.jar).
+    let fires: Vec<_> = {
+        let mut list: Vec<_> = world
+            .puddles
+            .fires
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect();
+        list.sort_unstable_by_key(|(position, _)| *position);
+        list
+    };
+    if enemies.is_empty() && puddles.is_empty() && fires.is_empty() {
         return Ok(Vec::new());
     }
     let (core_x, core_y) = core_world(world);
     let mut payloads = Vec::new();
     let mut entities = Vec::with_capacity(96);
     let mut batch_count = 0usize;
+    let fog_on = world.wave_rules.read().fog;
     for enemy in enemies {
+        if fog_on {
+            if let Some(team) = viewer_team {
+                if enemy.team != team {
+                    let tx = (enemy.x / 8.0).floor() as i32;
+                    let ty = (enemy.y / 8.0).floor() as i32;
+                    let packed = (tx << 16) | ty;
+                    if !world
+                        .game_state
+                        .extras
+                        .fog_visible
+                        .contains_key(&(team, packed))
+                    {
+                        continue;
+                    }
+                }
+            }
+        }
         let is_mono_miner = enemy.team == 1 && enemy.unit_type == MONO.unit_type;
         // Round 74: the mining beam target comes from the CACHED mining
         // target (world.mono_mining_targets) and only while the mono is
@@ -545,6 +769,31 @@ pub(crate) fn encode_enemy_entity_snapshots(world: &DynamicWorld) -> std::io::Re
             batch_count = 0;
         }
     }
+    for (position, fire) in &fires {
+        let x = ((position >> 16) as f32 * 8.0) + 4.0;
+        let y = ((position & 0xFFFF) as f32 * 8.0) + 4.0;
+        entities.write_i(fire.entity_id)?;
+        entities.write_b(FIRE_ENTITY_CLASS_ID)?;
+        entities.write_f(fire.lifetime)?;
+        entities.write_i(*position)?;
+        entities.write_f(fire.time)?;
+        entities.write_f(x)?;
+        entities.write_f(y)?;
+        batch_count += 1;
+        if entities.len() > ENEMY_SNAPSHOT_BATCH_BYTES {
+            let data_len = i16::try_from(entities.len())
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "enemy snapshot is too large"))?;
+            let amount = i16::try_from(batch_count)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "too many enemy entities"))?;
+            let mut payload = Vec::with_capacity(entities.len() + 4);
+            payload.write_s(amount)?;
+            payload.write_s(data_len)?;
+            payload.extend_from_slice(&entities);
+            payloads.push(payload);
+            entities.clear();
+            batch_count = 0;
+        }
+    }
     if batch_count > 0 {
         let data_len = i16::try_from(entities.len())
             .map_err(|_| Error::new(ErrorKind::InvalidData, "enemy snapshot is too large"))?;
@@ -562,6 +811,8 @@ pub(crate) fn encode_enemy_entity_snapshots(world: &DynamicWorld) -> std::io::Re
 /// `mindustry.gen.Puddle.classId()` in desktop.jar 158.1 (EntityMapping
 /// idMap index 13, verified with a live JVM probe).
 pub(crate) const PUDDLE_ENTITY_CLASS_ID: u8 = 13;
+/// `mindustry.gen.Fire` entity class id (compat/159.7/entities.json).
+pub(crate) const FIRE_ENTITY_CLASS_ID: u8 = 10;
 
 /// Official `Puddle.writeSync(Writes)` (158.1): `f amount, s liquid.id
 /// (null = -1), TypeIO.writeTile (i packed pos), f x, f y`.
@@ -648,6 +899,69 @@ pub(crate) fn frame_generated_packet(
         crate::network::codec::should_lz4_compress(packet_id, payload.len()),
     )?;
     Ok(frame)
+}
+
+// ---------------------------------------------------------------------------
+// UI/notification family (audit H14). Wire layouts javap-verified against the
+// official 159.7 desktop.jar generated Call packets:
+//   Announce (7):        writeString(message)
+//   InfoMessage (54):    writeString(message)
+//   InfoToast (59):      writeString(message), f duration
+// ---------------------------------------------------------------------------
+
+pub(crate) const ANNOUNCE_PACKET_ID: u8 = 7;
+pub(crate) const INFO_MESSAGE_PACKET_ID: u8 = 54;
+pub(crate) const INFO_TOAST_PACKET_ID: u8 = 59;
+
+pub(crate) fn encode_announce_frame(message: &str) -> std::io::Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    payload.write_typeio_string(Some(message))?;
+    frame_generated_packet(ANNOUNCE_PACKET_ID, &payload, false)
+}
+
+pub(crate) fn encode_info_message_frame(message: &str) -> std::io::Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    payload.write_typeio_string(Some(message))?;
+    frame_generated_packet(INFO_MESSAGE_PACKET_ID, &payload, false)
+}
+
+pub(crate) fn encode_info_toast_frame(message: &str, duration: f32) -> std::io::Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    payload.write_typeio_string(Some(message))?;
+    payload.write_f(duration)?;
+    frame_generated_packet(INFO_TOAST_PACKET_ID, &payload, false)
+}
+
+/// `AssemblerDroneSpawnedCallPacket` (id 8): TypeIO.writeTile (packed i32) +
+/// int unit id. Official `Call.assemblerDroneSpawned(tile, unit.id)`.
+pub(crate) fn encode_assembler_drone_spawned_frame(
+    position: i32,
+    unit_id: i32,
+) -> std::io::Result<Vec<u8>> {
+    let mut payload = Vec::with_capacity(8);
+    payload.write_i(position)?;
+    payload.write_i(unit_id)?;
+    frame_generated_packet(ASSEMBLER_DRONE_SPAWNED_PACKET_ID, &payload, false)
+}
+
+/// `AutoDoorToggleCallPacket` (id 10): TypeIO.writeTile (packed i32) + bool open.
+pub(crate) fn encode_auto_door_toggle_frame(position: i32, open: bool) -> std::io::Result<Vec<u8>> {
+    let mut payload = Vec::with_capacity(5);
+    payload.write_i(position)?;
+    payload.write_bool(open)?;
+    frame_generated_packet(AUTO_DOOR_TOGGLE_PACKET_ID, &payload, false)
+}
+
+/// `SetRulesCallPacket` (id 119): i32 length + UTF-8 Rules JSON.
+pub(crate) fn encode_set_rules_frame(rules_json: &str) -> std::io::Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    let bytes = rules_json.as_bytes();
+    let len = i32::try_from(bytes.len()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "rules payload too large")
+    })?;
+    payload.write_i(len)?;
+    payload.extend_from_slice(bytes);
+    frame_generated_packet(SET_RULES_PACKET_ID, &payload, false)
 }
 
 /// Encodes the reliable/unreliable `DebugStatusClient` calls sent in response
@@ -766,9 +1080,39 @@ pub(crate) fn write_unit_sync(
     use crate::network::codec::{write_tcp_packet, Writes};
     use crate::network::decoders::BuildPlan;
 
+    let support_ai = world.is_some_and(|world| {
+        matches!(unit.unit_type, 21 | 22)
+            && controlling_session_for_unit(world, unit.id).is_none()
+            && !crate::network::units::unit_bound_to_logic(world, unit.id)
+    });
+    let support_target = world
+        .filter(|_| support_ai)
+        .and_then(|world| crate::network::combat::unit_combat::support_weapon_target(world, unit));
+    let (aim_x, aim_y) = if support_ai {
+        support_target
+            .map(|target| (target.x, target.y))
+            .unwrap_or((unit.x, unit.y))
+    } else {
+        (aim_x, aim_y)
+    };
+    let timed_kill_lifetime = if unit.entity_class == 39 {
+        // TimedKillUnit (all MissileUnitType content): the JAR emits
+        // `lifetime` after isShooting and `time` after the team byte. The
+        // port does not age missiles yet, so `time` mirrors `lifetime`
+        // (residual gap: no self-expiry simulation).
+        crate::game::unit_types::unit_missile_lifetime(unit.unit_type).unwrap_or(102.0)
+    } else {
+        0.0
+    };
     output.write_b(0)?; // abilities
     output.write_f(aim_x)?;
     output.write_f(aim_y)?;
+    if unit.entity_class == 36 {
+        // BuildingTetherPayloadUnit (manifold/assembly-drone) writes a
+        // TypeIO building reference between aimY and the controller; the
+        // port does not model the tether, so it stays null (-1).
+        output.write_i(-1)?;
+    }
     if matches!(unit.entity_class, 4 | 17 | 19 | 32) {
         output.write_f(unit.rotation)?; // mech base rotation
     }
@@ -784,21 +1128,36 @@ pub(crate) fn write_unit_sync(
         .and_then(|world| controlling_session_for_unit(world, unit.id))
         .map_or_else(
             || {
-                unit.attack_damage > 0.0
-                    && (unit.x - aim_x).hypot(unit.y - aim_y) <= unit.attack_range
+                if support_ai {
+                    support_target.is_some()
+                        && crate::network::combat::unit_combat::unit_can_shoot(unit)
+                        && world.is_some_and(|world| {
+                            !crate::network::units::unit_orders::unit_has_stance(world, unit.id, 1)
+                        })
+                } else {
+                    unit.attack_damage > 0.0
+                        && (unit.x - aim_x).hypot(unit.y - aim_y) > 0.001
+                        && (unit.x - aim_x).hypot(unit.y - aim_y) <= unit.attack_range
+                }
             },
             |player| player.shooting,
         );
     output.write_bool(attacking)?;
+    if unit.entity_class == 39 {
+        output.write_f(timed_kill_lifetime)?; // TimedKillUnit.lifetime
+    }
     output.write_i(mining_position.unwrap_or(-1))?;
     let weapon_mounts = enemy_weapon_mount_count(unit.unit_type);
     output.write_b(weapon_mounts)?;
     for _ in 0..weapon_mounts {
-        output.write_b(u8::from(attacking))?;
+        // TypeIO.writeMounts (159.7): bit 0 shoots, bit 1 rotates toward
+        // aimX/aimY. Shooting without rotation leaves Mega's rotating
+        // mounts pointing in unrelated directions on the client.
+        output.write_b(if attacking { 3 } else { 0 })?;
         output.write_f(aim_x)?;
         output.write_f(aim_y)?;
     }
-    if matches!(unit.entity_class, 5 | 23 | 26) {
+    if matches!(unit.entity_class, 5 | 23 | 26 | 36) {
         output.write_i(i32::try_from(unit.payloads.len()).unwrap_or(i32::MAX))?;
         for carried in &unit.payloads {
             write_carried_payload(output, carried)?;
@@ -849,6 +1208,17 @@ pub(crate) fn write_unit_sync(
         output.write_i(0)?;
     }
     output.write_b(unit.team)?;
+    if unit.entity_class == 39 {
+        // TimedKillUnit.time: the live self-destruct countdown (aged each
+        // tick by simulate_waves_and_enemies); units from older checkpoints
+        // without an aged countdown mirror the full lifetime.
+        let remaining = if unit.missile_time > 0.0 {
+            unit.missile_time
+        } else {
+            timed_kill_lifetime
+        };
+        output.write_f(remaining)?;
+    }
     output.write_s(unit.unit_type)?;
     output.write_bool(
         unit.update_building && (!unit.build_plans.is_empty() || build_plan.is_some()),

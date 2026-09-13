@@ -150,32 +150,93 @@ impl Op {
 }
 
 fn simplex_raw2d(x: f64, y: f64) -> f64 {
-    // Deterministic pseudo-noise matching Simplex.raw2d(0, x, y) closely
-    // enough for automation (phase 1 approximation; exact gradient noise is
-    // phase 2).
-    let seed = 0u64;
-    let h = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let fx = x as f32;
-    let fy = y as f32;
-    let xi = (fx * 31.0) as i64;
-    let yi = (fy * 57.0) as i64;
-    let mix = |ix: i64, iy: i64| -> f32 {
-        let mut z = h
-            .wrapping_add(ix as u64)
-            .wrapping_add((iy as u64).wrapping_mul(0x1000_0000_01B3));
-        z ^= z >> 33;
-        z = z.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
-        z ^= z >> 33;
-        ((z & 0xFFFF) as f32 / 0xFFFF as f32) * 2.0 - 1.0
-    };
-    let dx = fx * 31.0 - xi as f32;
-    let dy = fy * 57.0 - yi as f32;
-    let mut v = mix(xi, yi) * (1.0 - dx) * (1.0 - dy)
-        + mix(xi + 1, yi) * dx * (1.0 - dy)
-        + mix(xi, yi + 1) * (1.0 - dx) * dy
-        + mix(xi + 1, yi + 1) * dx * dy;
-    v = v.clamp(-1.0, 1.0);
-    v as f64
+    simplex_raw2d_seeded(0, x, y)
+}
+
+/// Arc `Simplex.raw2d(seed, x, y)` (audit M22).
+pub(crate) fn simplex_raw2d_seeded(seed: i32, x: f64, y: f64) -> f64 {
+    const F2: f64 = 0.5 * (1.7320508075688772 - 1.0);
+    const G2: f64 = (3.0 - 1.7320508075688772) / 6.0;
+    const GRAD3: [[i32; 3]; 12] = [
+        [1, 1, 0],
+        [-1, 1, 0],
+        [1, -1, 0],
+        [-1, -1, 0],
+        [1, 0, 1],
+        [-1, 0, 1],
+        [1, 0, -1],
+        [-1, 0, -1],
+        [0, 1, 1],
+        [0, -1, 1],
+        [0, 1, -1],
+        [0, -1, -1],
+    ];
+    let s = (x + y) * F2;
+    let i = simplex_fastfloor(x + s);
+    let j = simplex_fastfloor(y + s);
+    let t = (i + j) as f64 * G2;
+    let x0 = x - (i as f64 - t);
+    let y0 = y - (j as f64 - t);
+    let (i1, j1) = if x0 > y0 { (1, 0) } else { (0, 1) };
+    let x1 = x0 - i1 as f64 + G2;
+    let y1 = y0 - j1 as f64 + G2;
+    let x2 = x0 - 1.0 + 2.0 * G2;
+    let y2 = y0 - 1.0 + 2.0 * G2;
+    let ii = i & 255;
+    let jj = j & 255;
+    let gi0 = (simplex_perm(seed, ii + simplex_perm(seed, jj)) % 12) as usize;
+    let gi1 = (simplex_perm(seed, ii + i1 + simplex_perm(seed, jj + j1)) % 12) as usize;
+    let gi2 = (simplex_perm(seed, ii + 1 + simplex_perm(seed, jj + 1)) % 12) as usize;
+    let n0 = simplex_corner(GRAD3[gi0], x0, y0);
+    let n1 = simplex_corner(GRAD3[gi1], x1, y1);
+    let n2 = simplex_corner(GRAD3[gi2], x2, y2);
+    70.0 * (n0 + n1 + n2)
+}
+
+fn simplex_corner(g: [i32; 3], x: f64, y: f64) -> f64 {
+    let mut t = 0.5 - x * x - y * y;
+    if t < 0.0 {
+        0.0
+    } else {
+        t *= t;
+        t * t * (f64::from(g[0]) * x + f64::from(g[1]) * y)
+    }
+}
+
+fn simplex_perm(seed: i32, x: i32) -> i32 {
+    let mut x = (x & 255).wrapping_mul(0x45d9f3b);
+    x = (simplex_ushr(x, 16) ^ x).wrapping_mul(0x45d9f3bi32.wrapping_add(seed));
+    x = simplex_ushr(x, 16) ^ x;
+    x & 0xff
+}
+
+fn simplex_ushr(x: i32, n: u32) -> i32 {
+    ((x as u32) >> n) as i32
+}
+
+fn simplex_fastfloor(x: f64) -> i32 {
+    if x > 0.0 {
+        x as i32
+    } else {
+        x as i32 - 1
+    }
+}
+
+#[cfg(test)]
+mod simplex_tests {
+    use super::simplex_raw2d_seeded;
+
+    #[test]
+    fn raw2d_is_deterministic_and_bounded() {
+        let a = simplex_raw2d_seeded(0, 12.0, 34.0);
+        let b = simplex_raw2d_seeded(0, 12.0, 34.0);
+        assert_eq!(a, b);
+        assert!(a.abs() <= 1.0001);
+        assert_ne!(
+            simplex_raw2d_seeded(0, 0.5, 0.25),
+            simplex_raw2d_seeded(0, 1.5, 0.25)
+        );
+    }
 }
 
 /// Jump conditions (ConditionOp.java).
@@ -244,6 +305,68 @@ pub enum LAccess {
     Shield,
     Rotation,
     Flying,
+    // ---- Remaining senseable LAccess constants (LAccess.java v159.7).
+    // Physics/client-only fields resolve to documented defaults instead of
+    // degrading the whole sensor instruction to NoOp (audit H16).
+    FirstItem,
+    TotalPower,
+    ItemCapacity,
+    LiquidCapacity,
+    PowerCapacity,
+    PowerNetStored,
+    PowerNetCapacity,
+    PowerNetIn,
+    PowerNetOut,
+    Ammo,
+    AmmoCapacity,
+    CurrentAmmoType,
+    MemoryCapacity,
+    MaxHealth,
+    Heat,
+    Armor,
+    Efficiency,
+    Progress,
+    Timescale,
+    VelocityX,
+    VelocityY,
+    ShootX,
+    ShootY,
+    CameraX,
+    CameraY,
+    CameraWidth,
+    CameraHeight,
+    DisplayWidth,
+    DisplayHeight,
+    BufferSize,
+    Operations,
+    Solid,
+    Shooting,
+    Boosting,
+    MineX,
+    MineY,
+    Mining,
+    BuildX,
+    BuildY,
+    PingX,
+    PingY,
+    PingText,
+    Building,
+    Breaking,
+    Speed,
+    Type,
+    Controlled,
+    Controller,
+    Name,
+    PayloadCount,
+    PayloadType,
+    TotalPayload,
+    PayloadCapacity,
+    MaxUnits,
+    Id,
+    SelectedBlock,
+    SelectedRotation,
+    BulletLifetime,
+    BulletTime,
 }
 
 impl LAccess {
@@ -274,6 +397,65 @@ impl LAccess {
             "shield" => LAccess::Shield,
             "rotation" => LAccess::Rotation,
             "flying" => LAccess::Flying,
+            "firstItem" => LAccess::FirstItem,
+            "totalPower" => LAccess::TotalPower,
+            "itemCapacity" => LAccess::ItemCapacity,
+            "liquidCapacity" => LAccess::LiquidCapacity,
+            "powerCapacity" => LAccess::PowerCapacity,
+            "powerNetStored" => LAccess::PowerNetStored,
+            "powerNetCapacity" => LAccess::PowerNetCapacity,
+            "powerNetIn" => LAccess::PowerNetIn,
+            "powerNetOut" => LAccess::PowerNetOut,
+            "ammo" => LAccess::Ammo,
+            "ammoCapacity" => LAccess::AmmoCapacity,
+            "currentAmmoType" => LAccess::CurrentAmmoType,
+            "memoryCapacity" => LAccess::MemoryCapacity,
+            "maxHealth" => LAccess::MaxHealth,
+            "heat" => LAccess::Heat,
+            "armor" => LAccess::Armor,
+            "efficiency" => LAccess::Efficiency,
+            "progress" => LAccess::Progress,
+            "timescale" => LAccess::Timescale,
+            "velocityX" => LAccess::VelocityX,
+            "velocityY" => LAccess::VelocityY,
+            "shootX" => LAccess::ShootX,
+            "shootY" => LAccess::ShootY,
+            "cameraX" => LAccess::CameraX,
+            "cameraY" => LAccess::CameraY,
+            "cameraWidth" => LAccess::CameraWidth,
+            "cameraHeight" => LAccess::CameraHeight,
+            "displayWidth" => LAccess::DisplayWidth,
+            "displayHeight" => LAccess::DisplayHeight,
+            "bufferSize" => LAccess::BufferSize,
+            "operations" => LAccess::Operations,
+            "solid" => LAccess::Solid,
+            "shooting" => LAccess::Shooting,
+            "boosting" => LAccess::Boosting,
+            "mineX" => LAccess::MineX,
+            "mineY" => LAccess::MineY,
+            "mining" => LAccess::Mining,
+            "buildX" => LAccess::BuildX,
+            "buildY" => LAccess::BuildY,
+            "pingX" => LAccess::PingX,
+            "pingY" => LAccess::PingY,
+            "pingText" => LAccess::PingText,
+            "building" => LAccess::Building,
+            "breaking" => LAccess::Breaking,
+            "speed" => LAccess::Speed,
+            "type" => LAccess::Type,
+            "controlled" => LAccess::Controlled,
+            "controller" => LAccess::Controller,
+            "name" => LAccess::Name,
+            "payloadCount" => LAccess::PayloadCount,
+            "payloadType" => LAccess::PayloadType,
+            "totalPayload" => LAccess::TotalPayload,
+            "payloadCapacity" => LAccess::PayloadCapacity,
+            "maxUnits" => LAccess::MaxUnits,
+            "id" => LAccess::Id,
+            "selectedBlock" => LAccess::SelectedBlock,
+            "selectedRotation" => LAccess::SelectedRotation,
+            "bulletLifetime" => LAccess::BulletLifetime,
+            "bulletTime" => LAccess::BulletTime,
             _ => return None,
         })
     }

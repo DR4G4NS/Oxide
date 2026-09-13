@@ -7,10 +7,11 @@ use crate::network::buildings::snapshot::dynamic_tile_health;
 use crate::network::buildings::snapshot::*;
 use crate::network::economy::spec::{inventory_count, inventory_remove};
 use crate::network::wire::encode::{
-    encode_build_destroyed_frame, encode_build_health_update_frame, frame_generated_packet,
+    encode_auto_door_toggle_frame, encode_build_destroyed_frame, encode_build_health_update_frame,
 };
 use crate::network::world::*;
 use dashmap::DashMap;
+use std::sync::atomic::Ordering;
 
 use super::*;
 
@@ -41,6 +42,41 @@ pub(crate) fn mender_spec(block: i16) -> Option<MenderSpec> {
 pub(crate) fn lerp_delta(current: f32, target: f32, rate: f32, delta_ticks: f32) -> f32 {
     let alpha = 1.0 - (1.0 - rate).powf(delta_ticks.max(0.0));
     current + (target - current) * alpha
+}
+
+/// Official discoveryTime = 60f * 10f ticks (Radar.java:20).
+const RADAR_DISCOVERY_TIME: f32 = 600.0;
+
+/// RadarBuild.updateTile (Radar.java:60-74): progress += edelta() /
+/// discoveryTime, clamped to 1; the client derives the fog radius from the
+/// synced progress written by encode_radar_sync.
+pub(crate) fn simulate_radars(
+    world: &DynamicWorld,
+    delta_ticks: f32,
+    power: &std::collections::HashMap<i32, f32>,
+) -> bool {
+    let keys: Vec<i32> = world
+        .tiles
+        .iter()
+        .filter(|tile| tile.block == 251)
+        .map(|tile| *tile.key())
+        .collect();
+    let mut changed = false;
+    for key in keys {
+        if let Some(mut tile) = world.tiles.get_mut(&key) {
+            // edelta(): game ticks scaled by power efficiency.
+            let efficiency = power.get(&key).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+            if efficiency <= 0.0 || delta_ticks <= 0.0 {
+                continue;
+            }
+            let before = tile.production_progress;
+            tile.production_progress = (tile.production_progress
+                + efficiency * delta_ticks / RADAR_DISCOVERY_TIME)
+                .clamp(0.0, 1.0);
+            changed |= tile.production_progress != before;
+        }
+    }
+    changed
 }
 
 pub(crate) fn simulate_menders(
@@ -467,15 +503,21 @@ pub(crate) fn simulate_shock_mines(
             changed = true;
             continue;
         }
+        if !snapshot.enabled {
+            continue;
+        }
         let x = (snapshot.position >> 16) as i16 as f32 * 8.0;
         let y = snapshot.position as i16 as f32 * 8.0;
         let target = world
             .enemies
             .iter()
-            .filter(|enemy| enemy.team == 2 && enemy.entity_class != 3)
+            .filter(|enemy| enemy.team != snapshot.team && enemy.entity_class != 3)
             .filter_map(|enemy| {
-                let distance = (enemy.x - x).hypot(enemy.y - y);
-                (distance <= 8.0).then_some((enemy.id, distance))
+                // ShockMineBuild.unitOn: the unit must occupy this 8×8 tile,
+                // not merely sit within an 8px radius of the center.
+                let on_tile =
+                    enemy.x >= x && enemy.x < x + 8.0 && enemy.y >= y && enemy.y < y + 8.0;
+                on_tile.then_some((enemy.id, (enemy.x - x).hypot(enemy.y - y)))
             })
             .min_by(|left, right| left.1.total_cmp(&right.1))
             .map(|target| target.0);
@@ -483,23 +525,32 @@ pub(crate) fn simulate_shock_mines(
             continue;
         };
 
-        let mut dead = false;
-        if let Some(mut enemy) = world.enemies.get_mut(&target_id) {
-            for _ in 0..4 {
-                enemy.health -= apply_incoming_unit_damage(&enemy, 25.0, 1.0);
-            }
-            dead = enemy.health <= 0.0;
-        }
-        for angle in [0.0, 90.0, 180.0, 270.0] {
-            if let Ok(payload) =
-                encode_create_bullet_payload(2, snapshot.team, x, y, angle, 25.0, 1.0, 1.0)
-            {
-                if let Ok(frame) = frame_generated_packet(CREATE_BULLET_PACKET_ID, &payload, false)
-                {
-                    out.broadcast(frame);
-                }
-            }
-        }
+        // ShockMine.triggered (Blocks.java 1978-1986): 4 Lightning.create
+        // tendrils of damageLightningGround, damage 25, length 10. The
+        // triggering unit is not extra-ticked; chain segments apply the damage.
+        let cx = x + 4.0;
+        let cy = y + 4.0;
+        crate::network::combat::spawn_impact_lightning(
+            world,
+            out,
+            snapshot.team,
+            crate::network::combat::LightningSpec {
+                roots: 4,
+                length: 10,
+                length_rand: 0,
+                damage: 25.0,
+                target: crate::network::combat::LightningTarget::Ground,
+            },
+            key,
+            cx,
+            cy,
+            cx,
+            cy,
+        );
+        let dead = world
+            .enemies
+            .get(&target_id)
+            .is_none_or(|enemy| enemy.health <= 0.0);
         if dead {
             kill_enemy(world, out, target_id);
         }
@@ -1181,8 +1232,42 @@ pub(crate) fn projectile_building_hit(
 ) -> Option<(i32, f32, f32)> {
     // Continuous beams (61-64) and the rail (49) use their own ray/damage
     // logic and must not short-circuit here.
-    if (61..=64).contains(&bullet_id) || bullet_id == 49 {
+    if (61..=64).contains(&bullet_id) || bullet_id == 49 || bullet_id == 188 || bullet_id == 191 {
         return None;
+    }
+    // BulletComp.update tileRaycast: first enemy building whose tile the
+    // segment crosses (audit M23). Circle tests remain as a hitSize fallback.
+    for (tx, ty) in
+        crate::engine::spatial::tiles_along_segment(source_x, source_y, current_x, current_y)
+    {
+        let packed = ((i32::from(tx)) << 16) | (ty as u16 as i32);
+        let origin = world
+            .tile_footprint
+            .get(&packed)
+            .map(|origin| *origin)
+            .or_else(|| {
+                world.tiles.get(&packed).and_then(|tile| {
+                    (tile.block != 0 && tile.team != team).then_some(tile.position)
+                })
+            })
+            .or_else(|| {
+                world.tiles.iter().find_map(|tile| {
+                    if tile.block == 0 || tile.team == team {
+                        return None;
+                    }
+                    (tile.position == packed || tile.occupied.contains(&packed))
+                        .then_some(tile.position)
+                })
+            });
+        if let Some(position) = origin {
+            if let Some(tile) = world.tiles.get(&position) {
+                if tile.block != 0 && tile.team != team {
+                    let corner_x = (tile.position >> 16) as i16 as f32 * 8.0;
+                    let corner_y = tile.position as i16 as f32 * 8.0;
+                    return Some((tile.position, corner_x, corner_y));
+                }
+            }
+        }
     }
     let radius = hit_radius.max(1.0);
     let mut best: Option<(i32, f32, f32, f32)> = None; // (pos, dist, x, y)
@@ -1274,6 +1359,104 @@ pub(crate) fn absorb_enemy_projectile(
         }
     }
     true
+}
+
+const AUTO_DOOR_BLOCK: i16 = 239;
+const AUTO_DOOR_CHECK_INTERVAL: f32 = 20.0;
+const AUTO_DOOR_TRIGGER_MARGIN: f32 = 12.0;
+
+fn auto_door_center(position: i32, block: i16) -> (f32, f32) {
+    let tx = (position >> 16) as i16 as f32;
+    let ty = position as i16 as f32;
+    let size = f32::from(crate::game::content::block_size(block));
+    let extra = ((size as i32 + 1) % 2) as f32 * 4.0;
+    (tx * 8.0 + 4.0 + extra, ty * 8.0 + 4.0 + extra)
+}
+
+fn auto_door_ground_unit(unit: &EnemyUnit, team: u8, cx: f32, cy: f32, half: f32) -> bool {
+    if unit.team != team || unit.entity_class == 3 {
+        return false;
+    }
+    let movement = crate::game::content::unit_movement(unit.unit_type);
+    if movement.flying || movement.allow_leg_step || unit.elevation >= 0.09 {
+        return false;
+    }
+    (unit.x - cx).abs() <= half && (unit.y - cy).abs() <= half
+}
+
+/// AutoDoor (239) scan: every `checkInterval` (20) ticks, open when an allied
+/// grounded non-leg unit is inside `size * tilesize + triggerMargin * 2`.
+pub(crate) fn simulate_auto_doors(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta_ticks: f32,
+) -> bool {
+    let keys: Vec<i32> = world
+        .tiles
+        .iter()
+        .filter(|tile| tile.block == AUTO_DOOR_BLOCK)
+        .map(|tile| *tile.key())
+        .collect();
+    let mut changed = false;
+    for key in keys {
+        let Some(snapshot) = world.tiles.get(&key).map(|tile| tile.clone()) else {
+            continue;
+        };
+        let next_timer = snapshot.production_progress + delta_ticks.max(0.0);
+        if next_timer < AUTO_DOOR_CHECK_INTERVAL {
+            if let Some(mut tile) = world.tiles.get_mut(&key) {
+                tile.production_progress = next_timer;
+            }
+            continue;
+        }
+        let (cx, cy) = auto_door_center(snapshot.position, snapshot.block);
+        let half = f32::from(crate::game::content::block_size(snapshot.block)) * 4.0
+            + AUTO_DOOR_TRIGGER_MARGIN;
+        let enemy_open = world
+            .enemies
+            .iter()
+            .any(|unit| auto_door_ground_unit(&unit, snapshot.team, cx, cy, half));
+        let player_open = world.player_sessions.iter().any(|session| {
+            let team = world
+                .players
+                .get(&session.unit_id)
+                .map(|combat| combat.team)
+                .unwrap_or(1);
+            if team != snapshot.team {
+                return false;
+            }
+            match session.controlled_unit {
+                crate::network::world::ControlledUnit::Standard(id) => world
+                    .enemies
+                    .get(&id)
+                    .is_some_and(|unit| auto_door_ground_unit(&unit, snapshot.team, cx, cy, half)),
+                crate::network::world::ControlledUnit::Core => {
+                    let movement = crate::game::content::unit_movement(35);
+                    if movement.flying || movement.allow_leg_step {
+                        return false;
+                    }
+                    (session.x - cx).abs() <= half && (session.y - cy).abs() <= half
+                }
+                crate::network::world::ControlledUnit::Building(_) => false,
+            }
+        });
+        let should_open = enemy_open || player_open;
+        let toggle = should_open != snapshot.door_open;
+        if let Some(mut tile) = world.tiles.get_mut(&key) {
+            tile.production_progress = (next_timer % AUTO_DOOR_CHECK_INTERVAL).max(0.0);
+            if toggle {
+                tile.door_open = should_open;
+            }
+        }
+        if toggle {
+            world.navigation_revision.fetch_add(1, Ordering::Relaxed);
+            if let Ok(frame) = encode_auto_door_toggle_frame(snapshot.position, should_open) {
+                out.broadcast(frame);
+            }
+            changed = true;
+        }
+    }
+    changed
 }
 
 #[derive(Clone, Copy)]

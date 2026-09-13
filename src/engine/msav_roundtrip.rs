@@ -37,6 +37,10 @@ pub fn load_msav_world(msav: &[u8], save_name: &str) -> std::io::Result<Arc<Dyna
     )?;
     apply_msav_entities(&world, msav)?;
     crate::network::buildings::power::normalize_power_links(&world);
+    crate::network::simulation::remaining::restore_pending_from_construct(&world);
+    if let Ok(markers) = crate::engine::world_stream::msav_markers_json(msav) {
+        *world.game_state.extras.markers_json.write() = markers;
+    }
     Ok(Arc::new(world))
 }
 
@@ -101,6 +105,7 @@ pub fn save_msav_world_version(world: &DynamicWorld, version: i32) -> std::io::R
             )
         })
         .collect();
+    crate::network::simulation::remaining::inject_construct_tiles_from_pending(world);
     write_msav_complete(
         &meta,
         version,
@@ -626,26 +631,15 @@ fn logic_snapshot(world: &DynamicWorld) -> Value {
     json!(out)
 }
 
+/// Live Rules JSON for SetRules, MSAV export and the JSON checkpoint.
+/// Same document as join: map rules with every interpreted field updated
+/// and uninterpreted keys preserved (ASTRA R01).
 pub(crate) fn rules_json_from_world(world: &DynamicWorld) -> String {
     let rules = world.wave_rules.read();
-    let mut teams = serde_json::Map::new();
-    for (id, rule) in &rules.team_rules {
-        teams.insert(
-            id.to_string(),
-            json!({ "unitDamageMultiplier": rule.unit_damage_multiplier }),
-        );
-    }
-    json!({
-        "unitDamageMultiplier": rules.unit_damage_multiplier,
-        "unitHealthMultiplier": rules.unit_health_multiplier,
-        "blockHealthMultiplier": rules.block_health_multiplier,
-        "infiniteResources": rules.infinite_resources,
-        "waves": rules.waves_enabled,
-        "waveTimer": rules.wave_timer,
-        "disableUnitCap": rules.disable_unit_cap,
-        "teams": serde_json::Value::Object(teams),
-    })
-    .to_string()
+    let map_rules = crate::engine::world_stream::inspect_metadata(&world.network_template)
+        .map(|metadata| metadata.rules)
+        .unwrap_or_default();
+    crate::network::units::serialize_live_rules_json(&map_rules, &rules)
 }
 
 /// Compare two campaign snapshots, ignoring unit x/y (AI pathing is not in
@@ -858,7 +852,7 @@ mod tests {
             base_buildings: DashMap::new(),
             floors: vec![crate::game::block_names::block_id_from_name("stone").unwrap(); cells],
             overlays: vec![0i16; cells],
-            enemy_spawns: Vec::new(),
+            enemy_spawns: parking_lot::RwLock::new(Vec::new()),
             enemies: DashMap::new(),
             players: DashMap::new(),
             player_sessions: DashMap::new(),
@@ -868,6 +862,7 @@ mod tests {
             next_player_unit_id: AtomicI32::new(2_500_000),
             next_enemy_id: AtomicI32::new(3_000_000),
             unit_group_order: parking_lot::Mutex::new(Vec::new()),
+            damaged_window: parking_lot::Mutex::new(Vec::new()),
             projectiles: DashMap::new(),
             next_projectile_id: AtomicI32::new(4_000_000),
             overdrive_boosts: DashMap::new(),
@@ -878,10 +873,12 @@ mod tests {
             pending_breaks: DashMap::new(),
             mineable_ore: std::sync::OnceLock::new(),
             mono_mining_targets: DashMap::new(),
+            ai_rebuild_state: Default::default(),
             tile_footprint: DashMap::new(),
             navigation_revision: AtomicU64::new(0),
             ground_navigation: parking_lot::Mutex::new(None),
             leg_navigation: parking_lot::Mutex::new(None),
+            naval_navigation: parking_lot::Mutex::new(None),
             save_path: PathBuf::from(format!("/tmp/{save_name}.json")),
             network_template: Arc::new(Vec::new()),
             persistence_dirty: AtomicBool::new(false),
@@ -900,6 +897,8 @@ mod tests {
             votekick_voters: DashMap::new(),
             votekick_cooldowns: DashMap::new(),
             puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+            building_last_damage: DashMap::new(),
+            repair_beam_strengths: DashMap::new(),
         }
     }
 
@@ -911,6 +910,7 @@ mod tests {
         world.tiles.insert(
             source_pos,
             DynamicTile {
+                logic_control: None,
                 position: source_pos,
                 block: 410,
                 team: 1,
@@ -923,6 +923,7 @@ mod tests {
         world.tiles.insert(
             node_pos,
             DynamicTile {
+                logic_control: None,
                 position: node_pos,
                 block: 302,
                 team: 1,
@@ -938,6 +939,7 @@ mod tests {
         world.tiles.insert(
             vault_pos,
             DynamicTile {
+                logic_control: None,
                 position: vault_pos,
                 block: 346,
                 team: 1,
@@ -951,6 +953,7 @@ mod tests {
         world.tiles.insert(
             tank_pos,
             DynamicTile {
+                logic_control: None,
                 position: tank_pos,
                 block: 291,
                 team: 1,
@@ -979,6 +982,7 @@ mod tests {
         world.tiles.insert(
             proc_pos,
             DynamicTile {
+                logic_control: None,
                 position: proc_pos,
                 block: 431,
                 team: 1,
@@ -993,12 +997,14 @@ mod tests {
         world.tiles.insert(
             conv_pos,
             DynamicTile {
+                logic_control: None,
                 position: conv_pos,
                 block: 398,
                 team: 1,
                 health: 360.0,
                 payload: Some(Box::new(CarriedPayload::Build(CarriedBuildPayload {
                     tile: DynamicTile {
+                        logic_control: None,
                         block: 346,
                         health: 900.0,
                         team: 1,
@@ -1094,7 +1100,9 @@ mod tests {
             authority,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         }
     }
 
@@ -1140,6 +1148,7 @@ mod tests {
         world.tiles.insert(
             core_position,
             DynamicTile {
+                logic_control: None,
                 position: core_position,
                 block: 339, // core-shard, 3x3
                 team: 1,
@@ -1637,5 +1646,272 @@ mod tests {
         assert_eq!(poly.unit_type, 37);
         assert_eq!(poly.team, 1);
         assert!((poly.health - 220.0).abs() < 0.1);
+    }
+
+    fn msav_rules_json(msav: &[u8]) -> std::io::Result<String> {
+        use byteorder::{BigEndian, ReadBytesExt};
+        use flate2::read::ZlibDecoder;
+        use std::io::Read;
+        let mut zlib = ZlibDecoder::new(msav);
+        let mut magic = [0u8; 4];
+        zlib.read_exact(&mut magic)?;
+        if &magic != b"MSAV" {
+            return Err(Error::new(ErrorKind::InvalidData, "not MSAV"));
+        }
+        let _version = zlib.read_i32::<BigEndian>()?;
+        let _meta_len = zlib.read_i32::<BigEndian>()?;
+        let size = zlib.read_i16::<BigEndian>()?;
+        for _ in 0..size {
+            let key = crate::network::codec::read_modified_utf8_public(&mut zlib)?;
+            let value = crate::network::codec::read_modified_utf8_public(&mut zlib)?;
+            if key == "rules" {
+                return Ok(value);
+            }
+        }
+        Err(Error::new(ErrorKind::NotFound, "MSAV meta has no rules"))
+    }
+
+    #[test]
+    fn r01_exported_msav_metadata_matches_live_rules_and_jar_json() {
+        let world = tiny_world("r01-msav-rules");
+        {
+            let mut rules = world.wave_rules.write();
+            rules.wait_enemies = true;
+            rules.unit_cap = 24;
+            rules.win_wave = 40;
+            rules.unit_build_speed_multiplier = 2.0;
+        }
+        let live = rules_json_from_world(&world);
+        let msav = save_msav_world(&world).expect("export MSAV");
+        let rules = msav_rules_json(&msav).expect("read MSAV rules map");
+        assert_eq!(
+            rules, live,
+            "exported MSAV rules blob must match join/SetRules JSON"
+        );
+        let parsed = crate::network::units::parse_wave_rules(&rules);
+        assert!(parsed.wait_enemies);
+        assert_eq!(parsed.unit_cap, 24);
+        assert_eq!(parsed.win_wave, 40);
+        assert_eq!(parsed.unit_build_speed_multiplier, 2.0);
+
+        let jar = std::env::var("MINDUSTRY_1597_JAR")
+            .ok()
+            .filter(|path| std::path::Path::new(path).is_file())
+            .or_else(|| {
+                let fallback = std::path::PathBuf::from("/tmp/astra-oracle/159.7.jar");
+                fallback.is_file().then_some(fallback.display().to_string())
+            });
+        if let Some(jar) = jar {
+            let dir = std::env::temp_dir().join(format!("oxide-r01-jar-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let json_path = dir.join("rules.json");
+            let java_path = dir.join("AstraRulesRead.java");
+            std::fs::write(&json_path, &rules).unwrap();
+            std::fs::write(
+                &java_path,
+                r#"
+import arc.util.serialization.JsonReader;
+import arc.util.serialization.JsonValue;
+public class AstraRulesRead {
+  public static void main(String[] args) throws Exception {
+    mindustry.Vars.content = new mindustry.core.ContentLoader();
+    mindustry.Vars.content.createBaseContent();
+    String json = new String(java.nio.file.Files.readAllBytes(java.nio.file.Path.of(args[0])));
+    mindustry.game.Rules typed = mindustry.io.JsonIO.read(mindustry.game.Rules.class, json);
+    if (typed.loadout.size != 1 || typed.loadout.first().item != mindustry.content.Items.copper
+        || typed.loadout.first().amount != 100) throw new AssertionError("typed loadout");
+    JsonValue root = new JsonReader().parse(json);
+    if (!root.getBoolean("waitEnemies")) throw new AssertionError("waitEnemies");
+    if (root.getInt("unitCap") != 24) throw new AssertionError("unitCap");
+    if (root.getInt("winWave") != 40) throw new AssertionError("winWave");
+    if (Math.abs(root.getFloat("unitBuildSpeedMultiplier") - 2f) > 0.001f)
+      throw new AssertionError("unitBuildSpeedMultiplier");
+    System.out.println("ASTRA_RULES_OK");
+  }
+}
+"#,
+            )
+            .unwrap();
+            let javac = std::process::Command::new("javac")
+                .args([
+                    "-cp",
+                    &jar,
+                    "-d",
+                    dir.to_str().unwrap(),
+                    java_path.to_str().unwrap(),
+                ])
+                .output()
+                .expect("javac");
+            assert!(
+                javac.status.success(),
+                "javac AstraRulesRead: {}",
+                String::from_utf8_lossy(&javac.stderr)
+            );
+            let java = std::process::Command::new("java")
+                .args([
+                    "-cp",
+                    &format!("{}:{}", jar, dir.display()),
+                    "AstraRulesRead",
+                    json_path.to_str().unwrap(),
+                ])
+                .output()
+                .expect("java");
+            let stdout = String::from_utf8_lossy(&java.stdout);
+            assert!(
+                java.status.success() && stdout.contains("ASTRA_RULES_OK"),
+                "JAR JsonReader must accept exported Rules: stdout={stdout} stderr={}",
+                String::from_utf8_lossy(&java.stderr)
+            );
+
+            let msav_path = dir.join("export.msav");
+            std::fs::write(&msav_path, &msav).unwrap();
+            let msav_java = dir.join("AstraMsavRules.java");
+            std::fs::write(
+                &msav_java,
+                r#"
+import arc.util.serialization.JsonReader;
+import arc.util.serialization.JsonValue;
+import java.io.*;
+import java.util.zip.InflaterInputStream;
+public class AstraMsavRules {
+  public static void main(String[] args) throws Exception {
+    DataInputStream in = new DataInputStream(new InflaterInputStream(new FileInputStream(args[0])));
+    byte[] magic = new byte[4];
+    in.readFully(magic);
+    if (!"MSAV".equals(new String(magic))) throw new AssertionError("magic");
+    in.readInt();
+    in.readInt();
+    short size = in.readShort();
+    String rules = null;
+    for (int i = 0; i < size; i++) {
+      String key = in.readUTF();
+      String value = in.readUTF();
+      if ("rules".equals(key)) rules = value;
+    }
+    if (rules == null) throw new AssertionError("no rules");
+    JsonValue root = new JsonReader().parse(rules);
+    if (!root.getBoolean("waitEnemies")) throw new AssertionError("waitEnemies");
+    if (root.getInt("unitCap") != 24) throw new AssertionError("unitCap");
+    if (root.getInt("winWave") != 40) throw new AssertionError("winWave");
+    System.out.println("ASTRA_MSAV_RULES_OK");
+  }
+}
+"#,
+            )
+            .unwrap();
+            let javac_msav = std::process::Command::new("javac")
+                .args([
+                    "-cp",
+                    &jar,
+                    "-d",
+                    dir.to_str().unwrap(),
+                    msav_java.to_str().unwrap(),
+                ])
+                .output()
+                .expect("javac msav");
+            assert!(
+                javac_msav.status.success(),
+                "javac AstraMsavRules: {}",
+                String::from_utf8_lossy(&javac_msav.stderr)
+            );
+            let java_msav = std::process::Command::new("java")
+                .args([
+                    "-cp",
+                    &format!("{}:{}", jar, dir.display()),
+                    "AstraMsavRules",
+                    msav_path.to_str().unwrap(),
+                ])
+                .output()
+                .expect("java msav");
+            let msav_out = String::from_utf8_lossy(&java_msav.stdout);
+            assert!(
+                java_msav.status.success() && msav_out.contains("ASTRA_MSAV_RULES_OK"),
+                "JAR must read Rules from the exported MSAV: stdout={msav_out} stderr={}",
+                String::from_utf8_lossy(&java_msav.stderr)
+            );
+        }
+
+        let reloaded = load_msav_world(&msav, "r01-reload").expect("reload exported MSAV");
+        let restored = crate::network::units::parse_wave_rules(&rules_json_from_world(&reloaded));
+        assert!(restored.wait_enemies);
+        assert_eq!(restored.unit_cap, 24);
+        assert_eq!(restored.win_wave, 40);
+        let factory = (5 << 16) | 5;
+        let mut factory_tile = crate::network::world::DynamicTile {
+            position: factory,
+            block: 377,
+            team: 1,
+            occupied: vec![factory],
+            config: vec![1, 0, 0, 0, 0],
+            inventory: vec![(9, 10), (1, 10)],
+            ..Default::default()
+        };
+        factory_tile.occupied = vec![factory];
+        reloaded.tiles.insert(factory, factory_tile);
+        let mut power = std::collections::HashMap::new();
+        power.insert(factory, 1.0);
+        crate::network::economy::simulate_unit_factories(
+            &reloaded,
+            &dashmap::DashMap::new(),
+            900.0,
+            &power,
+        );
+        crate::network::economy::simulate_unit_factories(
+            &reloaded,
+            &dashmap::DashMap::new(),
+            20.0,
+            &power,
+        );
+        assert!(
+            reloaded.enemies.iter().any(|unit| unit.unit_type == 0)
+                || reloaded
+                    .tiles
+                    .get(&factory)
+                    .is_some_and(|tile| tile.payload.is_some()),
+            "reloaded map must still produce a factory unit"
+        );
+        *reloaded.enemy_spawns.write() = vec![(2, 2)];
+        reloaded
+            .game_state
+            .wave
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let mut rules = reloaded.wave_rules.write();
+            rules.spawn_groups = vec![crate::network::units::MapSpawnGroup {
+                unit_type: 0,
+                begin: 0,
+                end: u32::MAX,
+                spacing: 1,
+                max: 40,
+                scaling: 1.0,
+                shields: 0.0,
+                shield_scaling: 0.0,
+                unit_amount: 1,
+                spawn: -1,
+                effect: -1,
+                items: Vec::new(),
+                team: None,
+                payloads: Vec::new(),
+            }];
+        }
+        let before_wave_team = reloaded
+            .enemies
+            .iter()
+            .filter(|unit| unit.team == 2)
+            .count();
+        crate::network::combat::enemy::spawn_wave(&reloaded, &crate::network::outbound::NOOP);
+        let after_wave_team = reloaded
+            .enemies
+            .iter()
+            .filter(|unit| unit.team == 2)
+            .count();
+        assert!(
+            after_wave_team > before_wave_team,
+            "reloaded map must still run a wave (spawns={:?} groups={} next={} team2 {before_wave_team}->{after_wave_team} default={})",
+            reloaded.enemy_spawns.read().clone(),
+            reloaded.wave_rules.read().spawn_groups.len(),
+            reloaded.next_enemy_id.load(std::sync::atomic::Ordering::Relaxed),
+            reloaded.wave_rules.read().is_default()
+        );
     }
 }

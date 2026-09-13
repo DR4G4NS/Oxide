@@ -50,7 +50,9 @@ pub(super) fn ubind_probe_unit(id: i32, team: u8, flag: f64) -> crate::network::
         authority: crate::network::world::UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: Default::default(),
+        drown_progress: 0.0,
     }
 }
 

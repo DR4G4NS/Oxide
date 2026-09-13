@@ -7,7 +7,7 @@ use std::collections::{BinaryHeap, HashMap, VecDeque};
 
 use crate::network::buildings::snapshot::dynamic_tile_health;
 use crate::network::economy::building_heal_suppressed;
-use crate::network::units::{EnemySpec, HORIZON};
+use crate::network::units::EnemySpec;
 use crate::network::world::{
     core_tile, core_world, DynamicTile, DynamicWorld, EnemyNavigationTarget, EnemyUnit,
     NavigationField,
@@ -29,37 +29,30 @@ pub(crate) fn move_repair_unit(
     desired_range: f32,
     delta_ticks: f32,
 ) -> bool {
-    let mut candidates: Vec<_> = world
-        .tiles
-        .iter()
-        .filter(|tile| tile.block != 0 && tile.team == 1)
-        .filter_map(|tile| {
-            let maximum = crate::game::content::block_health(tile.block);
-            (dynamic_tile_health(&tile) < maximum - 0.0001).then(|| {
-                let target_x = (tile.position >> 16) as i16 as f32 * 8.0;
-                let target_y = tile.position as i16 as f32 * 8.0;
-                ((target_x - x).hypot(target_y - y), target_x, target_y)
-            })
-        })
-        .collect();
-    candidates.extend(world.base_buildings.iter().filter_map(|building| {
-        let maximum = crate::game::content::block_health(building.block);
-        (building.team == 1 && building.health < maximum - 0.0001).then(|| {
-            let target_x = (building.position >> 16) as i16 as f32 * 8.0;
-            let target_y = building.position as i16 as f32 * 8.0;
-            ((target_x - x).hypot(target_y - y), target_x, target_y)
-        })
-    }));
-    let Some((distance, target_x, target_y)) = candidates
-        .into_iter()
-        .min_by(|left, right| left.0.total_cmp(&right.0))
+    let Some(unit) = world.enemies.get(&unit_id).map(|unit| unit.clone()) else {
+        return false;
+    };
+    let Some((_, target_x, target_y)) =
+        crate::network::combat::unit_combat::damaged_allied_building_target(
+            world,
+            unit.team,
+            x,
+            y,
+            f32::INFINITY,
+        )
     else {
         return false;
     };
-    if distance <= desired_range {
-        return false;
+    if (target_x - x).hypot(target_y - y) > desired_range {
+        move_unit_toward(world, unit_id, target_x, target_y, delta_ticks)
+    } else if let Some(mut unit) = world.enemies.get_mut(&unit_id) {
+        unit.velocity_x = 0.0;
+        unit.velocity_y = 0.0;
+        unit.rotation = (target_y - y).atan2(target_x - x).to_degrees();
+        false
+    } else {
+        false
     }
-    move_unit_toward(world, unit_id, target_x, target_y, delta_ticks)
 }
 
 /// Tiles per side of a cell in the static mineable-ore spatial index.
@@ -316,6 +309,50 @@ pub(crate) fn move_unit_toward(
     true
 }
 
+/// Whether `team` has at least one standing damaged building (RepairAI target).
+pub(crate) fn team_has_damaged_building(world: &DynamicWorld, team: u8) -> bool {
+    world.tiles.iter().any(|tile| {
+        tile.block != 0
+            && tile.team == team
+            && dynamic_tile_health(&tile) < crate::game::content::block_health(tile.block) - 0.0001
+    }) || world.base_buildings.iter().any(|building| {
+        building.team == team
+            && building.health < crate::game::content::block_health(building.block) - 0.0001
+    })
+}
+
+/// RepairAI / BuilderAI idle retreat: if an enemy is inside `flee_range` and
+/// the unit is farther than `retreat_dst` from its core, fly home.
+pub(crate) fn unit_idle_retreat(
+    world: &DynamicWorld,
+    unit: &EnemyUnit,
+    flee_range: f32,
+    retreat_dst: f32,
+    delta_ticks: f32,
+) -> bool {
+    if world
+        .unit_orders
+        .get(&unit.id)
+        .is_some_and(|order| order.stances & (1_u32 << 6) != 0)
+    {
+        return false;
+    }
+    let threatened = world.enemies.iter().any(|other| {
+        other.team != unit.team
+            && other.id != unit.id
+            && other.health > 0.0
+            && (other.x - unit.x).hypot(other.y - unit.y) <= flee_range
+    });
+    if !threatened {
+        return false;
+    }
+    let (core_x, core_y) = crate::network::world::core_world_for_team(world, unit.team);
+    if (core_x - unit.x).hypot(core_y - unit.y) <= retreat_dst {
+        return false;
+    }
+    move_unit_toward(world, unit.id, core_x, core_y, delta_ticks)
+}
+
 pub(crate) fn heal_buildings_in_radius(
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
@@ -519,6 +556,159 @@ pub(crate) fn navigation_tile_avoided(
     })
 }
 
+#[derive(Clone, Copy)]
+enum WaveBlockFlag {
+    Core,
+    Storage,
+    Generator,
+    LaunchPad,
+    Factory,
+    Repair,
+    Battery,
+    Reactor,
+    Drill,
+    Any,
+}
+
+fn block_has_wave_flag(block: i16, flag: WaveBlockFlag) -> bool {
+    match flag {
+        WaveBlockFlag::Core => crate::network::buildings::snapshot::is_core_block(block),
+        WaveBlockFlag::Storage => matches!(block, 345..=348),
+        WaveBlockFlag::Generator => matches!(block, 308 | 311 | 313 | 314 | 315 | 316 | 320..=322),
+        WaveBlockFlag::LaunchPad => matches!(block, 425 | 426),
+        WaveBlockFlag::Factory => matches!(block, 182..=191 | 377..=392),
+        WaveBlockFlag::Repair => matches!(block, 245..=249),
+        WaveBlockFlag::Battery => matches!(block, 306 | 307 | 317 | 318),
+        WaveBlockFlag::Reactor => matches!(block, 315 | 316),
+        WaveBlockFlag::Drill => matches!(block, 325..=328 | 337 | 338),
+        WaveBlockFlag::Any => block != 0,
+    }
+}
+
+fn flying_target_flags(unit_type: i16) -> &'static [WaveBlockFlag] {
+    match unit_type {
+        15 => &[WaveBlockFlag::Generator, WaveBlockFlag::Any],
+        16 => &[WaveBlockFlag::Factory, WaveBlockFlag::Any],
+        17 => &[
+            WaveBlockFlag::LaunchPad,
+            WaveBlockFlag::Storage,
+            WaveBlockFlag::Battery,
+            WaveBlockFlag::Any,
+        ],
+        18 => &[WaveBlockFlag::Generator, WaveBlockFlag::Core],
+        19 => &[
+            WaveBlockFlag::Reactor,
+            WaveBlockFlag::Battery,
+            WaveBlockFlag::Core,
+        ],
+        23 => &[
+            WaveBlockFlag::Battery,
+            WaveBlockFlag::Factory,
+            WaveBlockFlag::Any,
+        ],
+        _ => &[WaveBlockFlag::Any],
+    }
+}
+
+const RANDOM_WAVE_FLAGS: &[WaveBlockFlag] = &[
+    WaveBlockFlag::Core,
+    WaveBlockFlag::Storage,
+    WaveBlockFlag::Generator,
+    WaveBlockFlag::LaunchPad,
+    WaveBlockFlag::Factory,
+    WaveBlockFlag::Repair,
+    WaveBlockFlag::Battery,
+    WaveBlockFlag::Reactor,
+    WaveBlockFlag::Drill,
+];
+
+fn nearest_flagged_building(
+    world: &DynamicWorld,
+    enemy: &EnemyUnit,
+    flag: WaveBlockFlag,
+) -> Option<(i32, f32, f32)> {
+    let defender = world.wave_rules.read().default_team;
+    let dynamic = world.tiles.iter().filter_map(|tile| {
+        if tile.block == 0 || tile.team != defender || !block_has_wave_flag(tile.block, flag) {
+            return None;
+        }
+        let x = (tile.position >> 16) as i16 as f32 * 8.0;
+        let y = tile.position as i16 as f32 * 8.0;
+        Some(((x - enemy.x).hypot(y - enemy.y), tile.position, x, y))
+    });
+    let base = world.base_buildings.iter().filter_map(|building| {
+        if building.team != defender || !block_has_wave_flag(building.block, flag) {
+            return None;
+        }
+        let x = (building.position >> 16) as i16 as f32 * 8.0;
+        let y = building.position as i16 as f32 * 8.0;
+        Some(((x - enemy.x).hypot(y - enemy.y), building.position, x, y))
+    });
+    dynamic
+        .chain(base)
+        .min_by(|left, right| left.0.total_cmp(&right.0))
+        .map(|(_, position, x, y)| (position, x, y))
+}
+
+fn flying_ai_navigation_target(
+    world: &DynamicWorld,
+    enemy: &EnemyUnit,
+    core_x: f32,
+    core_y: f32,
+) -> EnemyNavigationTarget {
+    let core_distance = (core_x - enemy.x).hypot(core_y - enemy.y);
+    if core_distance <= enemy.attack_range {
+        return EnemyNavigationTarget {
+            building: None,
+            movement: (core_x, core_y),
+        };
+    }
+    let random = world.wave_rules.read().random_wave_ai;
+    let waves = world.wave_rules.read().waves_enabled;
+    let wave = world
+        .game_state
+        .wave
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if random {
+        let seed = u64::from(enemy.unit_type as u16)
+            + if waves {
+                u64::from(wave)
+            } else {
+                u64::from(enemy.id as u32)
+            };
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
+        for _ in 0..5 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let flag = RANDOM_WAVE_FLAGS[(state as usize) % RANDOM_WAVE_FLAGS.len()];
+            if let Some((position, x, y)) = nearest_flagged_building(world, enemy, flag) {
+                return EnemyNavigationTarget {
+                    building: Some((position, x, y)),
+                    movement: (x, y),
+                };
+            }
+        }
+        if let Some((position, x, y)) = nearest_player_building(world, enemy.x, enemy.y) {
+            return EnemyNavigationTarget {
+                building: Some((position, x, y)),
+                movement: (x, y),
+            };
+        }
+    } else {
+        for flag in flying_target_flags(enemy.unit_type) {
+            if let Some((position, x, y)) = nearest_flagged_building(world, enemy, *flag) {
+                return EnemyNavigationTarget {
+                    building: Some((position, x, y)),
+                    movement: (x, y),
+                };
+            }
+        }
+    }
+    EnemyNavigationTarget {
+        building: None,
+        movement: (core_x, core_y),
+    }
+}
+
 pub(crate) fn enemy_navigation_target(
     world: &DynamicWorld,
     enemy: &EnemyUnit,
@@ -526,24 +716,22 @@ pub(crate) fn enemy_navigation_target(
     core_y: f32,
     avoidance: &[UnitAvoidanceRequest],
 ) -> EnemyNavigationTarget {
-    if enemy.unit_type == HORIZON.unit_type {
-        if let Some((position, x, y)) = nearest_player_building(world, enemy.x, enemy.y) {
-            return EnemyNavigationTarget {
-                building: Some((position, x, y)),
-                movement: (x, y),
-            };
-        }
+    let flying =
+        crate::game::content::unit_movement(enemy.unit_type).flying || enemy.elevation >= 0.09;
+    if flying {
+        return flying_ai_navigation_target(world, enemy, core_x, core_y);
     }
-    if matches!(enemy.unit_type, 15..=19) {
-        return EnemyNavigationTarget {
-            building: None,
-            movement: (core_x, core_y),
-        };
-    }
-    let legs = matches!(enemy.unit_type, 11 | 12);
-    let costs = navigation_field(world, legs);
-    let x = (enemy.x / 8.0).floor() as i32;
-    let y = (enemy.y / 8.0).floor() as i32;
+    let legs = matches!(enemy.unit_type, 11..=14);
+    let costs = if crate::game::content::unit_movement(enemy.unit_type).naval {
+        crate::network::combat::navigation_field_class(
+            world,
+            crate::network::combat::enemy::NavigationClass::Naval,
+        )
+    } else {
+        navigation_field(world, legs)
+    };
+    let x = crate::network::combat::enemy::world_to_tile_in_map(enemy.x, world.width);
+    let y = crate::network::combat::enemy::world_to_tile_in_map(enemy.y, world.height);
     let Some(mut index) = navigation_index(world, x, y) else {
         return EnemyNavigationTarget {
             building: None,
@@ -571,12 +759,19 @@ pub(crate) fn enemy_navigation_target(
         };
         let next_x = next as i32 % world.width;
         let next_y = next as i32 / world.width;
-        first_step.get_or_insert(((next_x as f32 + 0.5) * 8.0, (next_y as f32 + 0.5) * 8.0));
+        if crate::game::content::unit_movement(enemy.unit_type).naval
+            && !crate::game::content::floor_is_liquid(crate::network::combat::floor_at_tile(
+                world, next_x, next_y,
+            ))
+        {
+            break;
+        }
+        first_step.get_or_insert((next_x as f32 * 8.0, next_y as f32 * 8.0));
         let position = (next_x << 16) | (next_y as u16 as i32);
         if !legs {
             if let Some(tile) = dynamic_at(world, position).filter(|tile| {
                 tile.block != 0
-                    && tile.team == 1
+                    && tile.team == world.wave_rules.read().default_team
                     && crate::game::content::block_navigation(tile.block).solid
             }) {
                 return EnemyNavigationTarget {
@@ -585,7 +780,8 @@ pub(crate) fn enemy_navigation_target(
                 };
             }
             if let Some(building) = base_building_at(world, position).filter(|building| {
-                building.team == 1 && crate::game::content::block_navigation(building.block).solid
+                building.team == world.wave_rules.read().default_team
+                    && crate::game::content::block_navigation(building.block).solid
             }) {
                 let x = (building.position >> 16) as i16 as f32 * 8.0;
                 let y = building.position as i16 as f32 * 8.0;
@@ -600,6 +796,53 @@ pub(crate) fn enemy_navigation_target(
     EnemyNavigationTarget {
         building: None,
         movement: first_step.unwrap_or((enemy.x, enemy.y)),
+    }
+}
+
+/// First flow-field step toward an arbitrary world point (Pathfinder
+/// `PositionTarget`). Flying units go straight; grounded/naval units walk
+/// the destination field so concave walls do not stall command/squad orders.
+pub(crate) fn first_flow_step_toward(
+    world: &DynamicWorld,
+    enemy: &EnemyUnit,
+    goal_x: f32,
+    goal_y: f32,
+    avoidance: &[UnitAvoidanceRequest],
+) -> (f32, f32) {
+    if crate::game::content::unit_movement(enemy.unit_type).flying || enemy.elevation >= 0.09 {
+        return (goal_x, goal_y);
+    }
+    let class = if crate::game::content::unit_movement(enemy.unit_type).naval {
+        crate::network::combat::enemy::NavigationClass::Naval
+    } else if matches!(enemy.unit_type, 11..=14) {
+        crate::network::combat::enemy::NavigationClass::Legs
+    } else {
+        crate::network::combat::enemy::NavigationClass::Ground
+    };
+    let costs = crate::network::combat::navigation_field_toward(
+        world,
+        class,
+        crate::network::combat::enemy::world_to_tile_in_map(goal_x, world.width),
+        crate::network::combat::enemy::world_to_tile_in_map(goal_y, world.height),
+        enemy.team,
+    );
+    let x = crate::network::combat::enemy::world_to_tile_in_map(enemy.x, world.width);
+    let y = crate::network::combat::enemy::world_to_tile_in_map(enemy.y, world.height);
+    let Some(index) = navigation_index(world, x, y) else {
+        return (goal_x, goal_y);
+    };
+    let next = choose_navigation_step_with(&costs, world.width, world.height, index, |candidate| {
+        let candidate_x = candidate as i32 % world.width;
+        let candidate_y = candidate as i32 / world.width;
+        !navigation_tile_avoided(avoidance, enemy.id, candidate_x, candidate_y)
+    });
+    match next {
+        Some(next) => {
+            let next_x = next as i32 % world.width;
+            let next_y = next as i32 / world.width;
+            (next_x as f32 * 8.0, next_y as f32 * 8.0)
+        }
+        None => (goal_x, goal_y),
     }
 }
 

@@ -47,7 +47,7 @@ fn logic_test_world(save_name: &str) -> crate::network::world::DynamicWorld {
         base_buildings: DashMap::new(),
         floors: vec![0i16; cells],
         overlays: vec![0i16; cells],
-        enemy_spawns: Vec::new(),
+        enemy_spawns: parking_lot::RwLock::new(Vec::new()),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -57,6 +57,7 @@ fn logic_test_world(save_name: &str) -> crate::network::world::DynamicWorld {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -67,10 +68,12 @@ fn logic_test_world(save_name: &str) -> crate::network::world::DynamicWorld {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir()
             .join(format!("logic-{save_name}-{}.json", std::process::id())),
         network_template: Arc::new(Vec::new()),
@@ -90,6 +93,8 @@ fn logic_test_world(save_name: &str) -> crate::network::world::DynamicWorld {
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     }
 }
 
@@ -145,13 +150,24 @@ fn jump_loop_with_named_label_stops() {
 #[test]
 fn numeric_jump_and_expressions() {
     let state = run(
-        "set x 0\nset x x + 2\njump 2 greaterThan x 10\nset x 999",
+        "set x 0\nop add x x 2\njump 2 greaterThan x 10\nset x 999",
         10,
         8,
     );
     // jump 2 skips `set x 999` when x > 10; with x = 2 it does NOT jump,
     // so x becomes 999 on the first tick... then loops.
     assert_eq!(var_num(&state, "x"), 999.0);
+}
+
+#[test]
+fn set_stores_single_value_token_like_vanilla_1597() {
+    // Verified against the 159.7 JAR: LParser.token() splits on
+    // whitespace and LogicIO.read assigns SetStatement.to = tokens[1],
+    // from = tokens[2]; extra tokens are silently dropped. So
+    // `set a b + c` stores the literal value token `b` (a's value is
+    // b's value), it never parses `b + c` as an expression.
+    let state = run("set b 5\nset c 7\nset a b + c", 1, 8);
+    assert_eq!(var_num(&state, "a"), 5.0);
 }
 
 #[test]
@@ -169,12 +185,51 @@ fn end_stops_execution() {
 }
 
 #[test]
-fn setrate_limits_budget() {
-    // Tick 1 runs at the block default (8): setrate + 3 adds -> c = 3.
-    // Tick 2 applies rate 60/s -> 1 instruction: only setrate runs.
-    let state = run("setrate 60\nop add c c 1\nop add c c 1\nop add c c 1", 2, 8);
-    // tick1: budget 8 -> 2 loops -> c = 6; tick2: rate 60 -> 1 instr.
-    assert_eq!(var_num(&state, "c"), 6.0);
+fn setrate_clamps_raw_amount_to_block_ipt() {
+    // Official SetRateI: clamp(amount.numi(), 1, instructionsPerTick) with
+    // NO /60 and no rounding — `setrate 60` on an 8-ipt logic processor
+    // settles at 8 instructions/tick.
+    let state = run("setrate 60", 1, 8);
+    let idx = state.program.var_index("@ipt").expect("ipt var");
+    assert_eq!(state.vars[idx].numval, 8.0, "raw 60 must clamp to cap 8");
+    assert_eq!(state.rate, 8.0);
+}
+
+#[test]
+fn setrate_privileged_can_reach_max_instructions_per_tick() {
+    // Privileged processors clamp against maxInstructionsPerTick = 40.
+    let program = compile("setrate 40").expect("compile");
+    let mut state = ExecutorState::new(program, vec![]);
+    state.privileged = true;
+    state.ipt_cap = 40;
+    state.run_tick(None, 8);
+    assert_eq!(state.rate, 40.0);
+}
+
+#[test]
+fn setrate_minimum_is_one_instruction_per_tick() {
+    // amount.numi() of 0.5 truncates to 0, clamped up to 1.
+    let state = run("setrate 0.5", 1, 8);
+    assert_eq!(state.rate, 1.0);
+}
+
+#[test]
+fn setrate_updates_ipt_constant_immediately() {
+    // SetRateI writes exec.ipt.numval = build.ipt right away.
+    let state = run("setrate 6", 1, 25);
+    let idx = state.program.var_index("@ipt").expect("ipt var");
+    assert_eq!(state.vars[idx].numval, 6.0);
+}
+
+#[test]
+fn raised_rate_persists_across_ticks_over_block_default() {
+    // Official LogicBuild.updateTile keeps build.ipt across ticks: a raised
+    // rate must lift the effective budget above the block default passed in.
+    let program = compile("op add c c 1").expect("compile");
+    let mut state = ExecutorState::new(program, vec![]);
+    state.rate = 4.0;
+    state.run_tick(None, 2); // block default 2, raised rate 4
+    assert_eq!(var_num(&state, "c"), 4.0);
 }
 
 fn display_fields(command: u64) -> [i32; 7] {
@@ -372,6 +427,55 @@ fn ubind_compiles_unit_type() {
 }
 
 #[test]
+fn weathersense_and_weatherset_compile() {
+    let program = compile("weathersense raining @rain").unwrap();
+    assert!(matches!(program.instructions[0], Instr::WeatherSense(_, _)));
+    let program = compile("weatherset @rain true").unwrap();
+    assert!(matches!(program.instructions[0], Instr::WeatherSet(_, _)));
+}
+
+#[test]
+fn noop_compiles_silently() {
+    let (program, diagnostics) = compile_report("noop\nset x 1");
+    let program = program.expect("noop must compile");
+    assert!(matches!(program.instructions[0], Instr::NoOp));
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| !d.to_lowercase().contains("noop")),
+        "official noop must not warn: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn vanilla_client_statements_compile_as_silent_noops() {
+    for source in [
+        "sync 1",
+        "bullet @flare 0 0 0 0 0 0 0",
+        "cutscene pan 0 0 0 0",
+        "effect warn 0 0 0 @copper",
+        "playsound shoot 0 0 1 1 0",
+        "playmusic menu 1",
+        "makemarker shape m 0 0",
+        "setmarker text m hello",
+        "localeprint hello",
+        "query unitCount result @sharded @dagger",
+        "clientdata id 0 0",
+    ] {
+        let (program, diagnostics) = compile_report(source);
+        let program = program.unwrap_or_else(|| panic!("{source} must compile"));
+        assert!(
+            matches!(program.instructions[0], Instr::NoOp),
+            "{source} should be a server-side no-op"
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "vanilla client statement {source} must not diagnose: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
 fn ucontrol_subcommands_compile() {
     let program = compile("ucontrol move 100 200").unwrap();
     assert!(matches!(
@@ -393,8 +497,8 @@ fn ucontrol_subcommands_compile() {
         program.instructions[0],
         Instr::Ucontrol(UcOp::GetBlock(_, _, _, _))
     ));
-    // Unsupported subcommands compile to NoOp without killing the program.
-    let program = compile("set x 1\nucontrol approach 1 2 3").unwrap();
+    // Malformed arities still compile to NoOp without killing the program.
+    let program = compile("set x 1\nucontrol approach 1 2").unwrap();
     assert!(matches!(program.instructions[0], Instr::Set(_, _)));
     assert!(matches!(program.instructions[1], Instr::NoOp));
 }
@@ -556,7 +660,9 @@ fn fetch_resolves_units_buildings_and_count_in_world() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     world.enemies.insert(
@@ -592,7 +698,9 @@ fn fetch_resolves_units_buildings_and_count_in_world() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     world.players.insert(
@@ -665,6 +773,7 @@ fn getblock_and_setblock_compile_and_execute() {
     world.tiles.insert(
         pos,
         DynamicTile {
+            logic_control: None,
             position: pos,
             block: 349,
             team: 1,
@@ -720,6 +829,11 @@ fn getblock_and_setblock_compile_and_execute() {
         assert_eq!(tile.block, 257);
         assert_eq!(tile.config, vec![1, 2, 3], "config survives same setblock");
     }
+    let calls = world.game_state.extras.take_calls();
+    assert!(
+        !calls.is_empty(),
+        "privileged setblock must queue a SetTile Call"
+    );
     // An ordinary (unprivileged) processor cannot place.
     let mut state = ExecutorState::new(program, vec![]);
     state.privileged = false;
@@ -752,6 +866,25 @@ fn getblock_and_setblock_compile_and_execute() {
         let tile = world.tiles.get(&placed).unwrap();
         assert_eq!(tile.rotation, 3, "rotation clamped to 3");
     }
+    let program = compile("setblock floor 22 14 14 @sharded 0").unwrap();
+    let mut state = ExecutorState::new(program, vec![]);
+    state.privileged = true;
+    state.run_tick(Some(&view), 8);
+    assert_eq!(
+        crate::network::combat::floor_at_tile(&world, 14, 14),
+        22,
+        "privileged setblock floor must write a live floor override"
+    );
+    let program = compile("getblock floor f 14 14").unwrap();
+    let mut state = ExecutorState::new(program, vec![]);
+    state.privileged = true;
+    state.run_tick(Some(&view), 8);
+    assert_eq!(var_num(&state, "f"), 22.0);
+    let calls = world.game_state.extras.take_calls();
+    assert!(
+        calls.iter().any(|frame| !frame.is_empty()),
+        "setblock floor must queue a SetFloor Call"
+    );
 }
 
 #[test]
@@ -824,9 +957,17 @@ fn ucontrol_inventory_subcommands_compile() {
         Instr::Ucontrol(UcOp::ItemTake(_, item, _)) => assert_eq!(*item, 7),
         _ => panic!("expected ItemTake"),
     }
-    // Unsupported subcommands still compile to NoOp.
-    let program = compile("set x 1\nucontrol approach 1 2 3").unwrap();
-    assert!(matches!(program.instructions[1], Instr::NoOp));
+    // approach is implemented (LogicAI moveTo with the approach band).
+    let program = compile("ucontrol approach 1 2 3").unwrap();
+    match &program.instructions[0] {
+        Instr::Ucontrol(UcOp::Approach(x, y, radius)) => {
+            // 1, 2, 3 compile to numeric literals.
+            assert!(matches!(x, crate::logic::compiler::Expr::Num(_)));
+            assert!(matches!(y, crate::logic::compiler::Expr::Num(_)));
+            assert!(matches!(radius, crate::logic::compiler::Expr::Num(_)));
+        }
+        other => panic!("expected Approach, got {other:?}"),
+    }
 }
 
 #[test]
@@ -864,12 +1005,12 @@ fn ucontrol_shoot_and_unbind_compile() {
 fn ucontrol_build_and_lookup_compile() {
     let program = compile("ucontrol build 100 200 @conveyor 0").unwrap();
     match &program.instructions[0] {
-        Instr::Ucontrol(UcOp::Build(_, _, block, _)) => assert_eq!(*block, 257),
+        Instr::Ucontrol(UcOp::Build(_, _, block, _, _)) => assert_eq!(*block, 257),
         _ => panic!("expected Build"),
     }
     let program = compile("ucontrol build 100 200 \"duo\" 1").unwrap();
     match &program.instructions[0] {
-        Instr::Ucontrol(UcOp::Build(_, _, block, _)) => assert_eq!(*block, 349),
+        Instr::Ucontrol(UcOp::Build(_, _, block, _, _)) => assert_eq!(*block, 349),
         _ => panic!("expected Build"),
     }
     let program = compile("lookup block 257 result").unwrap();
@@ -950,6 +1091,7 @@ fn ubind_world(team: u8) -> (std::sync::Arc<crate::network::world::DynamicWorld>
     world.tiles.insert(
         pos,
         crate::network::world::DynamicTile {
+            logic_control: None,
             position: pos,
             block: 431,
             team,
@@ -1000,7 +1142,9 @@ fn ubind_insert_unit(
             authority: crate::network::world::UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     world.register_unit_group(id);
@@ -1954,6 +2098,7 @@ fn p003_second_processor_takes_over_with_its_position() {
     world.tiles.insert(
         pos_b,
         crate::network::world::DynamicTile {
+            logic_control: None,
             position: pos_b,
             block: 431,
             team: 1,
@@ -2079,6 +2224,7 @@ fn place_processor_instance(
     team: u8,
 ) -> u64 {
     let mut tile = crate::network::world::DynamicTile {
+        logic_control: None,
         position: pos,
         block: 431,
         team,
@@ -2144,6 +2290,7 @@ fn p0c1_replace_processor_with_wall_releases_lease() {
     insert_logic_unit(&world, UNIT, None);
     run_logic(&world, pos, "ubind @dagger\nucontrol flag 1\nstop", 3);
     let mut wall = crate::network::world::DynamicTile {
+        logic_control: None,
         position: pos,
         block: 216, // copper-wall
         team: 1,
@@ -2703,14 +2850,15 @@ fn spawnwave_setrule_explosion_setprop_mutate_world() {
     assert!(diagnostics.iter().any(|d| d.contains("setrule")));
     assert!(diagnostics.iter().any(|d| d.contains("explosion")));
 
-    let mut world = logic_test_world("p111-world");
-    if world.enemy_spawns.is_empty() {
-        world.enemy_spawns.push((5, 5));
+    let world = logic_test_world("p111-world");
+    if world.enemy_spawns.read().is_empty() {
+        world.enemy_spawns.write().push((5, 5));
     }
     let pos = (10 << 16) | 10;
     world.tiles.insert(
         pos,
         crate::network::world::DynamicTile {
+            logic_control: None,
             position: pos,
             block: 442,
             team: 1,
@@ -2732,6 +2880,9 @@ fn spawnwave_setrule_explosion_setprop_mutate_world() {
             unit_amount: 1,
             spawn: -1,
             effect: -1,
+            items: Vec::new(),
+            team: None,
+            payloads: Vec::new(),
         }];
     }
     let world = std::sync::Arc::new(world);
@@ -3392,6 +3543,8 @@ fn can_create_unit_under_cap_true() {
     let mut world = logic_test_world("can-create-under-cap");
     world.sharded_unit_cap = 2;
     world.wave_rules.write().disable_unit_cap = false;
+    world.wave_rules.write().unit_cap = 2;
+    world.wave_rules.write().unit_cap_variable = false;
     assert!(crate::network::economy::can_create_unit(&world, 1, 0));
 }
 
@@ -3400,6 +3553,8 @@ fn can_create_unit_at_cap_false() {
     let mut world = logic_test_world("can-create-at-cap");
     world.sharded_unit_cap = 1;
     world.wave_rules.write().disable_unit_cap = false;
+    world.wave_rules.write().unit_cap = 1;
+    world.wave_rules.write().unit_cap_variable = false;
     world.enemies.insert(
         3_100_001,
         crate::network::world::EnemyUnit {
@@ -3677,4 +3832,307 @@ fn logic_spawn_numeric_team_is_valid() {
         true,
     );
     assert!(world.enemies.iter().any(|u| u.team == 2));
+}
+
+#[test]
+fn select_takes_then_branch_on_true_condition() {
+    // JAR LogicIO.read field order: select result op comp0 comp1 a b
+    let state = run("select r lessThan 1 2 10 20\nend", 1, 10);
+    assert_eq!(var_num(&state, "r"), 10.0, "1 < 2 must select `a`");
+}
+
+#[test]
+fn select_takes_else_branch_on_false_condition() {
+    let state = run("select r greaterThan 1 2 10 20\nend", 1, 10);
+    assert_eq!(var_num(&state, "r"), 20.0, "1 > 2 must select `b`");
+}
+
+#[test]
+fn select_copies_object_values_whole() {
+    // SelectI uses LVar.set: the chosen operand keeps its object identity,
+    // unlike `op` which always produces a number.
+    let state = run("select r strictEqual @copper @copper \"obj\" 0\nend", 1, 10);
+    let idx = state.program.var_index("r").expect("r var");
+    assert!(state.vars[idx].isobj, "select must copy object operands");
+}
+
+#[test]
+fn select_compiles_without_noop_diagnostic() {
+    let (_, diagnostics) = compile_report("select r equal 0 0 1 0\n");
+    assert!(
+        !diagnostics.iter().any(|d| d.contains("'select'")),
+        "select must not degrade to NoOp: {diagnostics:?}"
+    );
+}
+
+/// GlobalVars.update() state constants (@time, @tick, @waveNumber, ...)
+/// must reflect live game state instead of staying at 0 (H17).
+#[test]
+fn globalvars_runtime_constants_reflect_world_state() {
+    let world = spawn_logic_world("globalvars-constants");
+    let pos = (1 << 16) | 1;
+    world
+        .game_state
+        .world_ticks
+        .store(9000, std::sync::atomic::Ordering::Relaxed);
+    world
+        .game_state
+        .wave
+        .store(7, std::sync::atomic::Ordering::Relaxed);
+    *world.game_state.wave_time.write() = 3600.0;
+
+    let source = "set t @time\nset k @tick\nset s @second\nset m @minute\nset w @waveNumber\nset wt @waveTime\nset mw @mapw\nset mh @maph\nset sv @server\nset cl @client";
+    let program = compile(&format!("{source}\nstop")).unwrap();
+    let mut state = ExecutorState::new(program, vec![]);
+    let connections = dashmap::DashMap::new();
+    let view = WorldView {
+        world: &world,
+        processor_pos: pos,
+        out: &connections,
+    };
+    state.run_tick(Some(&view), 32);
+
+    assert_eq!(var_num(&state, "t"), 150_000.0); // 9000/60*1000 ms
+    assert_eq!(var_num(&state, "k"), 9000.0);
+    assert_eq!(var_num(&state, "s"), 150.0);
+    assert_eq!(var_num(&state, "m"), 2.5);
+    assert_eq!(var_num(&state, "w"), 7.0);
+    assert_eq!(var_num(&state, "wt"), 60.0); // 3600/60
+    assert_eq!(var_num(&state, "mw"), 32.0);
+    assert_eq!(var_num(&state, "mh"), 32.0);
+    assert_eq!(var_num(&state, "sv"), 1.0, "dedicated host is a server");
+    assert_eq!(var_num(&state, "cl"), 0.0);
+}
+
+/// GlobalVars.java:61-63 math constants compile to their exact values.
+#[test]
+fn globalvars_math_constants_compile_to_values() {
+    let state = run("set e @e\nset d @degToRad\nset r @radToDeg", 1, 10);
+    assert!((var_num(&state, "e") - std::f64::consts::E).abs() < 1e-12);
+    assert!((var_num(&state, "d") - std::f64::consts::PI / 180.0).abs() < 1e-15);
+    assert!((var_num(&state, "r") - 180.0 / std::f64::consts::PI).abs() < 1e-12);
+}
+
+/// Audit H16: the previously-missing senseable LAccess fields resolve to
+/// real values instead of degrading the whole `sensor` instruction to NoOp.
+#[test]
+fn expanded_laccess_sensors_resolve_without_noop() {
+    // Every official parameterless LAccess name must parse and compile.
+    let names = [
+        "totalItems",
+        "firstItem",
+        "totalLiquids",
+        "totalPower",
+        "itemCapacity",
+        "liquidCapacity",
+        "powerCapacity",
+        "powerNetStored",
+        "powerNetCapacity",
+        "powerNetIn",
+        "powerNetOut",
+        "ammo",
+        "ammoCapacity",
+        "currentAmmoType",
+        "memoryCapacity",
+        "maxHealth",
+        "heat",
+        "shield",
+        "armor",
+        "efficiency",
+        "progress",
+        "timescale",
+        "rotation",
+        "x",
+        "y",
+        "velocityX",
+        "velocityY",
+        "shootX",
+        "shootY",
+        "operations",
+        "size",
+        "solid",
+        "dead",
+        "range",
+        "shooting",
+        "boosting",
+        "mineX",
+        "mineY",
+        "mining",
+        "buildX",
+        "buildY",
+        "building",
+        "breaking",
+        "speed",
+        "team",
+        "type",
+        "flag",
+        "flying",
+        "controlled",
+        "controller",
+        "name",
+        "payloadCount",
+        "payloadType",
+        "totalPayload",
+        "payloadCapacity",
+        "maxUnits",
+        "id",
+        "selectedBlock",
+        "selectedRotation",
+        "bulletLifetime",
+        "bulletTime",
+        "health",
+    ];
+    for name in names {
+        let (_, diagnostics) = compile_report(&format!("sensor r @{name} @unit\n"));
+        assert!(
+            !diagnostics.iter().any(|d| d.contains("'sensor'")),
+            "sensor @{name} must not compile to NoOp: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn unit_max_health_and_speed_sensors_use_official_specs() {
+    use crate::network::world::EnemyUnit;
+    let world = logic_test_world("maze");
+    let dagger = EnemyUnit {
+        id: 110,
+        unit_type: 0,
+        x: 10.0,
+        y: 10.0,
+        team: 1,
+        health: 75.0,
+        velocity_x: 1.5,
+        ..Default::default()
+    };
+    world.enemies.insert(110, dagger);
+    let view = WorldView {
+        world: &world,
+        processor_pos: (1 << 16) | 1,
+        out: &crate::network::outbound::NOOP,
+    };
+    assert_eq!(
+        view.unit_sensor(110, LAccess::MaxHealth),
+        SensorValue::Num(150.0)
+    );
+    assert_eq!(view.unit_sensor(110, LAccess::Speed), SensorValue::Num(0.5));
+    assert_eq!(
+        view.unit_sensor(110, LAccess::VelocityX),
+        SensorValue::Num(1.5)
+    );
+    assert_eq!(view.unit_sensor(110, LAccess::Type), SensorValue::Num(0.0));
+    assert_eq!(view.unit_sensor(110, LAccess::Id), SensorValue::Num(110.0));
+}
+
+/// Audit H18: `control shoot x y shoot` stores the logic aim state on the
+/// building and `simulate_turrets` consumes it instead of automatic
+/// targeting.
+#[test]
+fn control_shoot_aims_turret_and_holds_fire_when_disabled() {
+    let world = spawn_logic_world("control-shoot");
+    let pos = (5 << 16) | 5;
+    // A duo turret with ammo, fed by logic from an adjacent processor.
+    let mut turret = crate::network::world::DynamicTile {
+        payload_inventory: Vec::new(),
+        position: pos,
+        block: 349,
+        rotation: 0,
+        team: 1,
+        config: Vec::new(),
+        ..Default::default()
+    };
+    turret.occupied = vec![pos];
+    turret.stored_item = 0; // copper ammo
+    turret.ammo_units = 10.0;
+    world.tiles.insert(pos, turret);
+    let enemy_id = 4321;
+    world.enemies.insert(
+        enemy_id,
+        crate::network::world::EnemyUnit {
+            id: enemy_id,
+            unit_type: 0,
+            team: 2,
+            x: 200.0,
+            y: 40.0,
+            health: 100.0,
+            ..Default::default()
+        },
+    );
+
+    let connections = dashmap::DashMap::new();
+    let view = WorldView {
+        world: &world,
+        processor_pos: (5 << 16) | 6,
+        out: &connections,
+    };
+    // `t` is a Building object reference to the turret.
+    let mut state = ExecutorState::new(compile("control shoot t 200 40 1\nstop").unwrap(), vec![]);
+    // Provide a Building object for `t`.
+    if let Some(idx) = state.program.var_index("t") {
+        state.vars[idx].isobj = true;
+        state.vars[idx].objval = LObject::Building(pos);
+    }
+    state.privileged = true;
+    state.run_tick(Some(&view), 16);
+    assert!(
+        world.tiles.get(&pos).unwrap().logic_control.is_some(),
+        "logic shoot must store aim state"
+    );
+
+    // The turret sim fires toward the aimed point while shooting = 1
+    // (duo reload = 20 ticks).
+    let power = std::collections::HashMap::new();
+    for _ in 0..25 {
+        crate::network::combat::simulate_turrets(&world, &connections, 1.0, &power);
+    }
+    assert!(
+        !world.projectiles.is_empty(),
+        "logic-controlled turret must fire"
+    );
+    let projectile = world.projectiles.iter().next().unwrap().clone();
+    assert_eq!(projectile.bullet_id, 113);
+
+    // shoot = 0 holds fire.
+    // Collect keys before removing: iterating a DashMap while mutating it
+    // deadlocks on shard re-entry (same-thread lock ordering).
+    let projectile_ids: Vec<i32> = world.projectiles.iter().map(|p| *p.key()).collect();
+    for id in projectile_ids {
+        world.projectiles.remove(&id);
+    }
+    let mut state = ExecutorState::new(compile("control shoot t 200 40 0\nstop").unwrap(), vec![]);
+    if let Some(idx) = state.program.var_index("t") {
+        state.vars[idx].isobj = true;
+        state.vars[idx].objval = LObject::Building(pos);
+    }
+    state.privileged = true;
+    state.run_tick(Some(&view), 16);
+    for _ in 0..25 {
+        crate::network::combat::simulate_turrets(&world, &connections, 1.0, &power);
+    }
+    assert!(
+        world.projectiles.is_empty(),
+        "shooting=0 must hold fire even with ammo"
+    );
+}
+
+/// Audit H19: the official `message` statement compiles and, on a headless
+/// host, sets outSuccess = 1 and clears the print buffer (LExecutor.java
+/// FlushMessageI:1932-1936) instead of degrading to NoOp.
+#[test]
+fn message_statement_sets_success_and_clears_buffer() {
+    let state = run("print \"hi\"\nmessage announce 5 result\nstop", 1, 16);
+    assert_eq!(var_num(&state, "result"), 1.0);
+    assert!(
+        state.text_buffer.is_empty(),
+        "headless message must clear the print buffer"
+    );
+
+    // All official MessageType tokens compile without a NoOp diagnostic.
+    for kind in ["notify", "announce", "toast", "mission"] {
+        let (_, diagnostics) = compile_report(&format!("message {kind} 3 result\n"));
+        assert!(
+            !diagnostics.iter().any(|d| d.contains("'message'")),
+            "message {kind} must not degrade: {diagnostics:?}"
+        );
+    }
 }

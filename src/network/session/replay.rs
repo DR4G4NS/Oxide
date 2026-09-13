@@ -89,6 +89,49 @@ pub async fn send_world_stream(socket: &mut OwnedWriteHalf, world: &[u8]) -> std
     Ok(())
 }
 
+/// `NetworkIO.writeRequiredAssets`: zlib-compressed `writeInt(count)` then hashes.
+/// Oxide 0.1 has no mods, so count is 0.
+pub fn empty_asset_requirement_payload() -> std::io::Result<Vec<u8>> {
+    use flate2::write::ZlibEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(&0i32.to_be_bytes())?;
+    encoder.finish()
+}
+
+pub fn asset_requirement_stream_frames(payload: &[u8]) -> std::io::Result<Vec<Vec<u8>>> {
+    let stream_id = 2i32;
+    let mut begin = Vec::with_capacity(9);
+    begin.extend_from_slice(&stream_id.to_be_bytes());
+    begin.extend_from_slice(&(payload.len() as i32).to_be_bytes());
+    begin.push(4); // Net.packetIdAssetRequirementStream
+    let mut frames = Vec::new();
+    let mut frame = Vec::new();
+    write_tcp_packet(&mut frame, 0, &begin, false)?;
+    frames.push(frame);
+    for chunk in payload.chunks(1024) {
+        let mut body = Vec::with_capacity(chunk.len() + 6);
+        body.extend_from_slice(&stream_id.to_be_bytes());
+        body.extend_from_slice(&(chunk.len() as i16).to_be_bytes());
+        body.extend_from_slice(chunk);
+        let mut frame = Vec::new();
+        write_tcp_packet(&mut frame, 1, &body, false)?;
+        frames.push(frame);
+    }
+    Ok(frames)
+}
+
+pub async fn send_asset_requirement_stream(
+    socket: &mut OwnedWriteHalf,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    for frame in asset_requirement_stream_frames(payload)? {
+        socket.write_all(&frame).await?;
+    }
+    Ok(())
+}
+
 pub async fn send_generated_packet(
     writer: &mut OwnedWriteHalf,
     packet_id: u8,
@@ -130,8 +173,11 @@ pub fn encode_all_player_snapshots(world: &DynamicWorld) -> std::io::Result<Vec<
     sessions
         .iter()
         .map(|session| {
-            let combat = world.players.get(&session.unit_id);
-            encode_initial_entity_snapshot(session, combat.as_deref())
+            let combat = world
+                .players
+                .get(&session.unit_id)
+                .map(|entry| entry.clone());
+            encode_initial_entity_snapshot_in(session, combat.as_ref(), Some(world))
         })
         .collect()
 }
@@ -158,7 +204,7 @@ pub async fn send_player_spawn(
     spawn.write_i(player.id)?;
     send_generated_packet(writer, PLAYER_SPAWN_PACKET_ID, &spawn, false).await?;
 
-    let snapshot = encode_initial_entity_snapshot(player, combat.as_ref())?;
+    let snapshot = encode_initial_entity_snapshot_in(player, combat.as_ref(), Some(world))?;
     send_generated_packet(writer, ENTITY_SNAPSHOT_PACKET_ID, &snapshot, true).await
 }
 
@@ -219,6 +265,13 @@ pub async fn replay_dynamic_tiles(
             let mut payload = Vec::new();
             crate::network::codec::Writes::write_i(&mut payload, tile.position)?;
             send_generated_packet(writer, REMOVE_TILE_PACKET_ID, &payload, false).await?;
+            continue;
+        }
+        // ConstructBlock tiles are not finished buildings. ConstructFinish
+        // with id 5..=20 would spawn an empty ConstructBuild (`current = air`)
+        // that updateTile removes; BeginPlace + BlockSnapshot replay the
+        // vanilla writeSync progress/previous/current the shader reads.
+        if crate::network::buildings::construction::is_construct_block(tile.block) {
             continue;
         }
         let team = tile.team;

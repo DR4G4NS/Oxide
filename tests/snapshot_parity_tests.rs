@@ -25,6 +25,8 @@ use oxide::network::world::DynamicTile;
 
 fn tile(block: i16) -> DynamicTile {
     DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position: (45 << 16) | 100,
         block,
         rotation: 2,
@@ -331,7 +333,7 @@ fn conveyor_snapshot_matches_conveyor_build_write() {
         t.transport_progress = 0.5;
     }));
     assert_eq!(input.read_b().unwrap(), 1 | 8, "item module");
-    read_item_module(&mut input, &[]);
+    read_item_module(&mut input, &[(5, 2)]);
     read_base_tail(&mut input, 255, 255);
     assert_eq!(input.read_i().unwrap(), 2, "len");
     let y = |progress: f32| (progress * 255.0 - 128.0) as i8 as u8;
@@ -361,7 +363,7 @@ fn conveyor_snapshot_repairs_legacy_overflow_and_caps_official_capacity() {
         t.transport_progress = 21_086.43;
     }));
     assert_eq!(input.read_b().unwrap(), 1 | 8, "item module");
-    read_item_module(&mut input, &[]);
+    read_item_module(&mut input, &[(5, 1), (6, 1), (7, 1)]);
     read_base_tail(&mut input, 255, 255);
     assert_eq!(input.read_i().unwrap(), 3, "official conveyor capacity");
 
@@ -402,8 +404,22 @@ fn stack_conveyor_snapshot_matches_stack_conveyor_build_write() {
     assert_eq!(input.read_b().unwrap(), 1 | 8);
     read_item_module(&mut input, &[(5, 3)]);
     read_base_tail_passive(&mut input);
-    assert_eq!(input.read_i().unwrap(), -1);
+    assert_eq!(
+        input.read_i().unwrap(),
+        (45 << 16) | 100,
+        "defaults link to own tile position when items present"
+    );
     assert_eq!(input.read_f().unwrap(), 0.0);
+    assert_consumed(&mut input);
+
+    // An empty sending dock recharges from 2, not 1. Inspection must
+    // preserve that delay before the client accepts another batch.
+    let mut input = decode(encode(259, |t| t.stack_cooldown = 2.0));
+    assert_eq!(input.read_b().unwrap(), 1 | 8);
+    read_item_module(&mut input, &[]);
+    read_base_tail_passive(&mut input);
+    assert_eq!(input.read_i().unwrap(), -1);
+    assert_eq!(input.read_f().unwrap(), 2.0);
     assert_consumed(&mut input);
 
     // surge conveyor: items + power.
@@ -765,6 +781,33 @@ fn nuclear_and_impact_reactors_append_heat_or_warmup() {
 }
 
 #[test]
+fn unit_factory_snapshot_writes_progress_plan_payload_and_power_links() {
+    // UnitFactoryBuild.write: PayloadBlock + f progress + s currentPlan +
+    // TypeIO.writeVecNullable(commandPos) + TypeIO.writeCommand(command).
+    let link = (10 << 16) | 10;
+    let mut input = decode(encode(377, |t| {
+        t.production_progress = 450.0;
+        t.config = vec![1, 0, 0, 0, 1]; // crawler
+        t.inventory = vec![(9, 8), (5, 10)];
+        t.power_links = vec![link];
+    }));
+    assert_eq!(input.read_b().unwrap(), 1 | 2 | 8);
+    read_item_module(&mut input, &[(9, 8), (5, 10)]);
+    read_power_module(&mut input, &[link], 0.0);
+    read_base_tail_powered(&mut input);
+    assert_eq!(input.read_f().unwrap(), 0.0, "payVector.x");
+    assert_eq!(input.read_f().unwrap(), 0.0, "payVector.y");
+    assert_eq!(input.read_f().unwrap(), 180.0, "payRotation");
+    assert!(!input.read_bool().unwrap(), "payload null");
+    assert!((input.read_f().unwrap() - 450.0).abs() < 0.001, "progress");
+    assert_eq!(input.read_s().unwrap(), 1, "currentPlan crawler");
+    assert!(input.read_f().unwrap().is_nan(), "commandPos x");
+    assert!(input.read_f().unwrap().is_nan(), "commandPos y");
+    assert_eq!(input.read_b().unwrap(), 255, "command null");
+    assert_consumed(&mut input);
+}
+
+#[test]
 fn variable_reactor_appends_heat_instability_warmup() {
     let mut input = decode(encode(323, |_| {}));
     assert_eq!(input.read_b().unwrap(), 2 | 4 | 8);
@@ -886,8 +929,12 @@ fn unit_assembler_snapshot_matches_build_write() {
     assert_eq!(input.read_f().unwrap(), 0.0, "payVector.y");
     assert_eq!(input.read_f().unwrap(), 0.0, "payRotation");
     assert!(!input.read_bool().unwrap(), "payload");
-    // UnitAssemblerBuild.write
-    assert!((input.read_f().unwrap() - 55.0).abs() < 0.001, "progress");
+    // UnitAssemblerBuild.write: progress is a 0..1 fraction of the tier-0
+    // tank plan time (3000 ticks): 55/3000.
+    assert!(
+        (input.read_f().unwrap() - 55.0 / 3000.0).abs() < 0.0001,
+        "progress"
+    );
     assert_eq!(input.read_b().unwrap(), 0, "units.size");
     assert_eq!(input.read_s().unwrap(), 0, "PayloadSeq size");
     assert!(input.read_f().unwrap().is_nan(), "commandPos x");

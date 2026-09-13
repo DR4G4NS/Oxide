@@ -32,7 +32,7 @@ fn block_limit_world() -> DynamicWorld {
         base_buildings: DashMap::new(),
         floors: vec![0i16; (width * height) as usize],
         overlays: vec![0i16; (width * height) as usize],
-        enemy_spawns: Vec::new(),
+        enemy_spawns: parking_lot::RwLock::new(Vec::new()),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -42,6 +42,7 @@ fn block_limit_world() -> DynamicWorld {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -52,10 +53,12 @@ fn block_limit_world() -> DynamicWorld {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("block-limit-test.json"),
         network_template: Arc::new(Vec::new()),
         persistence_dirty: AtomicBool::new(false),
@@ -74,6 +77,8 @@ fn block_limit_world() -> DynamicWorld {
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     }
 }
 
@@ -98,6 +103,7 @@ fn upstream_application_multiblock_1597_origin_footprint_and_identity() {
     assert!(occupied.contains(&origin));
 
     let mut core = DynamicTile {
+        logic_control: None,
         position: origin,
         block: 339,
         team: 1,
@@ -120,6 +126,7 @@ fn upstream_application_multiblock_1597_origin_footprint_and_identity() {
     // matching Java's `tile.build == this` check rather than position-only
     // identity.
     let mut replacement = DynamicTile {
+        logic_control: None,
         position: origin,
         block: 339,
         team: 1,
@@ -155,6 +162,7 @@ fn block_limit_counts_dynamic_buildings() {
     world.tiles.insert(
         pos(5, 5),
         DynamicTile {
+            logic_control: None,
             position: pos(5, 5),
             block,
             rotation: 0,
@@ -187,6 +195,7 @@ fn block_limit_counts_base_plus_dynamic() {
     world.tiles.insert(
         pos(20, 20),
         DynamicTile {
+            logic_control: None,
             position: pos(20, 20),
             block,
             rotation: 0,
@@ -220,6 +229,7 @@ fn block_limit_does_not_double_count_replaced_base_building() {
     world.tiles.insert(
         origin,
         DynamicTile {
+            logic_control: None,
             position: origin,
             block,
             rotation: 0,
@@ -349,6 +359,7 @@ fn block_limit_rechecked_at_construct_finish() {
     let pending = PendingBuild {
         position: origin,
         block,
+        previous_block: 0,
         rotation: 0,
         config: Vec::new(),
         occupied: vec![origin],
@@ -366,9 +377,13 @@ fn block_limit_rechecked_at_construct_finish() {
             mouse_x: 0.0,
             mouse_y: 0.0,
             rotation: 0.0,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
             boosting: false,
             shooting: false,
+            building: true,
             last_command: None,
+            docked_type: None,
             active_plans: std::collections::HashSet::new(),
             mining_position: None,
             mining_progress: 0.0,

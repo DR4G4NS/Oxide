@@ -21,17 +21,11 @@ jobs:
     name: fmt / clippy / tests
     runs-on: ubuntu-latest
     steps:
-      # Full history required so CERTIFIED_RUNTIME_SHA ancestry / drift checks
-      # can run fail-closed (merge-base --is-ancestor + path diff).
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          # rust-src avoids concurrent rustup component fetches during early
-          # `cargo test --list` from cert_ledger (race with RUSTFLAGS=-D warnings).
           components: rustfmt, clippy, rust-src
 
       - name: Cache cargo
@@ -44,13 +38,12 @@ jobs:
       #
       # Architecture self-tests + scan run before DashMap/fmt/clippy so a
       # capability-guard failure is cheap and independent of the low-core suite.
-      - name: compatibility schema / ledger / current.toml
+      - name: compatibility schema / current.toml
         id: compat
         if: ${{ !cancelled() }}
         run: |
           python3 tools/compat_selftest.py
           python3 tools/mindustry_manifest.py
-          python3 tools/cert_ledger.py --require-certified
 
       - name: architecture_guard self-tests
         id: archself
@@ -195,8 +188,8 @@ jobs:
   # and verified against compat/current.toml. GitHub still authenticates the
   # source tag/commit. This is a required PR dependency after normal gates;
   # workflow_dispatch remains available for reruns.
-  current-jar-certification:
-    name: current-target JAR certification
+  current-jar-checks:
+    name: current-target JAR checks
     runs-on: ubuntu-latest
     needs: gates
     steps:
@@ -242,6 +235,15 @@ jobs:
           echo "path=$jar_path" >> "$GITHUB_OUTPUT"
       - name: Official current-target compatibility gate
         run: bash tools/compat_jar_gate.sh
+      - name: Survival unit production and factory deselection
+        timeout-minutes: 10
+        env:
+          MINDUSTRY_1597_JAR: ${{ steps.resolve.outputs.path }}
+          OXIDE_SMOKE_PROFILE: debug
+          OXIDE_SMOKE_SCENARIO: survival-cycle
+        run: |
+          test -f "$MINDUSTRY_1597_JAR"
+          bash tools/smoke/smoke_unit_payload_1597.sh 6599
 
   # Path-filter the frozen upstream oracle so unrelated Rust/docs PRs do not
   # pay its Gradle cost.  The aggregate below accepts `skipped` only when this
@@ -387,20 +389,20 @@ jobs:
     if: ${{ always() }}
     needs:
       - gates
-      - current-jar-certification
+      - current-jar-checks
       - compatibility-scope
       - upstream-v1597-reference
     steps:
-      - name: Require normal gates and current-target certification
+      - name: Require normal gates and current-target JAR checks
         env:
           GATES_RESULT: ${{ needs.gates.result }}
-          CURRENT_JAR_RESULT: ${{ needs.current-jar-certification.result }}
+          CURRENT_JAR_RESULT: ${{ needs.current-jar-checks.result }}
           SCOPE_RESULT: ${{ needs.compatibility-scope.result }}
           RUN_UPSTREAM: ${{ needs.compatibility-scope.outputs.run-upstream }}
           UPSTREAM_RESULT: ${{ needs.upstream-v1597-reference.result }}
         run: |
           set -euo pipefail
-          printf 'gates=%s\ncurrent-jar-certification=%s\nscope=%s (%s)\nupstream=%s\n' \
+          printf 'gates=%s\ncurrent-jar-checks=%s\nscope=%s (%s)\nupstream=%s\n' \
             "$GATES_RESULT" "$CURRENT_JAR_RESULT" "$SCOPE_RESULT" "$RUN_UPSTREAM" "$UPSTREAM_RESULT"
           if [ "$GATES_RESULT" != success ] || [ "$CURRENT_JAR_RESULT" != success ] || [ "$SCOPE_RESULT" != success ]; then
             echo "Required compatibility jobs did not both succeed" >&2

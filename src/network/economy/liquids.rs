@@ -47,7 +47,9 @@ pub(crate) fn liquid_capacity(block: i16) -> Option<f32> {
         289 => Some(120.0),
         290 => Some(700.0),
         291 => Some(1_800.0),
-        292 => Some(20.0),
+        // JAR dump: LiquidJunction carries a nominal 10f capacity (never
+        // used for storage - junctions route and reject accepts).
+        292 | 297 => Some(10.0),
         293 | 294 => Some(100.0),
         300 => Some(1_000.0),
         301 => Some(2_700.0),
@@ -75,7 +77,11 @@ pub(crate) fn liquid_capacity(block: i16) -> Option<f32> {
         382 | 383 => Some(80.0),
         389..=391 => Some(10.0),
         408 | 409 => Some(100.0),
-        192 | 198 | 209 | 298 | 392..=397 => Some(10.0),
+        // 298 reinforced-bridge-conduit is a DirectionLiquidBridge with an
+        // explicit liquidCapacity override; verified against the v159.7 JAR:
+        // Blocks$243 sets liquidCapacity = 120.0f and range = 4 (javap).
+        298 => Some(120.0),
+        192 | 198 | 209 | 392..=397 => Some(10.0),
         195 | 197 => Some(60.0),
         211 => Some(80.0),
         215 => Some(10.0),
@@ -94,7 +100,10 @@ pub(crate) fn liquid_capacity(block: i16) -> Option<f32> {
 }
 
 pub(crate) fn liquid_can_output(block: i16, liquid: i16) -> bool {
-    !matches!(block, 182 | 186 | 330 | 353 | 360 | 408 | 415) && (block != 189 || liquid == 3)
+    !matches!(
+        block,
+        182 | 186 | 315 | 316 | 321 | 322 | 324 | 330 | 353 | 360 | 382 | 383 | 408 | 415
+    ) && (block != 189 || liquid == 3)
 }
 
 pub(crate) fn base_block_at(world: &DynamicWorld, position: i32) -> Option<i16> {
@@ -136,7 +145,7 @@ pub(crate) fn pump_floor_liquid(world: &DynamicWorld, tile: &DynamicTile) -> Opt
         if x < 0 || y < 0 || x >= world.width || y >= world.height {
             continue;
         }
-        let floor = world.floors[(y * world.width + x) as usize];
+        let floor = crate::network::combat::floor_at_tile(world, x, y);
         if let Some((id, multiplier)) = floor_liquid_drop(floor) {
             liquid = Some(id);
             amount += multiplier;
@@ -166,7 +175,30 @@ pub(crate) fn liquid_production(world: &DynamicWorld, tile: &DynamicTile) -> Opt
             let (liquid, amount) = pump_floor_liquid(world, tile)?;
             Some((liquid, amount * pump_amount))
         }
-        329 => Some((0, 0.11)),
+        329 => {
+            let size = i32::from(crate::game::content::block_size(tile.block));
+            let tx = (tile.position >> 16) as i16 as i32;
+            let ty = tile.position as i16 as i32;
+            // SolidPump: efficiency = max(0, sumAttribute/size/size + percentSolid * baseEfficiency)
+            // water-extractor: pumpAmount 0.11, baseEfficiency 1, size 2.
+            let area = (size * size).max(1) as f32;
+            let mut water = 0.0;
+            let mut solid = 0.0;
+            for dy in 0..size {
+                for dx in 0..size {
+                    let floor = crate::network::combat::floor_at_tile(world, tx + dx, ty + dy);
+                    water += crate::game::content::floor_attribute(
+                        floor,
+                        crate::game::content::FloorAttribute::Water,
+                    );
+                    if !crate::game::content::floor_is_liquid(floor) {
+                        solid += 1.0;
+                    }
+                }
+            }
+            let efficiency = (water / area + solid / area).max(0.0);
+            Some((0, 0.11 * efficiency))
+        }
         _ => None,
     }
 }
@@ -184,7 +216,7 @@ pub(crate) fn is_liquid_junction(block: i16) -> bool {
 }
 
 pub(crate) fn is_liquid_bridge(block: i16) -> bool {
-    matches!(block, 293 | 294)
+    matches!(block, 293 | 294 | 298)
 }
 
 pub(crate) fn is_pump(block: i16) -> bool {
@@ -284,6 +316,19 @@ pub(crate) fn accept_liquid_from(
     let target_team = dynamic_at(world, target_key)
         .map(|tile| tile.team)
         .unwrap_or(255);
+    // DirectionLiquidBridge.acceptLiquid (DirectionLiquidBridge.java:74-77):
+    // without an outgoing findLink the bridge accepts liquid ONLY from
+    // another reinforced bridge whose own link resolves here (its feeder).
+    // Both probes run before the target guard per the DashMap rule.
+    let bridge_out_link = dynamic_at(world, target_key)
+        .filter(|tile| tile.block == 298)
+        .map(|tile| valid_bridge_link(world, &tile, 4));
+    let source_is_feeder = source.is_some_and(|source_pos| {
+        dynamic_at(world, source_pos)
+            .filter(|tile| tile.block == 298)
+            .map(|tile| valid_bridge_link(world, &tile, 4))
+            .is_some_and(|link| link == Some(target_key))
+    });
     if matches!(
         dynamic_at(world, target_key)
             .map(|tile| tile.block)
@@ -304,6 +349,41 @@ pub(crate) fn accept_liquid_from(
     if dynamic_at(world, target_key).is_some_and(|target| target.block == 415) {
         return amount.max(0.0);
     }
+    // ArmoredConduitBuild.acceptLiquid (ArmoredConduit.java:21-28): an
+    // armored conduit only accepts from another Conduit (286/287/288/296),
+    // a DirectionLiquidBridge (298), a LiquidJunction (292/297), a building
+    // aligned directly behind it (feeding forward), or a non-adjacent
+    // source (`!source.proximity.contains(this)`; resolved bridge/junction
+    // destinations). Note: LiquidBridge 293/294 are NOT transport family.
+    // Read BEFORE taking the target guard — dynamic_at iterates world.tiles
+    // and must never run while a get_mut guard on the same map is alive.
+    if matches!(
+        dynamic_at(world, target_key)
+            .map(|tile| tile.block)
+            .unwrap_or(0),
+        288 | 296
+    ) {
+        if let Some(source_pos) = source {
+            let from_transport = matches!(
+                dynamic_at(world, source_pos)
+                    .map(|tile| tile.block)
+                    .unwrap_or(0),
+                286..=288 | 292 | 296..=298
+            );
+            let rotation = dynamic_at(world, target_key)
+                .map(|tile| tile.rotation)
+                .unwrap_or(0);
+            let behind = source_pos == offset_position(target_key, (rotation + 2) % 4);
+            let sx = (source_pos >> 16) as i16 as i32;
+            let sy = source_pos as i16 as i32;
+            let tx = (target_key >> 16) as i16 as i32;
+            let ty = target_key as i16 as i32;
+            let adjacent = (sx - tx).abs() + (sy - ty).abs() == 1;
+            if adjacent && !from_transport && !behind {
+                return 0.0;
+            }
+        }
+    }
     let Some(mut target) = world.tiles.get_mut(&target_key) else {
         return 0.0;
     };
@@ -319,13 +399,19 @@ pub(crate) fn accept_liquid_from(
     let Some(capacity) = liquid_capacity(target.block) else {
         return 0.0;
     };
-    if is_conduit(target.block) {
+    if is_conduit(target.block) || target.block == 298 {
         // ConduitBuild.acceptLiquid (Conduit.java:129-133): a conduit only
         // accepts from its back — the direction it faces; liquid pushed into
         // its front is rejected ((source.relativeTo + 2) % 4 == rotation).
+        // DirectionLiquidBridge.acceptLiquid has the same `rel != rotation`
+        // front rejection (DirectionLiquidBridge.java:73-90).
         if source.is_some_and(|source| source == offset_position(target_key, target.rotation)) {
             return 0.0;
         }
+    }
+    if target.block == 298 && bridge_out_link.is_none() && !source_is_feeder {
+        // No output point: only a feeder bridge may pour in.
+        return 0.0;
     }
     let switch_threshold = if is_conduit(target.block)
         || is_liquid_router(target.block)
@@ -364,7 +450,7 @@ pub(crate) fn accept_liquid_from(
     if matches!(target.block, 382 | 383) && liquid != 3 {
         return 0.0;
     }
-    if target.block == 315 && liquid != 3 {
+    if matches!(target.block, 315 | 316) && liquid != 3 {
         return 0.0;
     }
     if matches!(target.block, 353 | 360) && liquid_turret_weapon(target.block, liquid).is_none() {
@@ -392,15 +478,6 @@ pub(crate) fn simulate_liquids(
         .map(|tile| *tile.key())
         .collect();
     let mut changed = false;
-    // A3: prune 1 Hz flow timers whose conduit was destroyed, so a rebuilt
-    // conduit starts with a fresh accumulator (official `Building.timer` is
-    // per-Building state that starts zeroed).
-    world.puddles.conduit_flow_timers.retain(|position, _| {
-        world
-            .tiles
-            .get(position)
-            .is_some_and(|tile| matches!(tile.block, 286..=288 | 296))
-    });
     for key in &keys {
         let Some(snapshot) = world.tiles.get(key).map(|tile| tile.clone()) else {
             continue;
@@ -434,42 +511,24 @@ pub(crate) fn simulate_liquids(
         };
         let conduit = is_conduit(snapshot.block);
         let is_liquid_source = snapshot.block == 414;
-        if conduit {
-            // A3: official cadence — Conduit$ConduitBuild.updateTile runs
-            // `moveLiquidForward` ONCE PER SECOND, gated by
-            // `liquids.currentAmount() > 1e-4 && timer(timerFlow, 1f)`
-            // (JAR offsets 42-75); Building.timer delegates to
-            // arc.util.Interval.get, which compares game SECONDS
-            // (Building.timer offsets 0-18; Interval.get/check offsets 0-66).
-            // The step is discrete (pressure flow + leak), with NO delta
-            // scaling. The accumulator advances even while the pipe is dry
-            // (the official Interval only resets when the gate passes), so a
-            // pipe that sat empty fires as soon as liquid arrives. The timer
-            // is transient per-conduit state parked in
-            // `PuddleSystem.conduit_flow_timers` (the official Interval is
-            // never serialized and DynamicTile's schema is fixed by the
-            // save/stream codecs).
-            let mut timer = world.puddles.conduit_flow_timers.entry(key).or_insert(0.0);
-            *timer += delta_ticks.max(0.0);
-            if *timer < 60.0 {
-                continue;
-            }
-        }
+        // Official cadence (A4, supersedes the A3 1 Hz reading):
+        // Conduit$ConduitBuild.updateTile runs `moveLiquidForward` on every
+        // update while `liquids.currentAmount() > 0.0001f &&
+        // timer(timerFlow, 1)` (Conduit.java:249-255). Building.timer
+        // delegates to arc.util.Interval, whose check compares game TICKS
+        // (`Time.time - times[id] >= time`, Arc/arc-core Interval.java), so
+        // interval 1 passes on EVERY update step regardless of delta size.
+        // The flow itself has NO delta scaling: each simulate_liquids call
+        // applies ONE discrete pressure step (+ leak), exactly like one
+        // official updateTile call on a laggy frame with delta > 1.
         if source_amount <= 0.0001 {
             continue;
-        }
-        if conduit {
-            // Consume the gate only when the step actually runs, exactly
-            // like Interval.get sets `times[id] = Time.time` only when the
-            // short-circuit `amount > 1e-4 && timer(...)` passes.
-            if let Some(mut timer) = world.puddles.conduit_flow_timers.get_mut(&key) {
-                *timer = 0.0;
-            }
         }
         if !liquid_can_output(snapshot.block, source_liquid) {
             continue;
         }
-        let bridge_range = if snapshot.block == 293 {
+        let bridge_range = if snapshot.block == 293 || snapshot.block == 298 {
+            // reinforced-bridge-conduit range = 4 (Blocks.java:2434).
             Some(4)
         } else if snapshot.block == 294 {
             Some(12)
@@ -477,13 +536,14 @@ pub(crate) fn simulate_liquids(
             None
         };
         let bridge_link = bridge_range.and_then(|range| valid_bridge_link(world, &snapshot, range));
+        let directional_liquid_bridge = snapshot.block == 298;
         let targets: Vec<i32> = if let Some(link) = bridge_link {
             vec![link]
-        } else if conduit {
-            // Conduit/pulse-conduit/plated-conduit/reinforced-conduit:
-            // ConduitBuild.updateTile moves liquid FORWARD only (Conduit.java:
-            // 144-151), with the pressure flow of BuildingComp.moveLiquid
-            // (BuildingComp.java:944-958) computed per target below.
+        } else if conduit || directional_liquid_bridge {
+            // Conduits move liquid FORWARD only (Conduit.java:144-151).
+            // DirectionLiquidBridge without a link does the same with
+            // leaks=false (DirectionLiquidBridge.java:66-70): forward tile,
+            // never a four-way dump.
             vec![offset_position(snapshot.position, snapshot.rotation)]
         } else {
             (0..4)
@@ -552,7 +612,10 @@ pub(crate) fn simulate_liquids(
                                 .clamp(0.0, 1.0)
                         })
                 });
-                offered = ((fract - ofract).max(0.0) * capacity).min(live_amount);
+                // Mathf.clamp(fract - ofract) also caps the fraction at 1,
+                // so pressure > 1 can never offer more than one full source
+                // capacity per step (BuildingComp.java:951-953).
+                offered = ((fract - ofract).clamp(0.0, 1.0) * capacity).min(live_amount);
                 if offered <= 0.0001 {
                     continue;
                 }
@@ -714,7 +777,8 @@ pub(crate) fn simulate_puddle_tile_effects(
 
     let mut health_updates = Vec::new();
     let mut destroyed = Vec::new();
-    for tile in world.puddles.tick_fires(delta) {
+    let (_expired_fires, damage_tiles) = world.puddles.tick_fires(delta);
+    for tile in damage_tiles {
         if let Some((was_destroyed, health)) = damage_building(world, tile, FIRE_TILE_DAMAGE) {
             changed = true;
             if was_destroyed {
@@ -743,6 +807,167 @@ pub(crate) fn simulate_puddle_tile_effects(
         }
     }
     (changed, health_updates, destroyed)
+}
+
+/// Official `FireComp.update` world-aware pass (audit H10): water-floor
+/// speed multiplier, building lifetime extension, neighbor spread gated on
+/// `Rules.fire`, and `Bullets.fireball` emission. The puddle-only parts
+/// (time clock, damage cadence) live in `PuddleSystem::tick_fires`.
+///
+/// Floor/block flammability is unmodeled (`tile.getFlammability()`
+/// contributes 0); only puddle flammability feeds the spread/fireball gates.
+pub(crate) fn simulate_fires(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta_ticks: f32,
+) -> bool {
+    use crate::network::buildings::puddles::{
+        liquid_flammability, FIRE_BALL_BULLET_ID, FIRE_BALL_DAMAGE, FIRE_BALL_LIFETIME_TICKS,
+        FIRE_BALL_SPEED, FIRE_FIREBALL_DELAY, FIRE_SPREAD_DELAY,
+    };
+
+    if world.puddles.fires.is_empty() {
+        return false;
+    }
+    let rules_fire = world.wave_rules.read().fires_enabled;
+    let delta = delta_ticks.max(0.0);
+    let ticks = world.game_state.world_ticks.load(Ordering::Relaxed);
+    // Snapshot keys first (dashmap guard): create_fire below inserts into
+    // the same map we are iterating.
+    let fires: Vec<(i32, f32)> = world
+        .puddles
+        .fires
+        .iter()
+        .map(|entry| (*entry.key(), entry.value().lifetime))
+        .collect();
+    let mut changed = false;
+    for (tile, _) in fires {
+        let Some(fire) = world.puddles.fires.get(&tile).map(|f| f.clone()) else {
+            continue;
+        };
+        if fire.time >= fire.lifetime {
+            continue;
+        }
+        // speedMultiplier = 1 + max(Attribute.water * 10, 0) approximated by
+        // "any pumpable liquid floor" => 2.0.
+        let water_speed = floor_water_multiplier(world, tile);
+        if water_speed > 1.0 {
+            if let Some(mut entry) = world.puddles.fires.get_mut(&tile) {
+                entry.time += delta * (water_speed - 1.0);
+            }
+            if fire.time + delta * (water_speed - 1.0) >= fire.lifetime {
+                world.puddles.fires.remove(&tile);
+                changed = true;
+                continue;
+            }
+        }
+        // PuddleComp.getFlammability = liquid.flammability * amount;
+        // FireComp divides by 3. Floor flammability unmodeled.
+        let flammability = world
+            .puddles
+            .puddles
+            .get(&tile)
+            .map(|puddle| (liquid_flammability(puddle.liquid) * puddle.amount) / 3.0)
+            .unwrap_or(0.0)
+            .max(0.0);
+        let building_here = tile_has_building(world, tile);
+        // Burning a building extends the fire's life.
+        if building_here && flammability > 0.0 {
+            let extension = (flammability / 8.0).clamp(0.0, 0.6) * delta;
+            if extension > 0.0 {
+                if let Some(mut entry) = world.puddles.fires.get_mut(&tile) {
+                    entry.lifetime += extension;
+                }
+                changed = true;
+            }
+        }
+        // Spread to a deterministic pseudo-random in-bounds neighbor.
+        if rules_fire && flammability > 1.0 && building_or_spreadable(world, tile) {
+            let rate = (flammability / 5.0).clamp(0.3, 2.0);
+            if let Some(mut entry) = world.puddles.fires.get_mut(&tile) {
+                entry.spread_timer += delta * rate;
+                if entry.spread_timer >= FIRE_SPREAD_DELAY {
+                    entry.spread_timer = 0.0;
+                    drop(entry);
+                    let dir = ((tile ^ (ticks as i32).wrapping_mul(0x517C_C1B7)) >> 13) as u32 % 4;
+                    let x = (tile >> 16) as i16 as i32;
+                    let y = tile as i16 as i32;
+                    let (dx, dy) = match dir {
+                        0 => (1, 0),
+                        1 => (0, 1),
+                        2 => (-1, 0),
+                        _ => (0, -1),
+                    };
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx >= 0 && ny >= 0 && nx < world.width && ny < world.height {
+                        let packed = (nx << 16) | ny;
+                        world.puddles.create_fire(packed);
+                        changed = true;
+                    }
+                }
+            }
+        } else if flammability > 1.0 {
+            // Spread timer still advances when rules disable fire? Official
+            // Fires.create re-checks rules; keep timers frozen when off.
+        }
+        // Fireball emission (visual + small damage projectile).
+        if flammability > 0.0 {
+            let rate = (flammability / 10.0).clamp(0.0, 0.5);
+            let fire_x = (tile >> 16) as i16 as f32 * 8.0;
+            let fire_y = tile as i16 as f32 * 8.0;
+            if let Some(mut entry) = world.puddles.fires.get_mut(&tile) {
+                entry.fireball_timer += delta * rate;
+                if entry.fireball_timer >= FIRE_FIREBALL_DELAY {
+                    entry.fireball_timer = 0.0;
+                    drop(entry);
+                    // Team derelict (0); angle from the same deterministic hash.
+                    let angle = (((tile ^ (ticks as i32).wrapping_mul(0x9E37_79B9u32 as i32)) >> 7)
+                        as u32
+                        % 360) as f32;
+                    let target_x = fire_x + angle.to_radians().cos() * 40.0;
+                    let target_y = fire_y + angle.to_radians().sin() * 40.0;
+                    crate::network::combat::spawn_projectile_for_team(
+                        world,
+                        out,
+                        None,
+                        -1,
+                        FIRE_BALL_BULLET_ID,
+                        fire_x,
+                        fire_y,
+                        target_x,
+                        target_y,
+                        FIRE_BALL_DAMAGE,
+                        FIRE_BALL_SPEED,
+                        FIRE_BALL_SPEED * FIRE_BALL_LIFETIME_TICKS,
+                        1.0,
+                        0,
+                    );
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
+fn floor_water_multiplier(world: &DynamicWorld, tile: i32) -> f32 {
+    let x = (tile >> 16) as i16 as i32;
+    let y = tile as i16 as i32;
+    if x < 0 || y < 0 || x >= world.width || y >= world.height {
+        return 1.0;
+    }
+    let floor = crate::network::combat::floor_at_tile(world, x, y);
+    // Water floors carry Attribute.water > 0; the official multiplier is
+    // `1 + max(water * 10, 0)` with water = 0.5..1 on liquid floors.
+    match floor_liquid_drop(floor) {
+        Some((0, _)) => 2.0,
+        _ => 1.0,
+    }
+}
+
+fn building_or_spreadable(_world: &DynamicWorld, _tile: i32) -> bool {
+    true
 }
 
 pub(crate) fn tile_has_building(world: &DynamicWorld, position: i32) -> bool {

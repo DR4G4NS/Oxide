@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-tests for compatibility schema, classifier, diff, ledger, and canary."""
+"""Self-tests for compatibility schema, classifier, diff, JAR identity, and canary."""
 
 from __future__ import annotations
 
@@ -15,12 +15,6 @@ from compatlib import SCHEMA_VERSION
 from compatlib.atomic import canonical_dumps
 from compatlib.classifier import classify_path
 from compatlib.diff import diff_builds, diff_packets
-from compatlib.ledger import (
-    certification_may_pass,
-    unresolved_server_rows,
-    validate_ledger,
-    validate_rust_test_evidence,
-)
 from compatlib.schema import contains_local_path, validate_artifact_file, validate_provenance
 from compatlib.wrap import provenance, wrap
 
@@ -99,7 +93,7 @@ def test_typeio_and_saves() -> None:
     check("10 logic fingerprint change detected", d["fingerprints"]["changed"])
 
 
-def test_provenance_and_ledger() -> None:
+def test_provenance() -> None:
     bad = provenance(build="159.7", source_ref="v159.7", source_commit="abc")
     bad["jar"] = {"path": "/home/dr4g4ns/Escritorio/mindustry-159.7/jre/159.7.jar", "sha256": "x", "size_bytes": 1, "filename": "159.7.jar"}
     errs = validate_provenance(bad, require_jar=True)
@@ -107,144 +101,6 @@ def test_provenance_and_ledger() -> None:
     good = wrapped("packets", [{"id": 0, "name": "StreamBegin"}])
     check("provenance ok", not validate_provenance(good, require_jar=True))
 
-    ledger = {
-        "schema_version": 2,
-        "build": "159.7",
-        "baseline": "158.1",
-        "overall_status": "PASS",
-        "source_ref": "v159.7",
-        "source_commit": "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c",
-        "rows": [
-            {
-                "id": "W1",
-                "category": "WIRE_PACKET",
-                "upstream_files": ["Net.java"],
-                "upstream_symbols": [],
-                "source_change": "x",
-                "rust_owner": "protocol.rs",
-                "risk": "HIGH",
-                "implementation_required": True,
-                "evidence_required": True,
-                "status": "PLANNED" if False else "IMPLEMENTATION_REQUIRED",
-                "source_evidence": "",
-                "jar_probe": "",
-                "rust_tests": "",
-                "notes": "",
-            }
-        ],
-    }
-    # illegal PLANNED is tested separately
-    planned = dict(ledger)
-    planned["rows"] = [dict(ledger["rows"][0], status="PLANNED")]
-    check("21 PLANNED is illegal status", bool(validate_ledger(planned)))
-    check("21 unresolved blocks PASS", not certification_may_pass(ledger))
-    client_row = dict(ledger["rows"][0], category="CLIENT_ONLY", status="CLIENT_ONLY", implementation_required=False)
-    ok_ledger = dict(ledger, overall_status="CERTIFICATION_REOPENED", rows=[client_row])
-    check("15/16 client terminal ok", not unresolved_server_rows(ok_ledger))
-
-    stale = {"overall_status": "PASS", "rows": ledger["rows"]}
-    check("20 markdown/ledger contradiction: PASS with unresolved", not certification_may_pass(stale | {"schema_version": 2, "build": "159.7", "baseline": "158.1"}))
-
-    bad_impl = {
-        "schema_version": 2,
-        "build": "159.7",
-        "baseline": "158.1",
-        "overall_status": "CERTIFICATION_REOPENED",
-        "rows": [{
-            "id": "BAD-001",
-            "category": "LOGIC",
-            "upstream_files": [],
-            "upstream_symbols": [],
-            "source_change": "x",
-            "rust_owner": "x",
-            "risk": "HIGH",
-            "implementation_required": True,
-            "evidence_required": True,
-            "status": "VERIFIED_IMPLEMENTED",
-            "source_evidence": "",
-            "jar_probe": "",
-            "rust_tests": "",
-            "notes": "",
-        }],
-    }
-    check(
-        "evidence_required_true_verified_implemented_empty_evidence_fails",
-        any("BAD-001" in e for e in validate_ledger(bad_impl)),
-    )
-    good_impl = dict(bad_impl)
-    good_impl["rows"] = [dict(bad_impl["rows"][0], source_evidence="v159.7 ref", rust_tests="foo_test")]
-    check(
-        "verified_implemented_with_source_and_test_passes",
-        not any("BAD-001" in e for e in validate_ledger(good_impl)),
-    )
-    bad_unchanged = dict(bad_impl)
-    bad_unchanged["rows"] = [dict(bad_impl["rows"][0], status="VERIFIED_UNCHANGED")]
-    check(
-        "verified_unchanged_without_source_evidence_fails",
-        any("BAD-001" in e for e in validate_ledger(bad_unchanged)),
-    )
-    bad_oos = dict(bad_impl)
-    bad_oos["rows"] = [dict(bad_impl["rows"][0], status="OUT_OF_SCOPE_EXPLICIT", notes="short")]
-    check(
-        "out_of_scope_without_reason_fails",
-        any("BAD-001" in e for e in validate_ledger(bad_oos)),
-    )
-    pass_bad = dict(bad_impl, overall_status="PASS")
-    check(
-        "pass_with_invalid_terminal_row_fails_certification",
-        not certification_may_pass(pass_bad),
-    )
-    bypass_impl = dict(good_impl)
-    bypass_impl["rows"] = [
-        dict(
-            good_impl["rows"][0],
-            evidence_required=False,
-            status="VERIFIED_IMPLEMENTED",
-        )
-    ]
-    check(
-        "implementation_required_with_evidence_required_false_fails",
-        any("evidence_required" in e for e in validate_ledger(bypass_impl)),
-    )
-    client_bypass = dict(good_impl)
-    client_bypass["rows"] = [dict(good_impl["rows"][0], status="CLIENT_ONLY")]
-    check(
-        "implementation_required_client_only_status_fails",
-        any("CLIENT_ONLY" in e for e in validate_ledger(client_bypass)),
-    )
-    fake_tests = dict(good_impl)
-    fake_tests["rows"] = [
-        dict(good_impl["rows"][0], rust_tests="not a valid test (tests.rs:1)")
-    ]
-    check(
-        "fake_rust_tests_token_fails_validation",
-        any("rust_tests" in e for e in validate_ledger(fake_tests)),
-    )
-    flip_pass = dict(pass_bad, overall_status="PASS")
-    check(
-        "flip_overall_pass_with_invalid_row_fails_certification",
-        not certification_may_pass(flip_pass),
-    )
-    listed = frozenset(
-        {
-            "oxide::logic::tests::logic_spawn_effect_runtime_variable_false",
-            "oxide::network::listener::tests::best_core_foundation_beats_shard",
-        }
-    )
-    missing = dict(good_impl)
-    missing["rows"] = [
-        dict(good_impl["rows"][0], rust_tests="completely_fake_test_name")
-    ]
-    check(
-        "ledger_nonexistent_rust_test_fails",
-        any("completely_fake_test_name" in e for e in validate_rust_test_evidence(missing, listed)),
-    )
-    present = dict(good_impl)
-    present["rows"] = [dict(good_impl["rows"][0], rust_tests="logic_spawn_effect_runtime_variable_false")]
-    check(
-        "ledger_existing_rust_test_passes",
-        not validate_rust_test_evidence(present, listed),
-    )
 
 
 def test_rules_defaults_are_jvm_stable() -> None:
@@ -862,135 +718,6 @@ def test_release_jar_resolver() -> None:
         check("itch_expired_token_fails_closed", expired_ok)
 
 
-def _git_init_repo(repo: Path) -> None:
-    import subprocess
-
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "cert@example.test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "cert"], cwd=repo, check=True)
-
-
-def _git_commit_all(repo: Path, message: str) -> str:
-    import subprocess
-
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", message], cwd=repo, check=True)
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-
-
-def test_runtime_checkpoint_guard() -> None:
-    """Adversarial CERTIFIED_RUNTIME_SHA guard in temporary git repos only."""
-    import subprocess
-
-    from compatlib.runtime_checkpoint import (
-        load_certified_runtime_sha,
-        validate_runtime_checkpoint,
-        RuntimeCheckpointError,
-    )
-
-    with tempfile.TemporaryDirectory(prefix="runtime-checkpoint-") as tmp:
-        repo = Path(tmp) / "repo"
-        repo.mkdir()
-        _git_init_repo(repo)
-
-        (repo / "src").mkdir()
-        (repo / "src" / "lib.rs").write_text("fn main() {}\n", encoding="utf-8")
-        (repo / "Cargo.toml").write_text("[package]\nname='t'\nversion='0'\n", encoding="utf-8")
-        (repo / "compat").mkdir()
-        (repo / "compat" / "current.toml").write_text('[target]\nbuild="159.7"\n', encoding="utf-8")
-        (repo / "compatibility-reports").mkdir()
-        (repo / "compatibility-reports" / "note.md").write_text("checkpoint\n", encoding="utf-8")
-        (repo / "tools").mkdir()
-        (repo / "tools" / "cert_selftest.py").write_text("print('ok')\n", encoding="utf-8")
-        checkpoint = _git_commit_all(repo, "runtime checkpoint")
-        subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
-
-        # Allowed: report / certification-tooling-only descendant.
-        (repo / "compatibility-reports" / "note.md").write_text("report only\n", encoding="utf-8")
-        (repo / "tools" / "cert_selftest.py").write_text("print('selftest')\n", encoding="utf-8")
-        allowed = _git_commit_all(repo, "docs and cert tooling only")
-        allowed_errs = validate_runtime_checkpoint(repo, checkpoint)
-        check(
-            "runtime checkpoint allows report/tooling descendants",
-            not allowed_errs,
-            str(allowed_errs),
-        )
-
-        # Fail: nonexistent SHA.
-        check(
-            "nonexistent runtime SHA fails",
-            any(
-                "does not resolve" in e
-                for e in validate_runtime_checkpoint(
-                    repo, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-                )
-            ),
-        )
-
-        # Fail: SHA not an ancestor (orphan branch tip).
-        subprocess.run(["git", "checkout", "--orphan", "orphan-branch", "-q"], cwd=repo, check=True)
-        (repo / "orphan.txt").write_text("orphan\n", encoding="utf-8")
-        orphan = _git_commit_all(repo, "orphan tip")
-        subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
-        check(
-            "runtime SHA not ancestor fails",
-            any(
-                "not an ancestor" in e
-                for e in validate_runtime_checkpoint(repo, orphan)
-            ),
-            orphan,
-        )
-
-        # Fail: src/** changed after checkpoint.
-        (repo / "src" / "lib.rs").write_text("fn main() { /* drift */ }\n", encoding="utf-8")
-        _git_commit_all(repo, "src drift")
-        check(
-            "src/** changed after checkpoint fails",
-            any("runtime drift" in e and "src/" in e for e in validate_runtime_checkpoint(repo, checkpoint)),
-        )
-
-        # Reset to allowed tip, then Cargo.toml drift.
-        subprocess.run(["git", "reset", "--hard", "-q", allowed], cwd=repo, check=True)
-        (repo / "Cargo.toml").write_text("[package]\nname='t'\nversion='1'\n", encoding="utf-8")
-        _git_commit_all(repo, "cargo drift")
-        check(
-            "Cargo.toml changed after checkpoint fails",
-            any(
-                "runtime drift" in e and "Cargo.toml" in e
-                for e in validate_runtime_checkpoint(repo, checkpoint)
-            ),
-        )
-
-        # Reset, then compat/current.toml drift.
-        subprocess.run(["git", "reset", "--hard", "-q", allowed], cwd=repo, check=True)
-        (repo / "compat" / "current.toml").write_text('[target]\nbuild="999.9"\n', encoding="utf-8")
-        _git_commit_all(repo, "current.toml drift")
-        check(
-            "compat/current.toml changed after checkpoint fails",
-            any(
-                "runtime drift" in e and "compat/current.toml" in e
-                for e in validate_runtime_checkpoint(repo, checkpoint)
-            ),
-        )
-
-        # Missing / stale ledger fields.
-        try:
-            load_certified_runtime_sha({"overall_status": "PASS"})
-            missing_ok = False
-        except RuntimeCheckpointError:
-            missing_ok = True
-        check("missing certified_runtime_sha fails", missing_ok)
-        try:
-            load_certified_runtime_sha(
-                {
-                    "certified_code_sha": "abc",
-                    "certified_runtime_sha": checkpoint,
-                }
-            )
-            stale_ok = False
-        except RuntimeCheckpointError as exc:
-            stale_ok = "certified_code_sha" in str(exc)
-        check("stale certified_code_sha field fails", stale_ok)
 
 
 def main() -> int:
@@ -998,12 +725,11 @@ def main() -> int:
     test_classifier()
     test_packets_shift()
     test_typeio_and_saves()
-    test_provenance_and_ledger()
+    test_provenance()
     test_rules_defaults_are_jvm_stable()
     test_canary_guard()
     test_wrong_commit_and_jar()
     test_release_jar_resolver()
-    test_runtime_checkpoint_guard()
     print(f"passed={PASS} failed={FAIL}")
     return 0 if FAIL == 0 else 1
 

@@ -88,6 +88,29 @@ pub const UNIT_COUNT: usize = UNIT_NAMES.len();
 /// groundWater + oxygen.
 pub const RULES_ENV_DEFAULT: i32 = 1 | 8 | 32 | 64 | 128;
 
+/// Exact v159.7 `UnitType.commands` membership used by CommandAI.
+/// Move (0) is universal. Mine (4) is mining units. Payload loop commands
+/// (6-9) require payloadCapacity. enterPayload (5) is issued to reconstructors
+/// by every player-commandable type.
+pub fn unit_type_allows_command(id: i16, command: u8) -> bool {
+    if !unit_player_controllable_like(id) {
+        return false;
+    }
+    match command {
+        0 | 5 => true,
+        1 => matches!(id, 22 | 31),
+        2 => matches!(id, 21 | 22 | 23 | 24 | 35..=37),
+        3 => matches!(id, 21 | 22),
+        4 => matches!(id, 6 | 7 | 20 | 21),
+        6..=9 => matches!(id, 22..=24),
+        _ => false,
+    }
+}
+
+fn unit_player_controllable_like(id: i16) -> bool {
+    !matches!(id, 46 | 53 | 55 | 62..=67)
+}
+
 /// Official v159.7 internal UnitTypes: hidden `block` plus the generated
 /// `turret-unit-build-tower` created by `BuildTurret.init()`.
 pub fn unit_type_internal(id: i16) -> bool {
@@ -104,6 +127,33 @@ pub fn unit_type_use_unit_cap(id: i16) -> bool {
     !matches!(id, 46 | 53 | 55 | 63 | 64..=67)
 }
 
+/// Official `UnitType.isEnemy` (desktop 159.7 dump). Default is true.
+/// `hostile_unit_count` / `waitEnemies` / wave victory use this, not team
+/// membership alone (ASTRA W06): mono, mega and core units are not enemies.
+pub fn unit_type_is_enemy(id: i16) -> bool {
+    !matches!(
+        id,
+        20 | 22 | 35 | 36 | 37 | 46 | 53 | 55 | 58 | 59 | 60 | 62 | 63 | 64 | 65 | 66 | 67
+    )
+}
+
+/// Exact v159.7 `MissileUnitType.lifetime` values, emitted as
+/// `TimedKillUnit.lifetime`/`.time` in the unit sync stream. The
+/// `MissileUnitType` constructor defaults the field to `60f * 1.7f`;
+/// entries only list types that override it or rely on the default.
+pub fn unit_missile_lifetime(id: i16) -> Option<f32> {
+    match id {
+        46 => Some(99.6),  // anthicus-missile: 60f * 1.66f
+        53 => Some(54.24), // quell-missile: 60f * (1.4f - 0.496f)
+        55 => Some(102.0), // disrupt-missile: constructor default
+        64 => Some(330.0), // scathe-missile: 60f * 5.5f
+        65 => Some(586.2), // scathe-missile-phase: 60f * 9.77f
+        66 => Some(84.0),  // scathe-missile-surge: 60f * 1.4f
+        67 => Some(222.0), // scathe-missile-surge-split: 60f * 3.7f
+        _ => None,
+    }
+}
+
 /// CoreBlock.unitType for vanilla core blocks (Blocks.java v159.7).
 pub fn core_block_unit_type(block: i16) -> Option<i16> {
     match block {
@@ -115,6 +165,13 @@ pub fn core_block_unit_type(block: i16) -> Option<i16> {
         344 => Some(60),
         _ => None,
     }
+}
+
+/// Official `UnitType.coreUnitDock`. Only Erekir core ships dock in place
+/// on `InputHandler.unitClear`; Serpulo alpha/beta/gamma fall through to
+/// `playerSpawn` at the best core (ASTRA C07).
+pub fn core_unit_dock(unit_type: i16) -> bool {
+    matches!(unit_type, 58..=60)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +308,18 @@ mod tests {
             unit_type_use_unit_cap(69),
             "unknown IDs retain UnitType default"
         );
+    }
+
+    #[test]
+    fn unit_type_is_enemy_matches_v1597_dump() {
+        assert!(unit_type_is_enemy(0), "dagger");
+        assert!(unit_type_is_enemy(21), "poly");
+        assert!(!unit_type_is_enemy(20), "mono");
+        assert!(!unit_type_is_enemy(22), "mega");
+        assert!(!unit_type_is_enemy(35), "alpha");
+        assert!(!unit_type_is_enemy(36), "beta");
+        assert!(!unit_type_is_enemy(37), "gamma");
+        assert!(unit_type_is_enemy(61), "block keeps UnitType default");
     }
 
     #[test]

@@ -16,28 +16,53 @@ If a **coding agent** will touch the tree, point it at [AGENTS.md](AGENTS.md) fi
 
 ## Setup
 
-Rust stable (edition 2021). Optional: official desktop JAR **159.7** for wire smokes; **158.1** only for historical scripts named `*_158`.
+Rust stable (edition 2021). Wire and client checks also need Java 17 and the official desktop JAR **159.7**. The JAR is an external oracle; never commit it. Historical `*_158` harness names do not imply that the current binary supports 158.1.
+
+## Validation
+
+Choose local checks by the changed surface. This matrix does not change the gates in [CI](.github/workflows/ci.yml).
+
+| Changed surface | Required local evidence |
+|---|---|
+| Markdown only | Check relative links and anchors, verify commands/symbols against their owners, keep English/Spanish claims aligned, and run `git diff --check`. No Rust/JAR run is needed unless the edit changes a technical claim that needs it. |
+| Rust, runtime configuration, or build inputs | Run the Rust checks below. |
+| Executable tooling | Run checks for the affected tool; add the Rust checks when the tool changes runtime or build inputs. |
+| Module boundaries or concurrency | Also run the architecture and DashMap guards below. |
+| `compat/`, packet IDs, wire, save or stream codecs | Also run matching fixtures and target-JAR checks; follow [minimum wire evidence](ARCHITECTURE.md#minimum-evidence-for-a-wire-change). Report only evidence actually executed. |
+| Client-predicted block behaviour | Include a regression spanning **> 360 game ticks** and crossing a `BlockSnapshot`, plus a matching real-client scenario; see the [harness guide](navigation.md#client-in-the-loop-harness). |
+
+Rust checks:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets -- --test-threads=1
+git diff --check
 ```
 
-`--test-threads=1` is required. The JAR is an oracle, not a vendor tree — never commit it.
+Use `--test-threads=1` for Rust tests: DashMap shard collisions can hang parallel runs. Do not increase test parallelism to mask a hang.
+
+Module/concurrency guards:
+
+```bash
+bash tools/architecture_guard.sh
+cargo run --quiet --manifest-path tools/dashmap_guard/Cargo.toml -- check . --paths src,tests --deny-warnings
+```
+
+For JAR setup, smoke commands, and their success markers, use [navigation.md](navigation.md#client-in-the-loop-harness). Report checks as passed, failed, or not run (with the reason); an exit-zero `skip` is not validation. Fix failures caused by the change and rerun the affected checks. Report unrelated failures without broadening the patch or weakening a gate.
 
 ## What we want
 
 - Fixes and small, reviewable features on the **documented 0.1 scope** (playable vanilla Serpulo on 159.7 clients).
 - Tests that fail without the change when behaviour is involved.
-- README updates when a **gap** is closed or newly found.
+- Update README for product limitations and [gaps.md](gaps.md) for located divergences. Remove a closed gap rather than keeping a changelog.
 
 ## What we do not want
 
 - Mods, plugins, custom packets, or an event bus.
 - Drive-by refactors, new doc novels, or “while I was here” dependency bumps.
 - Guessed packet layouts. IDs and field widths come from `compat/` + the target JAR.
-- CI skipped, clippy allowed, or `CERTIFIED_RUNTIME_SHA` rewritten to go green.
+- CI skipped or clippy allowed to go green.
 
 ## Pull requests
 
@@ -49,10 +74,10 @@ Use the PR template. The useful parts are:
 |---|---|
 | **What changed** | User-visible behaviour, then internals if needed. 2–8 lines is enough. |
 | **Why** | Bug, gap, or issue link. |
-| **Tests** | Commands you ran. For wire/save work, name the fixture or smoke. |
+| **Tests** | Commands and outcomes, including not-run checks. For wire/save work, name the fixture or smoke. |
 | **Notes** | Residual vanilla gap, or “none”. |
 
-CI (`.github/workflows/ci.yml`) must pass: fmt, clippy `-D warnings`, tests, architecture/DashMap guards, cert ledger. You do not need to run the JAR job locally if you did not touch wire/compat; reviewers will still see it on GitHub.
+CI (`.github/workflows/ci.yml`) must pass: fmt, clippy `-D warnings`, tests, architecture/DashMap guards, and compatibility checks. You do not need to run the JAR job locally if you did not touch wire/compat; reviewers will still see it on GitHub.
 
 Maintainers may ask for a smaller diff or a test rather than close the PR.
 
@@ -68,21 +93,17 @@ Si usas un **agente de código**, que lea [AGENTS.md](AGENTS.md). Arquitectura: 
 
 ## Arranque
 
-Rust stable. JAR 159.7 opcional para smokes de wire; 158.1 solo para scripts `*_158`.
+Rust stable (edición 2021). Para validar protocolo o cliente: Java 17 y JAR oficial **159.7**, externo al repositorio. Los nombres históricos `*_158` no implican compatibilidad del binario actual con 158.1.
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets -- --test-threads=1
-```
+La [matriz de validación](#validation) centraliza los comandos y cuándo ejecutarlos: documentación → enlaces, anclas, comandos y coherencia entre idiomas; runtime → fmt, clippy y suite Rust; módulos/concurrencia → guards; protocolo/save/stream → fixtures y JAR; bloques que el cliente predice → más de 360 ticks cruzando un `BlockSnapshot` y escenario con cliente real.
 
-`--test-threads=1` es obligatorio. No subas el JAR.
+Usa `--test-threads=1` en los tests Rust por las colisiones de shards de DashMap. Informa resultados y verificaciones pendientes; un smoke omitido con `skip` no cuenta como aprobado. La selección local no modifica los gates de CI.
 
 ## Qué sí / qué no
 
-Sí: arreglos y features pequeños del scope 0.1 (Serpulo vanilla, clientes 159.7), tests que fallen sin el cambio, README si cierra o aparece un hueco.
+Sí: arreglos y features pequeños del scope 0.1 (Serpulo vanilla, clientes 159.7), tests que fallen sin el cambio, README para limitaciones del producto y [gaps.md](gaps.md) para divergencias localizadas.
 
-No: mods/plugins, refactors de pasada, layouts de paquetes inventados, saltarse CI o reescribir `CERTIFIED_RUNTIME_SHA` para poner verde el check.
+No: mods/plugins, refactors de pasada, layouts de paquetes inventados o saltarse CI para poner verde el check.
 
 ## Pull requests
 

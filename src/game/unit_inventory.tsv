@@ -2,7 +2,7 @@
 # Columns: id, name, spawnable, default_controller, movement, target_selection,
 # weapons, payload, mine_build, path_cost, rust_status
 # spawnable: YES | CHILD | NO | INTERNAL
-# default_controller: GroundAI | CommandAI | MissileAI | NeoplasmAI | InternalAI
+# default_controller: GroundAI | CommandAI | MissileAI | NeoplasmAI | InternalAI | CargoAI | AssemblerAI
 # movement: ground | flying | legs | naval | hover | missile
 # target_selection: core_buildings | core_direct | nearest_building | command | none
 # weapons: FULL | PARTIAL | REPAIR | PD | NONE
@@ -59,27 +59,27 @@
 42	conquer	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
 43	merui	YES	GroundAI	hover	core_buildings	FULL	NO	none	flow_field	FULL
 44	cleroi	YES	GroundAI	hover	core_buildings	PD	NO	none	flow_field	FULL
-45	anthicus	NO	CommandAI	flying	command	PARTIAL	NO	none	direct	REJECTED
-46	anthicus-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+45	anthicus	NO	CommandAI	flying	command	PARTIAL	NO	none	direct	PARTIAL
+46	anthicus-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
 47	tecta	YES	GroundAI	hover	core_buildings	FULL	NO	none	flow_field	FULL
 48	collaris	YES	GroundAI	hover	core_buildings	FULL	NO	none	flow_field	FULL
 49	elude	YES	CommandAI	flying	command	FULL	NO	none	direct	FULL
 50	avert	YES	CommandAI	flying	command	FULL	NO	none	direct	FULL
 51	obviate	YES	CommandAI	flying	command	FULL	NO	none	direct	FULL
 52	quell	YES	CommandAI	flying	command	PARTIAL	NO	none	direct	PARTIAL
-53	quell-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+53	quell-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
 54	disrupt	YES	CommandAI	flying	command	PARTIAL	NO	none	direct	PARTIAL
-55	disrupt-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+55	disrupt-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
 56	renale	YES	NeoplasmAI	ground	core_buildings	NONE	NO	none	flow_field	PARTIAL
 57	latum	YES	NeoplasmAI	ground	core_buildings	NONE	NO	none	flow_field	PARTIAL
-58	evoke	NO	NeoplasmAI	ground	none	REPAIR	NO	none	flow_field	REJECTED
-59	incite	NO	NeoplasmAI	ground	none	REPAIR	NO	build	flow_field	REJECTED
-60	emanate	NO	NeoplasmAI	ground	none	REPAIR	NO	repair	flow_field	REJECTED
-61	block	NO	NeoplasmAI	ground	none	NONE	NO	none	none	REJECTED
-62	manifold	NO	InternalAI	ground	none	NONE	NO	none	none	REJECTED
-63	assembly-drone	NO	InternalAI	flying	none	NONE	NO	none	direct	REJECTED
-64	scathe-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
-65	scathe-missile-phase	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
-66	scathe-missile-surge	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
-67	scathe-missile-surge-split	CHILD	MissileAI	missile	none	NONE	NO	none	none	REJECTED
+58	evoke	NO	NeoplasmAI	ground	none	REPAIR	NO	none	flow_field	PARTIAL
+59	incite	NO	NeoplasmAI	ground	none	REPAIR	NO	build	flow_field	PARTIAL
+60	emanate	NO	NeoplasmAI	ground	none	REPAIR	NO	repair	flow_field	PARTIAL
+61	block	NO	NeoplasmAI	ground	none	NONE	NO	none	none	PARTIAL
+62	manifold	NO	CargoAI	flying	none	NONE	NO	none	direct	FULL
+63	assembly-drone	NO	AssemblerAI	flying	none	NONE	NO	none	direct	FULL
+64	scathe-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
+65	scathe-missile-phase	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
+66	scathe-missile-surge	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
+67	scathe-missile-surge-split	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
 68	turret-unit-build-tower	INTERNAL	InternalAI	ground	none	NONE	NO	none	none	INTERNAL

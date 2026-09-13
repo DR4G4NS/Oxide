@@ -12,6 +12,27 @@ use std::collections::HashSet;
 
 pub(crate) const ITEM_COUNT: usize = 22;
 
+/// Logic.play: clear previous inventories and add the map loadout, capped
+/// independently for each team's shared core storage.
+pub(crate) fn initialize_loadout(world: &DynamicWorld) {
+    let loadout = world.wave_rules.read().loadout.clone();
+    let mut teams: Vec<u8> = world.cores.iter().map(|entry| *entry.key()).collect();
+    teams.push(1); // legacy core-position worlds use the sharded inventory
+    teams.sort_unstable();
+    teams.dedup();
+    world.game_state.team_items.clear();
+    for team in teams {
+        let capacity = core_item_capacity(world, team);
+        let mut items = vec![0i32; ITEM_COUNT];
+        for &(item, amount) in &loadout {
+            if let Some(stored) = items.get_mut(item as usize) {
+                *stored = stored.saturating_add(amount.max(0)).min(capacity);
+            }
+        }
+        *items_for_team_mut(world, team) = items;
+    }
+}
+
 /// Official `CoreBlock.itemCapacity` values from Blocks.java 158.1.
 pub(crate) const fn core_block_capacity(block: i16) -> i32 {
     match block {
@@ -146,11 +167,20 @@ pub(crate) fn deposit_core_items(world: &DynamicWorld, team: u8, item: i16, amou
     *stored = (*stored).clamp(0, capacity);
     let stored_amount = amount.min(capacity.saturating_sub(*stored));
     *stored = stored.saturating_add(stored_amount).min(capacity);
-    if core_incinerates {
+    let accepted = if core_incinerates {
         amount
     } else {
         stored_amount
+    };
+    drop(items);
+    if stored_amount > 0 {
+        crate::state::game_state::GameStats::bump_amount(
+            &mut world.game_state.game_stats.write().core_item_count,
+            item,
+            stored_amount as u32,
+        );
     }
+    accepted
 }
 
 /// Clamp legacy saves and all team inventories to their current topology.

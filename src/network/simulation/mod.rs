@@ -37,6 +37,7 @@ use crate::network::combat::resolve_manual_aim;
 use crate::network::combat::retusa_mine_shots_between;
 use crate::network::combat::simulate_base_menders;
 use crate::network::combat::simulate_base_turrets;
+use crate::network::combat::simulate_drowning;
 use crate::network::combat::simulate_player_combat;
 use crate::network::combat::simulate_projectiles;
 use crate::network::combat::simulate_turrets;
@@ -76,6 +77,7 @@ use crate::network::economy::payload::{
 };
 use crate::network::economy::power_role;
 use crate::network::economy::projectile_position;
+use crate::network::economy::simulate_auto_doors;
 use crate::network::economy::simulate_base_drills;
 use crate::network::economy::simulate_base_factories;
 use crate::network::economy::simulate_erekir_assemblers;
@@ -93,8 +95,11 @@ use crate::network::economy::simulate_menders;
 use crate::network::economy::simulate_navanax_suppression;
 use crate::network::economy::simulate_oct_force_fields;
 use crate::network::economy::simulate_overdrives;
+#[allow(unused_imports)]
+use crate::network::economy::simulate_radars;
 use crate::network::economy::simulate_reconstructors;
 use crate::network::economy::simulate_regen_projectors;
+use crate::network::economy::simulate_repair_and_cargo;
 use crate::network::economy::simulate_separators;
 use crate::network::economy::simulate_shock_mines;
 use crate::network::economy::simulate_shockwave_towers;
@@ -132,7 +137,8 @@ use crate::network::wire::encode::{
     frame_generated_packet, take_coalesced_build_health,
 };
 use crate::network::wire::persistence::{
-    encode_construct_finish_for_unit, snapshot_persisted_world, PersistJob, PersistenceWorker,
+    checkpoint_rules_json, encode_construct_finish_for_unit, snapshot_persisted_world, PersistJob,
+    PersistenceWorker,
 };
 use crate::network::wire::tile_config::broadcast_placement_power_configs;
 use crate::network::wire::transfer::nearest_opposing_unit;
@@ -493,6 +499,7 @@ pub fn update_pvp_auto_pause(world: &DynamicWorld) {
 }
 
 pub(crate) mod logic;
+pub(crate) mod remaining;
 pub(crate) use logic::{empty_logic_program, logic_config_hash};
 pub use logic::{
     simulate_logic, simulate_logic_build, simulate_logic_control_leases, simulate_logic_fire,
@@ -510,8 +517,9 @@ pub(crate) use units::{
 pub use units::{
     simulate_all_unit_statuses, simulate_allied_oxynoe_repair, simulate_allied_units,
     simulate_assist_units, simulate_builder_units, simulate_controlled_unit_weapons,
-    simulate_mono_mining, simulate_pvp_player_damage, simulate_support_units,
-    simulate_unit_collisions, simulate_unit_elevation,
+    simulate_erekir_builder_repair, simulate_mono_mining, simulate_pvp_player_damage,
+    simulate_support_units, simulate_team_build_ai, simulate_unit_collisions,
+    simulate_unit_elevation,
 };
 pub(crate) mod payloads;
 pub use payloads::{
@@ -593,7 +601,11 @@ pub fn spawn_world_simulation(
             // P2: scheduler lag — when the loop cannot keep up with the
             // target TPS the delta caps at 60 ticks; report the backlog.
             let iteration = std::time::Instant::now();
-            let _guard = world.persistence_lock.lock();
+            // Do not hold `persistence_lock` for the whole tick. The connection
+            // task takes the same lock in `apply_build_plans`; waiting here
+            // made client ping equal world_tick_us (debug + a busy map =
+            // hundreds of ms). Tile DashMaps are already concurrent. Serialize
+            // only against player place/break (below) and the 1 s save clone.
             // Round 74d: rebuild the tile footprint index once per tick
             // (O(tiles)) so dynamic_at/effective_block stay O(1) in the
             // hot logistics path. The index covers every occupied position
@@ -674,6 +686,12 @@ pub fn spawn_world_simulation(
             // processors assign the next tick's destination.
             dirty |= simulate_allied_units(&world, &connections, delta);
             dirty |= simulate_logic(&world, &connections, delta);
+            if world.game_state.rules_dirty.swap(false, Ordering::Relaxed) {
+                let json = crate::engine::msav_roundtrip::rules_json_from_world(&world);
+                if let Ok(frame) = crate::network::wire::encode::encode_set_rules_frame(&json) {
+                    broadcast(&connections, frame);
+                }
+            }
             dirty |= simulate_overdrives(&world, delta, &power);
             dirty |= simulate_force_projectors(&world, delta, &power);
             dirty |= simulate_liquids(&world, delta, &power);
@@ -684,6 +702,8 @@ pub fn spawn_world_simulation(
             let (puddle_fx, puddle_health, puddle_destroyed) =
                 crate::network::economy::simulate_puddle_tile_effects(&world, delta);
             dirty |= puddle_fx;
+            // Audit H10: fire spread / fireballs / lifetime extension.
+            dirty |= crate::network::economy::simulate_fires(&world, &connections, delta);
             for (position, health) in puddle_health {
                 coalesce_build_health(&mut pending_health, position, health);
             }
@@ -718,8 +738,16 @@ pub fn spawn_world_simulation(
             dirty |= simulate_unit_payload_entries(&world, &connections, delta);
             dirty |= simulate_reconstructors(&world, &connections, delta, &power);
             dirty |= simulate_menders(&world, &connections, delta, &power);
+            dirty |= simulate_repair_and_cargo(&world, delta, &power);
+            dirty |= simulate_radars(&world, delta, &power);
             dirty |= simulate_regen_projectors(&world, &connections, delta, &power);
             dirty |= simulate_turrets(&world, &connections, delta, &power);
+            dirty |= crate::network::simulation::remaining::simulate_remaining(
+                &world,
+                &connections,
+                delta,
+                &power,
+            );
             dirty |= simulate_shockwave_towers(&world, delta, &power);
             dirty |= simulate_controlled_unit_weapons(&world, &connections, delta);
             let (enemy_dirty, destroyed_buildings, health_updates) =
@@ -730,15 +758,22 @@ pub fn spawn_world_simulation(
             // until the following tick's StatusComp pass.
             dirty |= simulate_pvp_player_damage(&world, &connections);
             dirty |= simulate_projectiles(&world, &connections, delta);
+            dirty |= simulate_drowning(&world, &connections, delta);
             dirty |= simulate_player_combat(&world, &connections, delta);
             dirty |= simulate_shock_mines(&world, &connections, delta);
+            dirty |= simulate_auto_doors(&world, &connections, delta);
             dirty |= simulate_unit_elevation(&world, delta);
             dirty |= simulate_payload_carriers(&world, &connections, delta);
             dirty |= simulate_assist_units(&world, delta);
             dirty |= simulate_builder_units(&world, &connections, delta);
-            dirty |= simulate_constructions(&world, &connections, delta);
-            dirty |= simulate_breaks(&world, &connections, delta);
+            dirty |= simulate_team_build_ai(&world, &connections, delta);
+            {
+                let _construction = world.persistence_lock.lock();
+                dirty |= simulate_constructions(&world, &connections, delta);
+                dirty |= simulate_breaks(&world, &connections, delta);
+            }
             dirty |= simulate_support_units(&world, &connections, delta);
+            dirty |= simulate_erekir_builder_repair(&world, &connections, delta);
             dirty |= simulate_unit_collisions(&world);
             if !health_updates.is_empty() {
                 for (position, health) in health_updates {
@@ -793,28 +828,33 @@ pub fn spawn_world_simulation(
                 connections.remove(&id);
             }
             if dirty && last_save.elapsed() >= std::time::Duration::from_secs(1) {
-                // P0-8: build the snapshot on the tick (consistent under the
-                // world lock) and hand the I/O to the worker thread. If the
-                // worker is gone (should not happen), fall back to a
-                // synchronous durable save so state is never lost silently.
-                let save_build_start = std::time::Instant::now();
-                let saved = snapshot_persisted_world(
-                    &world.tiles,
-                    &world.game_state,
-                    &world.enemies,
-                    &world.base_buildings,
-                    &world.player_profiles,
-                    &world.building_commands,
-                    &world.unit_orders,
-                    &world.team_build_plans.read(),
-                    (&world.cores, &world.team_core_lists),
-                    &world.logic_flags,
-                    &world.puddles,
-                );
-                world.game_state.save_build_us.store(
-                    save_build_start.elapsed().as_micros() as u64,
-                    Ordering::Relaxed,
-                );
+                // Clone under the construction lock so a save does not tear
+                // a place/break in half. Drop the lock before the worker
+                // submit: this world is large enough that the clone itself
+                // was a ping spike when it wrapped the whole tick.
+                let saved = {
+                    let _save = world.persistence_lock.lock();
+                    let save_build_start = std::time::Instant::now();
+                    let saved = snapshot_persisted_world(
+                        &world.tiles,
+                        &world.game_state,
+                        &world.enemies,
+                        &world.base_buildings,
+                        &world.player_profiles,
+                        &world.building_commands,
+                        &world.unit_orders,
+                        &world.team_build_plans.read(),
+                        (&world.cores, &world.team_core_lists),
+                        &world.logic_flags,
+                        &world.puddles,
+                        checkpoint_rules_json(&world),
+                    );
+                    world.game_state.save_build_us.store(
+                        save_build_start.elapsed().as_micros() as u64,
+                        Ordering::Relaxed,
+                    );
+                    saved
+                };
                 let submitted = persistence_worker.submit(PersistJob {
                     path: world.save_path.clone(),
                     world: saved,
@@ -833,6 +873,7 @@ pub fn spawn_world_simulation(
                         (&world.cores, &world.team_core_lists),
                         &world.logic_flags,
                         &world.puddles,
+                        checkpoint_rules_json(&world),
                     ) {
                         warn!("Could not persist simulated world state: {}", err);
                     }
@@ -857,6 +898,7 @@ pub fn spawn_world_simulation(
                         (&world.cores, &world.team_core_lists),
                         &world.logic_flags,
                         &world.puddles,
+                        checkpoint_rules_json(&world),
                     );
                     if persistence_worker.submit(PersistJob {
                         path: path.clone(),

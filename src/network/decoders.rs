@@ -27,6 +27,8 @@ pub struct ClientSnapshot {
     pub mouse_x: f32,
     pub mouse_y: f32,
     pub rotation: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
     pub boosting: bool,
     pub shooting: bool,
     /// Official ClientSnapshot `isBuilding` → `unit.updateBuilding`.
@@ -56,8 +58,8 @@ pub fn decode_client_snapshot(payload: &[u8]) -> std::io::Result<ClientSnapshot>
     let mouse_y = input.read_f()?;
     let rotation = input.read_f()?;
     let _base_rotation = input.read_f()?;
-    let _velocity_x = input.read_f()?;
-    let _velocity_y = input.read_f()?;
+    let velocity_x = input.read_f()?;
+    let velocity_y = input.read_f()?;
     let mining_tile = input.read_i()?;
     let boosting = input.read_bool()?;
     let shooting = input.read_bool()?;
@@ -131,6 +133,8 @@ pub fn decode_client_snapshot(payload: &[u8]) -> std::io::Result<ClientSnapshot>
         mouse_x,
         mouse_y,
         rotation,
+        velocity_x,
+        velocity_y,
         boosting,
         shooting,
         building,
@@ -853,6 +857,13 @@ pub fn decode_set_unit_stance(payload: &[u8]) -> std::io::Result<(Vec<i32>, u8, 
     Ok((unit_ids, stance, enable))
 }
 
+/// Bits 8..=29: every `ItemUnitStance` id. `CommandAI.setStance` AND-NOTs
+/// `incompatibleStanceBits`; each item lists `mineAuto` and `init()` mirrors
+/// the bit onto mineAuto, so enabling one mining filter drops the others.
+fn item_stance_mask() -> u32 {
+    ((1_u32 << 30) - 1) ^ ((1_u32 << 8) - 1)
+}
+
 pub fn unit_allows_stance(unit_type: i16, command: u8, stance: u8) -> bool {
     if stance == 0 {
         return true;
@@ -953,7 +964,9 @@ pub fn apply_set_unit_stance_for_team(
         });
         let before = order.stances;
         if stance == 7 {
-            order.stances &= !(((1_u32 << 30) - 1) & !((1_u32 << 7) - 1));
+            // mineAuto is not a toggle: enable=false still turns it on (ASTRA C03).
+            // incompatibleStanceBits: mineAuto excludes every ItemUnitStance.
+            order.stances &= !item_stance_mask();
             order.stances |= 1_u32 << 7;
             if let Some(mut unit) = world.enemies.get_mut(unit_id) {
                 if unit.secondary_attack_reload <= 0.0 {
@@ -961,10 +974,23 @@ pub fn apply_set_unit_stance_for_team(
                 }
             }
         } else if stance >= 8 {
-            order.stances &= !(((1_u32 << 30) - 1) & !((1_u32 << 7) - 1));
-            order.stances |= 1_u32 << stance;
-            if let Some(mut unit) = world.enemies.get_mut(unit_id) {
-                unit.tertiary_attack_reload = f32::from(stance - 8 + 1);
+            let bit = 1_u32 << stance;
+            if enable {
+                // Item filters are mutually exclusive with each other and
+                // with mineAuto (`ItemUnitStance` lists mineAuto; `init()`
+                // sets bits both ways).
+                order.stances &= !item_stance_mask() & !(1_u32 << 7);
+                order.stances |= bit;
+                if let Some(mut unit) = world.enemies.get_mut(unit_id) {
+                    unit.tertiary_attack_reload = f32::from(stance - 8 + 1);
+                }
+            } else {
+                order.stances &= !bit;
+                if let Some(mut unit) = world.enemies.get_mut(unit_id) {
+                    if unit.tertiary_attack_reload.round() as i16 == i16::from(stance - 8 + 1) {
+                        unit.tertiary_attack_reload = 0.0;
+                    }
+                }
             }
         } else if enable {
             order.stances |= 1_u32 << stance;

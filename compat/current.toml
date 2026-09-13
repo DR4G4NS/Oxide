@@ -6,9 +6,6 @@ jar_filename = "159.7.jar"
 jar_size_bytes = 82540141
 jar_sha256 = "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05"
 
-[historical]
-certified_builds = ["158.1"]
-
 [historical.158_1]
 build = "158.1"
 source_tag = "v158.1"

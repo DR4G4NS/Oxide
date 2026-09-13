@@ -32,6 +32,180 @@ use crate::network::wire::persistence::{
 use crate::network::wire::tile_config::broadcast_placement_power_configs;
 use crate::state::game_state::{GameMode, GameState};
 use dashmap::DashMap;
+use std::time::Instant;
+
+/// Last accept-to-enqueue sample for a sandbox break. Tests read this;
+/// production only traces (off by default).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BreakTiming {
+    pub plan_seen: Option<Instant>,
+    pub finish_entered: Option<Instant>,
+    pub finish_enqueued: Option<Instant>,
+    pub rejected_snapshots: u32,
+}
+
+static BREAK_TIMING: parking_lot::Mutex<BreakTiming> = parking_lot::Mutex::new(BreakTiming {
+    plan_seen: None,
+    finish_entered: None,
+    finish_enqueued: None,
+    rejected_snapshots: 0,
+});
+
+pub(crate) fn reset_break_timing() {
+    *BREAK_TIMING.lock() = BreakTiming::default();
+}
+
+pub(crate) fn last_break_timing() -> BreakTiming {
+    BREAK_TIMING.lock().clone()
+}
+
+pub(crate) fn record_break_plan_seen() {
+    let now = Instant::now();
+    let mut sample = BREAK_TIMING.lock();
+    if sample.plan_seen.is_none() {
+        sample.plan_seen = Some(now);
+    }
+    tracing::trace!(target: "oxide::break_timing", "break plan seen");
+}
+
+pub(crate) fn record_snapshot_rejected() {
+    BREAK_TIMING.lock().rejected_snapshots += 1;
+    tracing::trace!(target: "oxide::break_timing", "client snapshot rejected");
+}
+
+fn record_finish_entered() {
+    BREAK_TIMING.lock().finish_entered = Some(Instant::now());
+    tracing::trace!(target: "oxide::break_timing", "finish_pending_break entered");
+}
+
+fn record_finish_enqueued() {
+    BREAK_TIMING.lock().finish_enqueued = Some(Instant::now());
+    tracing::trace!(target: "oxide::break_timing", "DeconstructFinish enqueued");
+}
+
+/// Official ConstructBlock.construct/deconstruct finish immediately when
+/// `state.rules.infiniteResources` or `team.rules().infiniteResources`
+/// holds (159.7 javap). `instantBuild` is the BuilderComp client drain
+/// (`instant && infiniteResources`), not this server-side finish gate —
+/// it is still honoured here so an explicit rules override can match
+/// editor-like placement. `GameMode::Sandbox` is not a short-circuit:
+/// the preset seeds these flags via `apply_game_mode_to_wave_rules`,
+/// and an admin with `allowEditRules` can turn `infiniteResources` off.
+pub(crate) fn construction_is_instant(world: &DynamicWorld, team: u8) -> bool {
+    let rules = world.wave_rules.read();
+    rules.instant_build
+        || rules.infinite_resources
+        || world.game_state.infinite_resources.load(Ordering::Relaxed)
+        || rules.team_rule(team).infinite_resources
+}
+
+/// Official `ConstructBlock` content ids: `build1`..`build16` are 5..=20.
+pub(crate) fn is_construct_block(block: i16) -> bool {
+    (5..=20).contains(&block)
+}
+
+/// `ConstructBlock.get(size)` — `buildN` id is `4 + size` (159.7 content.json).
+pub(crate) fn construct_block_id(target: i16) -> i16 {
+    4 + i16::from(crate::game::content::block_size(target).clamp(1, 16))
+}
+
+/// Vanilla `setConstruct`: keep `previous` only when it shares the ConstructBlock size.
+fn construct_previous_id(previous: i16, current: i16) -> i16 {
+    if previous > 0
+        && crate::game::content::block_size(previous) == crate::game::content::block_size(current)
+    {
+        previous
+    } else {
+        0
+    }
+}
+
+fn construct_items_left(current: i16, progress: f32, build_cost_multiplier: f32) -> Vec<f32> {
+    let requirements = crate::game::content::block_requirements(current);
+    if requirements.is_empty() {
+        return Vec::new();
+    }
+    let left = (1.0 - progress.clamp(0.0, 1.0)).max(0.0);
+    let mut accum = Vec::with_capacity(requirements.len() * 3);
+    for (_item, amount) in requirements {
+        accum.push(0.0);
+        accum.push(0.0);
+        accum.push(
+            (*amount as f32 * build_cost_multiplier.max(0.0) * left)
+                .round()
+                .max(0.0),
+        );
+    }
+    accum
+}
+
+/// Authoritative ConstructBlock tile so `writeSync`, late joiners and a
+/// hot-swap restream replay the same ghost the 159.7 client draws
+/// (`ConstructBuild.draw` uses `progress` / `previous` / `current`).
+fn upsert_construct_tile(
+    world: &DynamicWorld,
+    pending: &PendingBuild,
+    previous: i16,
+    progress: f32,
+) {
+    let progress = progress.clamp(0.0, 1.0);
+    let previous = construct_previous_id(previous, pending.block);
+    let construct = construct_block_id(pending.block);
+    let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+    if let Some(existing) = dynamic_at(world, pending.position) {
+        if !is_construct_block(existing.block) && existing.position == pending.position {
+            building_placement::remove_building_from_world(world, existing.position);
+        }
+    }
+    let mut tile = DynamicTile {
+        position: pending.position,
+        block: construct,
+        rotation: pending.rotation % 4,
+        team: pending.team,
+        occupied: pending.occupied.clone(),
+        health: crate::game::content::block_health(construct).max(1.0),
+        production_progress: progress,
+        stored_item: previous,
+        stored_amount: i32::from(pending.block),
+        payload_accum: construct_items_left(pending.block, progress, cost_mult),
+        generation: crate::network::world::next_building_generation(),
+        ..DynamicTile::default()
+    };
+    tile.enabled = true;
+    world.tiles.insert(pending.position, tile);
+    for cell in &pending.occupied {
+        world.tile_footprint.insert(*cell, pending.position);
+    }
+    world.persistence_dirty.store(true, Ordering::Relaxed);
+}
+
+fn sync_construct_tile_progress(world: &DynamicWorld, position: i32, current: i16, progress: f32) {
+    let progress = progress.clamp(0.0, 1.0);
+    let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+    let accum = construct_items_left(current, progress, cost_mult);
+    if let Some(mut tile) = world.tiles.get_mut(&position) {
+        if is_construct_block(tile.block) {
+            tile.production_progress = progress;
+            tile.stored_amount = i32::from(current);
+            tile.payload_accum = accum;
+        }
+    }
+}
+
+fn remove_construct_tile(world: &DynamicWorld, position: i32, occupied: &[i32]) {
+    let is_construct = world
+        .tiles
+        .get(&position)
+        .is_some_and(|tile| is_construct_block(tile.block));
+    if !is_construct {
+        return;
+    }
+    world.tiles.remove(&position);
+    for cell in occupied {
+        world.tile_footprint.remove(cell);
+    }
+}
+
 /// Returns the network template with the CURRENT live team build plans
 /// spliced into the team-blocks section. The official server writes the
 /// current `TeamData.plans` of every active team on each connection, so a
@@ -40,10 +214,32 @@ use dashmap::DashMap;
 ///
 /// NOTE: must NOT take `persistence_lock` — `host_map` re-streams while
 /// already holding it (parking_lot mutexes are not reentrant). The plans are
-pub(crate) fn network_template_with_plans(world: &DynamicWorld) -> std::io::Result<Arc<Vec<u8>>> {
+pub fn network_template_with_plans(world: &DynamicWorld) -> std::io::Result<Arc<Vec<u8>>> {
+    let rules = world.wave_rules.read().clone();
+    network_template_with_plans_and_rules(world, &rules)
+}
+
+/// Like `network_template_with_plans`, but projects `rules` instead of the
+/// live `world.wave_rules`. Host-map restreams use this so a failure can
+/// abort before the first mutation without sending the old mode's Rules
+/// JSON. Live `SetMode` sends `Call.setRules` instead of rebuilding the
+/// world stream.
+pub(crate) fn network_template_with_plans_and_rules(
+    world: &DynamicWorld,
+    rules: &crate::network::units::WaveRules,
+) -> std::io::Result<Arc<Vec<u8>>> {
     let plans = world.team_build_plans.read().clone();
     let patched =
         crate::engine::world_stream::replace_team_blocks(&world.network_template, &plans)?;
+    // The Gamemode preset and the `rules` overrides only ever reached the
+    // authority's own WaveRules; the streamed template still carried the map
+    // file's rules, so a sandbox client kept `infiniteResources = false` and
+    // never predicted instant construction (ConstructBlock.construct only
+    // short-circuits under that flag).
+    let patched = crate::engine::world_stream::replace_rules(
+        &patched,
+        &crate::network::wire::bootstrap::client_visible_rules_json(world, rules)?,
+    )?;
     Ok(Arc::new(patched))
 }
 
@@ -120,11 +316,20 @@ pub(crate) fn apply_build_plans(
     update_building: bool,
 ) -> std::io::Result<()> {
     let _persistence_guard = world.persistence_lock.lock();
+    player.building = update_building;
     let current: HashSet<_> = plans
         .iter()
         .map(|plan| (plan.breaking, plan.position, plan.block))
         .collect();
     player.active_plans.retain(|key| current.contains(key));
+    // ClientSnapshot carries at most 20 plans. Aborting every pending that
+    // is not in that window (BeginPlace then the next 20, or a long conveyor
+    // line) RemoveTile+BeginPlace storms the outbound queue and spikes ping.
+    // Official clearBuilding only empties the unit queue; Q is an empty
+    // snapshot. Drop this player's pendings only then.
+    if current.is_empty() {
+        abort_dropped_player_plans(world, player, &current, out)?;
+    }
     for plan in plans {
         let key = (plan.breaking, plan.position, plan.block);
         let mut covered = false;
@@ -138,6 +343,8 @@ pub(crate) fn apply_build_plans(
             }
         } else if let Some(mut pending) = world.pending_builds.get_mut(&plan.position) {
             if pending.block == plan.block {
+                pending.rotation = plan.rotation % 4;
+                pending.config = plan.config.clone();
                 pending.last_seen = std::time::Instant::now();
                 pending.builder = player.clone();
                 covered = true;
@@ -155,7 +362,7 @@ pub(crate) fn apply_build_plans(
             && world
                 .tiles
                 .get(&plan.position)
-                .is_some_and(|tile| tile.block == plan.block);
+                .is_some_and(|tile| tile.block == plan.block && tile.rotation == plan.rotation % 4);
         if tile_done {
             player.active_plans.remove(&key);
             remove_team_plan(
@@ -215,9 +422,18 @@ pub(crate) fn apply_build_plans(
         }
 
         if plan.breaking {
-            if world.pending_builds.iter().any(|build| {
-                build.position == plan.position || build.occupied.contains(&plan.position)
-            }) || world.pending_breaks.iter().any(|pending| {
+            // Vanilla BuilderComp (UnitEntity, 159.7): if tile.build is already
+            // a ConstructBuild (BeginPlace), the unit calls ConstructBuild.deconstruct
+            // and does NOT Call.beginBreak. At progress <= deconstructThreshold
+            // (Block default 0f) or infiniteResources that immediately
+            // Call.deconstructFinish → tile.remove(). Skipping the breaking
+            // plan left the client's striped ConstructBlock in place with the
+            // red beam stuck on it.
+            if let Some(pending) = pending_build_covering(world, plan.position) {
+                abort_pending_construct(world, out, pending)?;
+                continue;
+            }
+            if world.pending_breaks.iter().any(|pending| {
                 pending.position == plan.position || pending.occupied.contains(&plan.position)
             }) {
                 continue;
@@ -251,12 +467,22 @@ pub(crate) fn apply_build_plans(
                     remaining_ticks: 0.0,
                 };
                 world.pending_breaks.insert(origin, pending.clone());
+                // Official Build.beginBreak always creates a ConstructBlock on
+                // the client before deconstructFinish. Skipping it leaves the
+                // local plan/beam stuck with no ConstructBuild to complete.
                 let payload = encode_begin_break(player, origin)?;
-                out.broadcast(frame_generated_packet(
+                out.broadcast_critical(frame_generated_packet(
                     BEGIN_BREAK_PACKET_ID,
                     &payload,
                     false,
                 )?);
+                record_break_plan_seen();
+                if construction_is_instant(world, pending.team) {
+                    if let Err(err) = finish_pending_break(world, out, pending) {
+                        warn!("Could not finish instant sandbox deconstruction: {}", err);
+                    }
+                    continue;
+                }
                 schedule_break(world, &pending);
                 // A break removes the ghost plan of the block being destroyed
                 // (official InputHandler iterates `player.team().data().plans`).
@@ -285,11 +511,7 @@ pub(crate) fn apply_build_plans(
             // The plan belongs to the PLACING PLAYER'S team (official
             // `TeamData.plans`); the finished tile, the consumed build cost
             // and the ghost plan all use this team (survival/attack == 1).
-            let placing_team = world
-                .players
-                .get(&player.unit_id)
-                .map(|combat| combat.team)
-                .unwrap_or(1);
+            let placing_team = player_team(world, player);
             let mut team_building_count = live_team_building_count(world, placing_team, plan.block);
             let replacing_same = occupied.iter().any(|&pos| {
                 world
@@ -317,6 +539,115 @@ pub(crate) fn apply_build_plans(
                 );
                 continue;
             }
+            if placement_blocked_by_cores(world, plan.position, plan.block, placing_team) {
+                debug!(
+                    "Rejected block {} placement: enemy core protection / placeRangeCheck",
+                    plan.block
+                );
+                continue;
+            }
+            let rotation = plan.rotation % 4;
+            let existing_block = effective_block(world, plan.position);
+            let existing_team = effective_building_team(world, plan.position);
+            let same_block_and_team = existing_block == plan.block && existing_team == placing_team;
+            if same_block_and_team && crate::game::content::block_placement(plan.block).quick_rotate
+            {
+                let existing_rotation = dynamic_at(world, plan.position)
+                    .map(|t| t.rotation)
+                    .or_else(|| {
+                        let x = (plan.position >> 16) as i16 as i32;
+                        let y = plan.position as i16 as i32;
+                        if x >= 0 && y >= 0 && x < world.width && y < world.height {
+                            let index = (y * world.width + x) as usize;
+                            world.tile_data.get(index).map(|d| d & 3)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                if existing_rotation != rotation {
+                    if let Some(mut tile) = world.tiles.get_mut(&plan.position) {
+                        tile.rotation = rotation;
+                    } else {
+                        let origin = base_origin(world, plan.position);
+                        world.base_buildings.remove(&origin);
+                        let generation = crate::network::world::assign_new_building_generation(
+                            world,
+                            plan.position,
+                        );
+                        world.tiles.insert(
+                            plan.position,
+                            DynamicTile {
+                                logic_control: None,
+                                payload_inventory: Vec::new(),
+                                position: plan.position,
+                                block: plan.block,
+                                rotation,
+                                team: placing_team,
+                                config: plan.config.clone(),
+                                enabled: true,
+                                message: None,
+                                occupied: occupied.clone(),
+                                stored_item: -1,
+                                stored_amount: 0,
+                                production_progress: 0.0,
+                                transport_progress: 0.0,
+                                ammo_units: 0.0,
+                                inventory: Vec::new(),
+                                power_stored: 0.0,
+                                power_links: Vec::new(),
+                                liquid_inventory: Vec::new(),
+                                stored_liquid: -1,
+                                liquid_amount: 0.0,
+                                output_liquid_amount: 0.0,
+                                junction_items: Vec::new(),
+                                mass_driver_incoming: Vec::new(),
+                                mass_driver_rotation: 90.0,
+                                mass_driver_waiting: Vec::new(),
+                                payload: None,
+                                payload_progress: 0.0,
+                                payload_rotation: 0.0,
+                                payload_accum: Vec::new(),
+                                health: crate::game::content::block_health(plan.block),
+                                door_open: false,
+                                shield: 0.0,
+                                light_color: -1_900_545,
+                                memory: Vec::new(),
+                                duct_rec_dir: 0,
+                                unloader_offset: 0,
+                                conveyor_items: Vec::new(),
+                                factory_command: None,
+                                stack_state: 0,
+                                stack_link: -1,
+                                stack_cooldown: 0.0,
+                                generation,
+                            },
+                        );
+                    }
+                    building_placement::after_placement(world, plan.position, &plan.config);
+                    let payload = encode_begin_place_for_unit(
+                        session_builder_unit_id(player),
+                        plan.position,
+                        plan.block,
+                        rotation,
+                        placing_team,
+                        &[0],
+                    )?;
+                    out.broadcast_critical(frame_generated_packet(
+                        BEGIN_PLACE_PACKET_ID,
+                        &payload,
+                        false,
+                    )?);
+                    remove_team_plan(
+                        world,
+                        placing_team,
+                        (plan.position >> 16) as i16,
+                        plan.position as i16,
+                    );
+                    world.persistence_dirty.store(true, Ordering::Relaxed);
+                }
+                continue;
+            }
             let replaceable =
                 placement_footprint_is_replaceable(world, &occupied, plan.block, placing_team);
             if !replaceable {
@@ -329,10 +660,18 @@ pub(crate) fn apply_build_plans(
                 );
                 continue;
             }
-            let rotation = plan.rotation % 4;
+            let previous_block = effective_block(world, plan.position);
+            let sub_size = crate::game::content::block_size(plan.block);
+            let prev_size = crate::game::content::block_size(previous_block);
+            let previous = if prev_size == sub_size {
+                previous_block
+            } else {
+                0
+            };
             let pending = PendingBuild {
                 position: plan.position,
                 block: plan.block,
+                previous_block: previous,
                 rotation,
                 config: plan.config.clone(),
                 occupied,
@@ -344,13 +683,24 @@ pub(crate) fn apply_build_plans(
                 applied_assist: 0.0,
             };
             world.pending_builds.insert(plan.position, pending.clone());
+            // Official Build.beginPlace always places a ConstructBlock, even
+            // when rules.instantBuild finishes the same tick. The client
+            // BuilderComp waits for that tile; ConstructFinish alone leaves
+            // the build beam stuck on a plan that never initializes.
             let payload = encode_begin_place(player, &pending)?;
-            out.broadcast(frame_generated_packet(
+            out.broadcast_critical(frame_generated_packet(
                 BEGIN_PLACE_PACKET_ID,
                 &payload,
                 false,
             )?);
+            if construction_is_instant(world, placing_team) {
+                if let Err(err) = finish_pending_build(world, out, pending) {
+                    warn!("Could not finish instant sandbox placement: {}", err);
+                }
+                continue;
+            }
             schedule_build(world, &pending);
+            upsert_construct_tile(world, &pending, pending.previous_block, 0.0);
             // The official server mirrors every started construction into the
             // team's live build plans so all clients render the ghost.
             add_team_plan(
@@ -371,10 +721,158 @@ pub(crate) fn apply_build_plans(
     Ok(())
 }
 
-/// Restream payload produced by the transactional `SetMode` path (P0-6):
-/// the shared WorldDataBegin frame plus one personalized world stream per
-/// connected player id.
-pub(crate) type ModeRestream = (Vec<u8>, Vec<(i32, Vec<u8>)>);
+fn snapshot_covers_break(
+    current: &HashSet<(bool, i32, i16)>,
+    origin: i32,
+    occupied: &[i32],
+) -> bool {
+    current.iter().any(|(breaking, position, _block)| {
+        *breaking && (*position == origin || occupied.contains(position))
+    })
+}
+
+fn another_worker_has_place(
+    world: &DynamicWorld,
+    except_player_id: i32,
+    position: i32,
+    block: i16,
+) -> bool {
+    world.player_sessions.iter().any(|session| {
+        session.id != except_player_id && session.active_plans.contains(&(false, position, block))
+    }) || world
+        .enemies
+        .iter()
+        .any(|unit| unit.update_building && unit_has_place_plan(&unit, position))
+}
+
+fn another_worker_has_break(
+    world: &DynamicWorld,
+    except_player_id: i32,
+    origin: i32,
+    occupied: &[i32],
+) -> bool {
+    world.player_sessions.iter().any(|session| {
+        session.id != except_player_id
+            && session.active_plans.iter().any(|(breaking, position, _)| {
+                *breaking && (*position == origin || occupied.contains(position))
+            })
+    }) || world.enemies.iter().any(|unit| {
+        unit.update_building
+            && unit.build_plans.iter().any(|plan| {
+                plan.breaking && (plan.position == origin || occupied.contains(&plan.position))
+            })
+    })
+}
+
+/// Origin pending construct whose footprint covers `position`.
+fn pending_build_covering(world: &DynamicWorld, position: i32) -> Option<PendingBuild> {
+    if let Some(build) = world.pending_builds.get(&position) {
+        return Some(build.value().clone());
+    }
+    world.pending_builds.iter().find_map(|build| {
+        build
+            .occupied
+            .contains(&position)
+            .then(|| build.value().clone())
+    })
+}
+
+/// Cancel an in-progress / stuck ConstructBlock the way vanilla
+/// `ConstructBuild.deconstruct` does when progress is already at or below
+/// `deconstructThreshold` (0): `Call.deconstructFinish(tile, current, unit)`
+/// then `tile.remove()`. Items were never consumed (`checkRequired` failed
+/// or the plan never finished), so there is no refund.
+fn abort_pending_construct(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    pending: PendingBuild,
+) -> std::io::Result<()> {
+    if world.pending_builds.remove(&pending.position).is_none() {
+        return Ok(());
+    }
+    remove_team_plan(
+        world,
+        pending.team,
+        (pending.position >> 16) as i16,
+        pending.position as i16,
+    );
+    world.persistence_dirty.store(true, Ordering::Relaxed);
+    remove_construct_tile(world, pending.position, &pending.occupied);
+    let payload = encode_deconstruct_finish(
+        &pending.builder,
+        &PendingBreak {
+            position: pending.position,
+            block: pending.block,
+            occupied: pending.occupied,
+            dynamic: false,
+            team: pending.team,
+            builder: pending.builder.clone(),
+            last_seen: pending.last_seen,
+            remaining_ticks: 0.0,
+        },
+    )?;
+    out.broadcast_critical(frame_generated_packet(
+        DECONSTRUCT_FINISH_PACKET_ID,
+        &payload,
+        false,
+    )?);
+    Ok(())
+}
+
+fn abort_dropped_player_plans(
+    world: &DynamicWorld,
+    player: &SessionPlayer,
+    current: &HashSet<(bool, i32, i16)>,
+    out: &dyn crate::network::outbound::FrameEmit,
+) -> std::io::Result<()> {
+    let dropped_builds: Vec<i32> = world
+        .pending_builds
+        .iter()
+        .filter(|build| {
+            build.builder.id == player.id
+                && !current.contains(&(false, build.position, build.block))
+                && !another_worker_has_place(world, player.id, build.position, build.block)
+        })
+        .map(|build| build.position)
+        .collect();
+    for position in dropped_builds {
+        let Some((_, dropped)) = world.pending_builds.remove(&position) else {
+            continue;
+        };
+        remove_construct_tile(world, position, &dropped.occupied);
+        remove_team_plan(
+            world,
+            player_team(world, player),
+            (position >> 16) as i16,
+            position as i16,
+        );
+        let mut payload = Vec::new();
+        crate::network::codec::Writes::write_i(&mut payload, position)?;
+        out.broadcast_critical(frame_generated_packet(
+            REMOVE_TILE_PACKET_ID,
+            &payload,
+            false,
+        )?);
+    }
+
+    let dropped_breaks: Vec<i32> = world
+        .pending_breaks
+        .iter()
+        .filter(|pending| {
+            pending.builder.id == player.id
+                && !snapshot_covers_break(current, pending.position, &pending.occupied)
+                && !another_worker_has_break(world, player.id, pending.position, &pending.occupied)
+        })
+        .map(|pending| pending.position)
+        .collect();
+    for position in dropped_breaks {
+        // The server tile is still the original block (BeginBreak only
+        // creates a ConstructBuild on the client). Dropping the pending
+        // without DeconstructFinish leaves the building in place.
+        world.pending_breaks.remove(&position);
+    }
+    Ok(())
+}
 
 /// Official `InputHandler.unitControl` server gate (158.1): the unit must be
 /// a standard unit (type 2), `state.rules.possessionAllowed` must hold,
@@ -404,32 +902,41 @@ pub(crate) fn consume_requirements_impl(
     team: u8,
     block: i16,
 ) -> bool {
-    if *state.mode.read() == GameMode::Sandbox {
-        return true;
-    }
     // Official ConstructBlock: infiniteResources builds without requiring or
     // consuming core items (`progress >= 1f || state.rules.infiniteResources`).
     if state.infinite_resources.load(Ordering::Relaxed)
-        || rules
-            .map(|rules| rules.team_rule(team).infinite_resources)
-            .unwrap_or(false)
+        || rules.is_some_and(|rules| {
+            rules.infinite_resources || rules.team_rule(team).infinite_resources
+        })
     {
         return true;
     }
     let requirements = crate::game::content::block_requirements(block);
+    let cost_multiplier = rules
+        .map(|rules| rules.build_cost_multiplier.max(0.0))
+        .unwrap_or(1.0);
+    let scaled: Vec<(usize, i32)> = requirements
+        .iter()
+        .map(|(item, amount)| {
+            (
+                *item,
+                (*amount as f32 * cost_multiplier).round().max(0.0) as i32,
+            )
+        })
+        .collect();
     let mut items = if team == 1 {
         TeamItemsMut::Legacy(state.core_items.write())
     } else {
         TeamItemsMut::Team(state.team_items.entry(team).or_insert_with(|| vec![0; 22]))
     };
-    if requirements
+    if scaled
         .iter()
         .any(|(item, amount)| items.get(*item).is_none_or(|stored| stored < amount))
     {
         return false;
     }
-    for (item, amount) in requirements {
-        items[*item] -= amount;
+    for (item, amount) in scaled {
+        items[item] -= amount;
     }
     true
 }
@@ -442,20 +949,24 @@ pub(crate) fn refund_requirements(state: &GameState, team: u8, block: i16) {
 
 pub(crate) fn refund_requirements_for(world: &DynamicWorld, team: u8, block: i16) {
     let rules = world.wave_rules.read();
-    if *world.game_state.mode.read() == GameMode::Sandbox
-        || world.game_state.infinite_resources.load(Ordering::Relaxed)
+    if world.game_state.infinite_resources.load(Ordering::Relaxed)
         || rules.infinite_resources
         || rules.team_rule(team).infinite_resources
     {
         return;
     }
     drop(rules);
+    let refund_multiplier = world
+        .wave_rules
+        .read()
+        .deconstruct_refund_multiplier
+        .max(0.0);
     for (item, amount) in crate::game::content::block_requirements(block) {
         crate::network::core_inventory::deposit_core_items(
             world,
             team,
             *item as i16,
-            (amount + 1) / 2,
+            (*amount as f32 * refund_multiplier).round().max(0.0) as i32,
         );
     }
 }
@@ -469,8 +980,7 @@ pub(crate) fn refund_requirements_impl(
     // The same infiniteResources gate that makes deconstruction free must
     // suppress its refund; otherwise a TeamRule/global infinite game mints
     // half the build cost on every break outside the Sandbox enum variant.
-    if *state.mode.read() == GameMode::Sandbox
-        || state.infinite_resources.load(Ordering::Relaxed)
+    if state.infinite_resources.load(Ordering::Relaxed)
         || rules
             .map(|rules| rules.infinite_resources || rules.team_rule(team).infinite_resources)
             .unwrap_or(false)
@@ -484,7 +994,11 @@ pub(crate) fn refund_requirements_impl(
     };
     for (item, amount) in crate::game::content::block_requirements(block) {
         if let Some(stored) = items.get_mut(*item) {
-            *stored = stored.saturating_add((amount + 1) / 2);
+            let refund_multiplier = rules
+                .map(|rules| rules.deconstruct_refund_multiplier.max(0.0))
+                .unwrap_or(0.5);
+            *stored =
+                stored.saturating_add((*amount as f32 * refund_multiplier).round().max(0.0) as i32);
         }
     }
 }
@@ -579,6 +1093,18 @@ pub(crate) fn dynamic_at(world: &DynamicWorld, position: i32) -> Option<DynamicT
 }
 
 pub(crate) fn effective_building_team(world: &DynamicWorld, position: i32) -> u8 {
+    if let Some(build) = world.pending_builds.get(&position) {
+        return build.team;
+    }
+    if !world.pending_builds.is_empty() {
+        if let Some(build) = world
+            .pending_builds
+            .iter()
+            .find(|build| build.occupied.contains(&position))
+        {
+            return build.team;
+        }
+    }
     dynamic_at(world, position)
         .map(|tile| tile.team)
         .or_else(|| {
@@ -622,13 +1148,89 @@ pub(crate) fn placement_footprint_is_replaceable(
     new_block: i16,
     team: u8,
 ) -> bool {
+    let derelict_repair = world.wave_rules.read().derelict_repair;
     occupied.iter().all(|position| {
+        if dynamic_at(world, *position).is_some_and(|tile| is_construct_block(tile.block)) {
+            return true;
+        }
         let existing = effective_block(world, *position);
         let existing_team = effective_building_team(world, *position);
         existing == 0
-            || ((existing_team == team || existing_team == 0)
+            || ((existing_team == team || (existing_team == 0 && derelict_repair))
                 && crate::game::content::block_can_replace(new_block, existing))
     })
+}
+
+fn building_world_center(position: i32, block: i16) -> (f32, f32) {
+    let tx = (position >> 16) as i16 as f32;
+    let ty = position as i16 as f32;
+    let size = f32::from(crate::game::content::block_size(block));
+    let extra = ((size as i32 + 1) % 2) as f32 * 4.0;
+    (tx * 8.0 + extra, ty * 8.0 + extra)
+}
+
+/// Official `Build.validPlace` core-protection + `placeRangeCheck` (Build.java).
+pub(crate) fn placement_blocked_by_cores(
+    world: &DynamicWorld,
+    position: i32,
+    block: i16,
+    team: u8,
+) -> bool {
+    let rules = world.wave_rules.read();
+    if rules.editor {
+        return false;
+    }
+    let (px, py) = building_world_center(position, block);
+    if rules.polygon_core_protection {
+        let mut closest: Option<(u8, f32)> = None;
+        for other in crate::network::world::registered_core_teams(world) {
+            if !rules.team_rule(other).protect_cores {
+                continue;
+            }
+            for core in crate::network::world::team_core_snapshot(world, other) {
+                let (cx, cy) = building_world_center(core.position, core.block);
+                let dist2 = (cx - px).hypot(cy - py);
+                if closest.is_none_or(|(_, best)| dist2 < best) {
+                    closest = Some((other, dist2));
+                }
+            }
+        }
+        if closest.is_some_and(|(owner, _)| owner != team) {
+            return true;
+        }
+    } else {
+        for other in crate::network::world::registered_core_teams(world) {
+            if other == team {
+                continue;
+            }
+            let radius = rules.enemy_core_radius_for(other);
+            if radius <= 0.0 {
+                continue;
+            }
+            for core in crate::network::world::team_core_snapshot(world, other) {
+                let (cx, cy) = building_world_center(core.position, core.block);
+                if (cx - px).hypot(cy - py) <= radius + 8.0 {
+                    return true;
+                }
+            }
+        }
+    }
+    if rules.place_range_check {
+        const PLACE_OVERLAP: f32 = 54.0;
+        for tile in world.tiles.iter() {
+            if tile.team == team || tile.team == 0 || tile.block == 0 {
+                continue;
+            }
+            if !rules.team_rule(tile.team).check_placement {
+                continue;
+            }
+            let (ex, ey) = building_world_center(tile.position, tile.block);
+            if (ex - px).hypot(ey - py) <= PLACE_OVERLAP {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub(crate) fn effective_block(world: &DynamicWorld, position: i32) -> i16 {
@@ -661,28 +1263,48 @@ pub(crate) fn effective_block(world: &DynamicWorld, position: i32) -> i16 {
 /// (`last_seen` refreshed by their updates) or builder units assist.
 pub(crate) fn schedule_build(world: &DynamicWorld, pending: &PendingBuild) {
     const ALPHA_BUILD_SPEED: f32 = 0.5;
-    let rules = &world.wave_rules.read();
-    // P0-5: Rules.buildSpeed(team) = global buildSpeedMultiplier * the
-    // team's TeamRule.buildSpeedMultiplier (Rules.java:327).
-    let build_speed = rules.build_speed_for(pending.team).max(0.0001);
-    // ConstructBlock.construct completes when progress reaches 1 OR
-    // state.rules.infiniteResources. Sandbox sets infiniteResources without
-    // setting instantBuild, so checking instantBuild alone introduced the
-    // visible multi-second "ghost build" regression.
-    // ConstructBlock.construct (desktop 158.1 bytecode offsets 87-117):
-    // `team.rules().infiniteResources || state.rules.infiniteResources`.
-    let infinite = rules.infinite_resources
-        || world.game_state.infinite_resources.load(Ordering::Relaxed)
-        || rules.team_rule(pending.team).infinite_resources;
-    let remaining = if rules.instant_build || infinite {
+    // Vanilla `ConstructBuild.buildCost = block.buildTime * buildCostMultiplier`.
+    // `simulate_constructions` applies `Rules.buildSpeed(team)` as work per
+    // tick, so remaining must NOT be pre-divided by that multiplier.
+    let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+    let remaining = if construction_is_instant(world, pending.team) {
         0.0
     } else {
-        (crate::game::content::block_build_time(pending.block) / ALPHA_BUILD_SPEED / build_speed)
+        (crate::game::content::block_build_time(pending.block) * cost_mult / ALPHA_BUILD_SPEED)
             .max(1.0)
     };
     if let Some(mut build) = world.pending_builds.get_mut(&pending.position) {
         build.remaining_ticks = remaining;
     }
+}
+
+/// `ConstructBuild.progress` for a RequestBlockSnapshot. Vanilla
+/// `BuilderComp` drops the plan when `cb.current != plan.block`; the
+/// snapshot must therefore carry the target id and a 0..=1 progress.
+pub(crate) fn pending_construct_progress(world: &DynamicWorld, pending: &PendingBuild) -> f32 {
+    construct_progress_from_remaining(world, pending.block, pending.remaining_ticks)
+}
+
+fn construct_progress_from_remaining(
+    world: &DynamicWorld,
+    block: i16,
+    remaining_ticks: f32,
+) -> f32 {
+    const ALPHA_BUILD_SPEED: f32 = 0.5;
+    let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+    let total =
+        (crate::game::content::block_build_time(block) * cost_mult / ALPHA_BUILD_SPEED).max(1.0);
+    (1.0 - remaining_ticks / total).clamp(0.0, 1.0)
+}
+
+/// Deconstruct progress starts at 1 and falls as `remaining_ticks` drops.
+pub(crate) fn pending_break_progress(world: &DynamicWorld, pending: &PendingBreak) -> f32 {
+    const ALPHA_BUILD_SPEED: f32 = 0.5;
+    let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+    let total = (crate::game::content::block_build_time(pending.block) * cost_mult
+        / ALPHA_BUILD_SPEED)
+        .max(1.0);
+    (pending.remaining_ticks / total).clamp(0.0, 1.0)
 }
 
 /// Advances every registered construction by `delta` game ticks (SOL-003):
@@ -701,7 +1323,7 @@ pub(crate) fn simulate_constructions(
         .map(|build| *build.key())
         .collect();
     let mut changed = false;
-    let now = std::time::Instant::now();
+    let rules = world.wave_rules.read().clone();
     for key in keys {
         let any_unit_plan = world
             .enemies
@@ -718,17 +1340,24 @@ pub(crate) fn simulate_constructions(
             .map(|unit| unit_construction_work(&unit, delta_ticks))
             .sum();
         let mut ready = false;
+        let Some((build_team, builder, last_seen)) = world
+            .pending_builds
+            .get(&key)
+            .map(|build| (build.team, build.builder.clone(), build.last_seen))
+        else {
+            continue;
+        };
+        let infinite_now = construction_is_instant(world, build_team);
+        let speed = delta_ticks.max(0.0) * rules.build_speed_for(build_team).max(0.0);
+        let player_work = player_plan_work(world, &builder, key, last_seen, infinite_now, speed);
         if let Some(mut build) = world.pending_builds.get_mut(&key) {
-            // Core-player plans never live on an EnemyUnit. They still use
-            // the last_seen window. As soon as a unit queue owns the tile,
-            // only in-range `updateBuilding` units advance it.
-            let active = now.duration_since(build.last_seen) <= std::time::Duration::from_secs(5);
+            if infinite_now {
+                build.remaining_ticks = 0.0;
+            }
             let mut work = if any_unit_plan {
-                unit_work
-            } else if active {
-                delta_ticks.max(0.0)
+                unit_work + player_work
             } else {
-                0.0
+                player_work
             };
             let assist_work = (build.assist_progress - build.applied_assist).max(0.0);
             build.applied_assist += assist_work;
@@ -738,6 +1367,15 @@ pub(crate) fn simulate_constructions(
             if build.remaining_ticks <= 0.0 {
                 ready = true;
             }
+            let remaining = build.remaining_ticks;
+            let current = build.block;
+            drop(build);
+            sync_construct_tile_progress(
+                world,
+                key,
+                current,
+                construct_progress_from_remaining(world, current, remaining),
+            );
         }
         if ready {
             if let Some(pending) = world.pending_builds.get(&key).map(|b| b.clone()) {
@@ -748,6 +1386,51 @@ pub(crate) fn simulate_constructions(
         }
     }
     changed
+}
+
+/// Work the placing player contributes this tick. A live `player_sessions`
+/// row used to zero this when `ClientSnapshot.isBuilding` decoded false while
+/// the plan was still in the queue — the Alpha beam stayed on a conveyor
+/// ghost. `last_seen` is refreshed by every snapshot that still carries the
+/// plan. A live row must not be stricter than the no-session fallback.
+fn player_plan_work(
+    world: &DynamicWorld,
+    builder: &SessionPlayer,
+    position: i32,
+    last_seen: Instant,
+    infinite_now: bool,
+    speed: f32,
+) -> f32 {
+    const ALPHA_BUILD_RANGE: f32 = 220.0;
+    if infinite_now {
+        return speed;
+    }
+    let now = Instant::now();
+    let active = now.saturating_duration_since(last_seen) <= std::time::Duration::from_secs(5);
+    if active {
+        return speed;
+    }
+    let presence = world
+        .player_sessions
+        .get(&builder.unit_id)
+        .map(|session| (session.x, session.y, session.building))
+        .or_else(|| {
+            world.player_sessions.iter().find_map(|session| {
+                (session.id == builder.id).then_some((session.x, session.y, session.building))
+            })
+        });
+    let Some((x, y, building)) = presence else {
+        return 0.0;
+    };
+    if !building {
+        return 0.0;
+    }
+    let (bx, by) = unit_plan_world(position);
+    if (x - bx).hypot(y - by) <= ALPHA_BUILD_RANGE {
+        speed
+    } else {
+        0.0
+    }
 }
 
 pub(crate) fn finish_pending_build(
@@ -795,13 +1478,10 @@ pub(crate) fn finish_pending_build(
             pending.block,
         )
     {
-        let mut payload = Vec::new();
-        crate::network::codec::Writes::write_i(&mut payload, pending.position)?;
-        out.broadcast(frame_generated_packet(
-            REMOVE_TILE_PACKET_ID,
-            &payload,
-            false,
-        )?);
+        // Official ConstructBuild stays on the tile when checkRequired
+        // fails (`canFinish = false`); REMOVE_TILE here destroyed the
+        // client's ConstructBlock and left the beam on a ghost.
+        world.pending_builds.insert(pending.position, pending);
         return Ok(());
     }
     let mut dynamic_origins = HashSet::new();
@@ -836,6 +1516,8 @@ pub(crate) fn finish_pending_build(
     world.tiles.insert(
         pending.position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: pending.position,
             block: pending.block,
             rotation: pending.rotation,
@@ -934,7 +1616,7 @@ pub(crate) fn finish_pending_build(
             },
         );
     }
-    out.broadcast(frame_generated_packet(
+    out.broadcast_critical(frame_generated_packet(
         CONSTRUCT_FINISH_PACKET_ID,
         &payload,
         false,
@@ -948,15 +1630,13 @@ pub(crate) fn schedule_break(world: &DynamicWorld, pending: &PendingBreak) {
     // records the total work in game ticks (ALPHA_BUILD_SPEED, like builds).
     const ALPHA_BUILD_SPEED: f32 = 0.5;
     // ConstructBlock.deconstruct also finishes immediately under
-    // state.rules.infiniteResources; no refund is emitted in that mode.
-    let rules = world.wave_rules.read();
-    let infinite = rules.infinite_resources
-        || world.game_state.infinite_resources.load(Ordering::Relaxed)
-        || rules.team_rule(pending.team).infinite_resources;
-    let remaining = if infinite {
+    // state.rules.infiniteResources or instantBuild.
+    let remaining = if construction_is_instant(world, pending.team) {
         0.0
     } else {
-        (crate::game::content::block_build_time(pending.block) / ALPHA_BUILD_SPEED).max(1.0)
+        let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+        (crate::game::content::block_build_time(pending.block) * cost_mult / ALPHA_BUILD_SPEED)
+            .max(1.0)
     };
     if let Some(mut operation) = world.pending_breaks.get_mut(&pending.position) {
         operation.remaining_ticks = remaining;
@@ -976,19 +1656,31 @@ pub(crate) fn simulate_breaks(
         .map(|operation| *operation.key())
         .collect();
     let mut changed = false;
-    let now = std::time::Instant::now();
+    let rules = world.wave_rules.read().clone();
     for key in keys {
         let mut ready = false;
+        let Some((break_team, builder, last_seen)) =
+            world.pending_breaks.get(&key).map(|operation| {
+                (
+                    operation.team,
+                    operation.builder.clone(),
+                    operation.last_seen,
+                )
+            })
+        else {
+            continue;
+        };
+        let infinite_now = construction_is_instant(world, break_team);
+        let speed = delta_ticks.max(0.0) * rules.build_speed_for(break_team).max(0.0);
+        let player_work = player_plan_work(world, &builder, key, last_seen, infinite_now, speed);
         if let Some(mut operation) = world.pending_breaks.get_mut(&key) {
-            let active =
-                now.duration_since(operation.last_seen) <= std::time::Duration::from_secs(5);
-            if active {
-                operation.remaining_ticks =
-                    (operation.remaining_ticks - delta_ticks.max(0.0)).max(0.0);
-                changed = true;
-                if operation.remaining_ticks <= 0.0 {
-                    ready = true;
-                }
+            if infinite_now {
+                operation.remaining_ticks = 0.0;
+            }
+            operation.remaining_ticks = (operation.remaining_ticks - player_work).max(0.0);
+            changed = true;
+            if operation.remaining_ticks <= 0.0 {
+                ready = true;
             }
         }
         if ready {
@@ -1007,6 +1699,7 @@ pub(crate) fn finish_pending_break(
     out: &dyn crate::network::outbound::FrameEmit,
     pending: PendingBreak,
 ) -> std::io::Result<()> {
+    record_finish_entered();
     // No persistence_lock here (callers hold it; parking_lot is not
     // reentrant — see finish_pending_build).
     if world.pending_breaks.remove(&pending.position).is_none()
@@ -1024,6 +1717,8 @@ pub(crate) fn finish_pending_break(
             let occupied = block_footprint(world, original_position, original)
                 .unwrap_or_else(|| vec![original_position]);
             world.tiles.entry(original_position).or_insert(DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
                 position: original_position,
                 block: 0,
                 rotation: 0,
@@ -1074,6 +1769,8 @@ pub(crate) fn finish_pending_break(
         world.tiles.insert(
             pending.position,
             DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
                 position: pending.position,
                 block: 0,
                 rotation: 0,
@@ -1140,12 +1837,20 @@ pub(crate) fn finish_pending_break(
     world.persistence_dirty.store(true, Ordering::Relaxed);
     let payload = encode_deconstruct_finish(&pending.builder, &pending)?;
     world.game_state.game_stats.write().buildings_deconstructed += 1;
-    out.broadcast(frame_generated_packet(
+    out.broadcast_critical(frame_generated_packet(
         DECONSTRUCT_FINISH_PACKET_ID,
         &payload,
         false,
     )?);
+    record_finish_enqueued();
     Ok(())
+}
+
+pub(crate) fn session_builder_unit_id(player: &SessionPlayer) -> i32 {
+    player
+        .controlled_unit
+        .standard_id()
+        .unwrap_or(player.unit_id)
 }
 
 pub(crate) fn encode_begin_place(
@@ -1153,7 +1858,7 @@ pub(crate) fn encode_begin_place(
     pending: &PendingBuild,
 ) -> std::io::Result<Vec<u8>> {
     encode_begin_place_for_unit(
-        player.unit_id,
+        session_builder_unit_id(player),
         pending.position,
         pending.block,
         pending.rotation,
@@ -1194,7 +1899,7 @@ pub(crate) fn encode_begin_break(
     let y = position as i16 as i32;
     let mut payload = Vec::new();
     payload.write_b(2)?;
-    payload.write_i(player.unit_id)?;
+    payload.write_i(session_builder_unit_id(player))?;
     payload.write_b(1)?;
     payload.write_i(x)?;
     payload.write_i(y)?;
@@ -1210,6 +1915,6 @@ pub(crate) fn encode_deconstruct_finish(
     payload.write_i(pending.position)?;
     payload.write_s(pending.block)?;
     payload.write_b(2)?;
-    payload.write_i(player.unit_id)?;
+    payload.write_i(session_builder_unit_id(player))?;
     Ok(payload)
 }

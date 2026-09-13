@@ -182,7 +182,10 @@ public final class SmokeMultiplayer158 {
 
     public static void main(String[] args) throws Exception {
         int port = args.length == 0 ? 6579 : Integer.parseInt(args[0]);
-        Version.build = 158;
+        // Server rejects mismatched builds (NetClient/KickReason); the
+        // scenario runs against any server generation by overriding
+        // -Doxide.smoke.build (159.7 evaluation).
+        Version.build = Integer.getInteger("oxide.smoke.build", 158);
         Vars.net = clientNet();
         Peer alpha = new Peer("multi-alpha", "AQIDBAUGBwg=", 324f);
         Peer beta = new Peer("multi-beta", "CAcGBQQDAgE=", 328f);

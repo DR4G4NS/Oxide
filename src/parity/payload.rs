@@ -102,6 +102,7 @@ fn payload_insert_building(world: &DynamicWorld, x: i32, y: i32, block: i16, tea
         }
     }
     let tile = DynamicTile {
+        logic_control: None,
         position: origin,
         block,
         team,
@@ -149,7 +150,9 @@ fn payload_mega(id: i32, x: f32, y: f32) -> EnemyUnit {
         authority: UnitAuthority::Player { player_id: 1 },
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: Default::default(),
+        drown_progress: 0.0,
     }
 }
 
@@ -175,9 +178,13 @@ fn payload_player_for(carrier_id: i32) -> SessionPlayer {
         mouse_x: 0.0,
         mouse_y: 0.0,
         rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
+        building: true,
         last_command: None,
+        docked_type: None,
         active_plans: std::collections::HashSet::new(),
         mining_position: None,
         mining_progress: 0.0,
@@ -393,6 +400,7 @@ fn run_payload_scenario(name: &str) -> PayloadScenarioOut {
                 tile.payload = Some(Box::new(CarriedPayload::Build(CarriedBuildPayload {
                     version: 0,
                     tile: DynamicTile {
+                        logic_control: None,
                         block: 218,
                         team: 1,
                         health: 1.0,

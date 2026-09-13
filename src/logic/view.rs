@@ -38,6 +38,23 @@ pub(crate) fn spawn_world_position(
     )
 }
 
+/// Official `LogicAI.transferDelay` (LogicAI.java:23): minimum delay between
+/// item/payload transfers, in game ticks (60 * 1.5).
+const LOGIC_TRANSFER_DELAY: f64 = 90.0;
+
+/// Official `LExecutor.timeoutDone` (desktop 159.7 LExecutor.java:98-100):
+/// `Time.time >= unitTimeouts.get(id) + delay`. Missing entries read as 0
+/// (a fresh executor can transfer immediately).
+fn transfer_timeout_done(state: &ExecutorState, unit_id: i32) -> bool {
+    let last = state.unit_timeouts.get(&unit_id).copied().unwrap_or(0.0);
+    state.exec_time >= last + LOGIC_TRANSFER_DELAY
+}
+
+/// Official `LExecutor.updateTimeout` (desktop 159.7 LExecutor.java:102-104).
+fn update_transfer_timeout(state: &mut ExecutorState, unit_id: i32) {
+    state.unit_timeouts.insert(unit_id, state.exec_time);
+}
+
 /// Sensor result (number or building object).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SensorValue {
@@ -190,6 +207,43 @@ impl<'a> WorldView<'a> {
     /// processor (`LogicBuild.validLink`: same team, inside
     /// `range + target.size*8/2`, target block not privileged). The old
     /// hardcoded `team == 1` gate allowed cross-team spoofing in PvP.
+    /// Official ControlI with LAccess.shoot / LAccess.shootp: store the
+    /// logic aim state on the building; the turret simulation consumes it
+    /// instead of its automatic targeting. Same team/link/privilege gate as
+    /// `set_enabled` (audit H18).
+    pub fn set_logic_shoot(
+        &self,
+        target: &LVar,
+        aim: Option<(f32, f32)>,
+        shooting: bool,
+        unit_id: i32,
+        privileged: bool,
+    ) {
+        let LObject::Building(pos) = target.objval else {
+            return;
+        };
+        let Some(tile) = self.world.tiles.get(&pos) else {
+            return;
+        };
+        let valid_link = privileged
+            || (tile.team == self.processor_team()
+                && self.processor_range().is_some_and(|range| {
+                    let (px, py) = self.processor_xy();
+                    let (tx, ty) = ((pos >> 16) as i16 as f64 * 8.0, pos as i16 as f64 * 8.0);
+                    let size = crate::game::content::block_placement(tile.block).size as f64;
+                    (px - tx).hypot(py - ty) <= f64::from(range) + size * 4.0
+                }));
+        let team_ok = tile.team == self.processor_team();
+        drop(tile);
+        if !valid_link || !team_ok {
+            return;
+        }
+        let (x, y) = aim.unwrap_or((0.0, 0.0));
+        if let Some(mut tile) = self.world.tiles.get_mut(&pos) {
+            tile.logic_control = Some((x, y, if shooting { 1.0 } else { 0.0 }, unit_id));
+        }
+    }
+
     pub fn set_enabled(&self, target: &LVar, value: bool, privileged: bool) {
         let LObject::Building(pos) = target.objval else {
             return;
@@ -432,6 +486,217 @@ impl<'a> WorldView<'a> {
         }
     }
 
+    /// Official `ucontrol idle` (desktop 159.7 LExecutor.java:356-358):
+    /// `ai.control = idle` only — the unit holds position and the movement
+    /// switch does nothing. Unlike `stop`, mining/building state is NOT
+    /// cleared, and the stored move target is left untouched (Java keeps
+    /// moveX/moveY; control=idle simply never reads them).
+    pub fn ucontrol_idle(&self, state: &ExecutorState) {
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        if let Some(mut order) = self.world.unit_orders.get_mut(&unit_id) {
+            order.logic_control = crate::network::world::logic_control::IDLE;
+        }
+    }
+
+    /// Official `ucontrol approach` (desktop 159.7 LExecutor.java:359-365):
+    /// stores the move target like `move` plus `ai.moveRad`; LogicAI moves
+    /// with `moveTo(target, moveRad - 7f, 7, ...)` — approach until inside
+    /// the radius, then hold. The radius rides in `target_id` as raw
+    /// f32 bits (movement orders keep it at -1 otherwise).
+    pub fn ucontrol_approach(&self, state: &ExecutorState, x: f64, y: f64, radius: f64) {
+        self.ucontrol_move(state, x, y);
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        let radius = if radius.is_finite() {
+            radius as f32
+        } else {
+            0.0
+        };
+        if let Some(mut order) = self.world.unit_orders.get_mut(&unit_id) {
+            order.logic_control = crate::network::world::logic_control::APPROACH;
+            order.target_id = radius.to_bits() as i32;
+        }
+    }
+
+    /// Official `ucontrol autoPathfind` (desktop 159.7 LExecutor.java:356-358):
+    /// `ai.control = autoPathfind`. No explicit destination is stored; the
+    /// movement pass hunts the closest enemy core every tick (flying units
+    /// move directly, ground units use the ControlPathfinder).
+    pub fn ucontrol_auto_pathfind(&self, state: &ExecutorState) {
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        if let Some(mut order) = self.world.unit_orders.get_mut(&unit_id) {
+            order.command = 0;
+            order.target_kind = 0;
+            order.target_x = None;
+            order.target_y = None;
+            order.target_id = -1;
+            order.logic_control = crate::network::world::logic_control::AUTO_PATHFIND;
+        }
+    }
+
+    /// Official `ucontrol targetp` (desktop 159.7 LExecutor.java:387-391):
+    /// `ai.mainTarget = p1.obj() instanceof Teamc ? t : null`,
+    /// `ai.aimControl = targetp`, `ai.shoot = p2.bool()`. The port
+    /// materializes objects from live tables: a Unit object is tracked by id
+    /// (its CURRENT position is re-read on every fire tick), a Building
+    /// object aims at its static center. Anything else (numbers, strings,
+    /// null, a dead unit) is mainTarget=null, which ends manual aiming.
+    pub fn ucontrol_targetp(&self, state: &ExecutorState, target: &LObject, shoot: bool) {
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        let aim = match target {
+            LObject::Unit(id) => self
+                .world
+                .enemies
+                .get(id)
+                .map(|unit| (Some(*id), f64::from(unit.x), f64::from(unit.y))),
+            LObject::Building(pos) => {
+                let x = ((pos >> 16) as i16) as f32 * 8.0;
+                let y = ((*pos & 0xffff) as i16) as f32 * 8.0;
+                Some((None, f64::from(x), f64::from(y)))
+            }
+            _ => None,
+        };
+        if let Some((tracked, tx, ty)) = aim {
+            if let Some(mut order) = self.world.unit_orders.get_mut(&unit_id) {
+                order.command = 0;
+                order.target_kind = if shoot { 7 } else { 8 };
+                order.target_id = tracked.unwrap_or(-1);
+                order.target_x = Some(tx as f32);
+                order.target_y = Some(ty as f32);
+                order.stances &= !1; // no hold stance while aiming
+            }
+        } else if let Some(mut order) = self.world.unit_orders.get_mut(&unit_id) {
+            // mainTarget = null: no observable aim point, so a previous
+            // aim/fire order ends. Non-firing orders are left untouched.
+            if matches!(order.target_kind, 7 | 8) {
+                order.target_kind = 0;
+                order.target_x = None;
+                order.target_y = None;
+                order.target_id = -1;
+            }
+        }
+    }
+
+    /// Official `ucontrol payDrop` (desktop 159.7 LExecutor.java:404-410):
+    /// gated by the executor's per-unit transfer timeout
+    /// (`LExecutor.timeoutDone`, LogicAI.transferDelay = 60 * 1.5 game
+    /// ticks); drops the last carried payload under the unit. Java updates
+    /// the timeout only when a payload was actually held; the port mirrors
+    /// that by updating it only when the drop succeeded.
+    pub fn ucontrol_paydrop(&self, state: &mut ExecutorState) {
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        if !transfer_timeout_done(state, unit_id) {
+            return;
+        }
+        let frame = crate::network::economy::logic_unit_drop_payload(self.world, unit_id);
+        if let Some(frame) = frame {
+            update_transfer_timeout(state, unit_id);
+            self.out.broadcast(frame);
+        }
+    }
+
+    /// Official `ucontrol payTake` (desktop 159.7 LExecutor.java:412-449):
+    /// same transfer-timeout gate; `takeUnits` picks up the closest grounded
+    /// same-team AI unit that fits the hold, otherwise the same-team
+    /// building under the unit (its held payload first, then the whole
+    /// building). Java updates the timeout for every payload-capable unit
+    /// regardless of pickup success.
+    pub fn ucontrol_paytake(&self, state: &mut ExecutorState, take_units: bool) {
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        if !transfer_timeout_done(state, unit_id) {
+            return;
+        }
+        let frame = if take_units {
+            crate::network::economy::logic_unit_pickup_unit(self.world, unit_id)
+        } else {
+            crate::network::economy::logic_unit_pickup_building(self.world, unit_id)
+        };
+        // Java runs exec.updateTimeout unconditionally once the unit is a
+        // Payloadc; the port skips it only when the unit cannot carry
+        // payloads at all (capacity 0 short-circuits both helpers).
+        let can_carry =
+            self.world.enemies.get(&unit_id).is_some_and(|unit| {
+                crate::network::economy::payload_capacity(unit.unit_type) > 0.0
+            });
+        if can_carry {
+            update_transfer_timeout(state, unit_id);
+        }
+        if let Some(frame) = frame {
+            self.out.broadcast(frame);
+        }
+    }
+
+    /// Official `ucontrol payEnter` (desktop 159.7 LExecutor.java:450-456):
+    /// `build.onControlSelect(unit)` on the same-team building under the
+    /// unit. For logic units `canControlSelect` is only true on payload
+    /// blocks/conveyors (CoreBlock demands a player): entering means the
+    /// unit becomes that block's payload. No transfer timeout applies.
+    pub fn ucontrol_payenter(&self, state: &ExecutorState) {
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        let Some(unit) = self.world.enemies.get(&unit_id).map(|unit| unit.clone()) else {
+            return;
+        };
+        let position =
+            (((unit.x / 8.0).floor() as i32) << 16) | ((unit.y / 8.0).floor() as i32 & 0xffff);
+        let Some(tile) = crate::network::buildings::construction::dynamic_at(self.world, position)
+        else {
+            return;
+        };
+        // Same team (Java: unit.team() == build.team) and an empty payload
+        // slot that accepts this unit (canControlSelect + acceptUnitPayload).
+        if tile.team != unit.team || tile.payload.is_some() {
+            return;
+        }
+        let payload = crate::network::world::CarriedPayload::Unit(unit.clone());
+        let Some(limit) = crate::network::economy::payload_block_limit(tile.block) else {
+            return;
+        };
+        if !crate::network::economy::payload_fits_limit(&payload, limit)
+            || !crate::network::economy::payload_block_accepts(tile.block, &payload)
+        {
+            return;
+        }
+        let rotation = unit.rotation;
+        let tile_position = tile.position;
+        let Some(mut live) = self.world.tiles.get_mut(&tile_position) else {
+            return;
+        };
+        live.payload = Some(Box::new(payload));
+        live.payload_progress = 0.0;
+        live.payload_rotation = rotation;
+        drop(live);
+        // The unit is now inside the block: remove it from the world exactly
+        // like a payload pickup does.
+        self.world.enemies.remove(&unit_id);
+        self.world.unregister_unit_group(unit_id);
+        crate::network::units::detach_unit_control(self.world, unit_id);
+        // Reuse the standard despawn wire so clients remove the entered unit.
+        use crate::network::codec::Writes;
+        let mut despawn = Vec::with_capacity(5);
+        if despawn.write_b(2).is_ok() && despawn.write_i(unit_id).is_ok() {
+            if let Ok(frame) = crate::network::wire::frame_generated_packet(
+                crate::network::protocol::UNIT_DESPAWN_PACKET_ID,
+                &despawn,
+                false,
+            ) {
+                self.out.broadcast(frame);
+            }
+        }
+    }
+
     /// LogicAI stop: ceases issuing new movement acceleration; existing
     /// velocity coasts with drag (LogicAI.java `case stop`).
     pub fn ucontrol_stop(&self, state: &ExecutorState) {
@@ -501,17 +766,51 @@ impl<'a> WorldView<'a> {
     }
 
     /// ucontrol build: sets the construction order (target_kind 9, block in
-    /// target_id). The unit moves to the site and builds with progress.
-    pub fn ucontrol_build(&self, state: &ExecutorState, x: f64, y: f64, block: i16, rotation: f64) {
+    /// target_id). The 5th config is stored in `payload_cooldown` as a numeric
+    /// TypeIO stand-in so `simulate_logic_build` can stamp Building.config.
+    pub fn ucontrol_build(
+        &self,
+        state: &ExecutorState,
+        x: f64,
+        y: f64,
+        block: i16,
+        rotation: f64,
+        config: f64,
+    ) {
         let Some(unit_id) = state.bound_unit else {
             return;
         };
+        let rules = self.world.wave_rules.read();
+        if !rules.logic_unit_control || !rules.logic_unit_build {
+            return;
+        }
+        drop(rules);
         if let Some(mut order) = self.world.unit_orders.get_mut(&unit_id) {
             order.command = 0;
             order.target_kind = 9;
             order.target_x = Some(x as f32);
             order.target_y = Some(y as f32);
             order.target_id = i32::from(block) | (i32::from(rotation as i8 & 3) << 16);
+            order.payload_cooldown = config as f32;
+            order.stances &= !1;
+        }
+    }
+
+    /// ucontrol deconstruct: target_kind 10, tile at (x, y).
+    pub fn ucontrol_deconstruct(&self, state: &ExecutorState, x: f64, y: f64) {
+        let Some(unit_id) = state.bound_unit else {
+            return;
+        };
+        let rules = self.world.wave_rules.read();
+        if !rules.logic_unit_control || !rules.logic_unit_deconstruct {
+            return;
+        }
+        drop(rules);
+        if let Some(mut order) = self.world.unit_orders.get_mut(&unit_id) {
+            order.command = 0;
+            order.target_kind = 10;
+            order.target_x = Some(x as f32);
+            order.target_y = Some(y as f32);
             order.stances &= !1;
         }
     }
@@ -527,6 +826,17 @@ impl<'a> WorldView<'a> {
         // SOL-007: only drop into the processor's own team (or derelict).
         if !self.building_owned(build_pos) {
             return;
+        }
+        if self.world.wave_rules.read().only_deposit_core {
+            let block = self
+                .world
+                .tiles
+                .get(&build_pos)
+                .map(|tile| tile.block)
+                .unwrap_or(0);
+            if !crate::network::buildings::snapshot::is_core_block(block) {
+                return;
+            }
         }
         let mut remaining = amount.max(0);
         if let Some(mut unit) = self.world.enemies.get_mut(&unit_id) {
@@ -611,7 +921,7 @@ impl<'a> WorldView<'a> {
             Some(tile) if tile.block != 0 => LObject::Building(pos),
             _ => LObject::Null,
         };
-        let floor = self.world.floors.get(pos as usize).copied().unwrap_or(0) as f64;
+        let floor = crate::network::combat::floor_at(self.world, x as f32, y as f32) as f64;
         (building, floor)
     }
 
@@ -640,17 +950,29 @@ impl<'a> WorldView<'a> {
         let index = tile_y as usize * self.world.width as usize + tile_x as usize;
         let _ = index;
         match layer {
-            crate::logic::ops::TileLayer::Ore | crate::logic::ops::TileLayer::Floor => {
-                // Official SetBlockI supports setOverlayNet/setFloorNet for
-                // these layers (JAR offsets 96-170). The port's terrain
-                // arrays (`DynamicWorld.floors/overlays`) are immutable
-                // through the read-only WorldView and shared with the world
-                // stream; mutating them here is out of scope, so these
-                // layers diagnose instead of silently writing a tile.
-                tracing::warn!(
-                    "setblock layer {:?} at ({tile_x},{tile_y}) is not supported by this port",
-                    layer
-                );
+            crate::logic::ops::TileLayer::Floor => {
+                self.world
+                    .game_state
+                    .extras
+                    .floor_overrides
+                    .insert(pos, block);
+                let overlay = crate::network::combat::overlay_at_tile(self.world, tile_x, tile_y);
+                if let Ok(frame) =
+                    crate::network::wire::calls::encode_set_floor_frame(pos, block, overlay)
+                {
+                    self.world.game_state.extras.queue_call(frame);
+                }
+            }
+            crate::logic::ops::TileLayer::Ore => {
+                self.world
+                    .game_state
+                    .extras
+                    .overlay_overrides
+                    .insert(pos, block);
+                if let Ok(frame) = crate::network::wire::calls::encode_set_overlay_frame(pos, block)
+                {
+                    self.world.game_state.extras.queue_call(frame);
+                }
             }
             crate::logic::ops::TileLayer::Building => {
                 // Not settable in 158.1 (TileLayer.settable has 3 entries);
@@ -693,6 +1015,7 @@ impl<'a> WorldView<'a> {
                         tile.rotation = rotation;
                         tile.health = (maximum * health_ratio).max(1.0);
                     }
+                    self.broadcast_set_tile(pos, block, team, rotation);
                 } else {
                     let maximum = crate::game::content::block_health(block);
                     let generation =
@@ -700,6 +1023,7 @@ impl<'a> WorldView<'a> {
                     self.world.tiles.insert(
                         pos,
                         crate::network::world::DynamicTile {
+                            logic_control: None,
                             position: pos,
                             block,
                             rotation,
@@ -710,9 +1034,22 @@ impl<'a> WorldView<'a> {
                             ..Default::default()
                         },
                     );
+                    self.broadcast_set_tile(pos, block, team, rotation);
                 }
             }
         }
+    }
+
+    fn broadcast_set_tile(&self, pos: i32, block: i16, team: u8, rotation: u8) {
+        if let Ok(frame) = crate::network::wire::calls::encode_set_tile_frame(
+            pos,
+            block,
+            team,
+            i32::from(rotation),
+        ) {
+            self.world.game_state.extras.queue_call(frame);
+        }
+        crate::network::combat::unit_combat::invalidate_navigation_for_block(self.world, block);
     }
 
     /// Radar scan: first unit matching the three AND-ed targets, sorted by
@@ -895,7 +1232,8 @@ impl<'a> WorldView<'a> {
                 }
             }
             UlocKind::Spawn => {
-                for (sx, sy) in &self.world.enemy_spawns {
+                let spawns = self.world.enemy_spawns.read().clone();
+                for (sx, sy) in &spawns {
                     let x = f64::from(*sx) * 8.0;
                     let y = f64::from(*sy) * 8.0;
                     let distance = ((x - origin_x).hypot(y - origin_y)) as f32;
@@ -904,7 +1242,7 @@ impl<'a> WorldView<'a> {
                     }
                 }
                 if let Some((_, _)) = best {
-                    let (sx, sy) = self.world.enemy_spawns[0];
+                    let (sx, sy) = spawns[0];
                     return Some((LObject::Null, f64::from(sx) * 8.0, f64::from(sy) * 8.0));
                 }
             }
@@ -926,11 +1264,61 @@ impl<'a> WorldView<'a> {
     /// setflag: store a global flag value.
     pub fn set_flag(&self, key: &str, value: f64) {
         self.world.logic_flags.insert(key.to_string(), value);
+        if let Ok(frame) = crate::network::wire::calls::encode_set_flag_frame(key, value != 0.0) {
+            self.world.game_state.extras.queue_call(frame);
+        }
     }
 
     /// getflag: read a global flag (0 when unset).
     pub fn get_flag(&self, key: &str) -> f64 {
         self.world.logic_flags.get(key).map(|v| *v).unwrap_or(0.0)
+    }
+
+    /// Official SenseWeatherI: true when a weather id is currently active.
+    pub fn weather_active(&self, weather_id: i16) -> bool {
+        self.world
+            .game_state
+            .extras
+            .weather
+            .read()
+            .iter()
+            .any(|entry| entry.weather_id == weather_id && entry.remaining > 0.0)
+    }
+
+    /// Official SetWeatherI: create/refresh or fade out a weather instance.
+    pub fn set_weather(&self, weather_id: i16, enabled: bool) {
+        if weather_id < 0 {
+            return;
+        }
+        const FADE_TICKS: f32 = 60.0 * 4.0;
+        const LIFE_TICKS: f32 = 60.0 * 60.0;
+        let mut weather = self.world.game_state.extras.weather.write();
+        if enabled {
+            if let Some(entry) = weather
+                .iter_mut()
+                .find(|entry| entry.weather_id == weather_id)
+            {
+                entry.remaining = entry.remaining.max(LIFE_TICKS);
+                entry.intensity = entry.intensity.max(1.0);
+            } else {
+                weather.push(crate::state::game_state::WeatherEntry {
+                    weather_id,
+                    intensity: 1.0,
+                    remaining: LIFE_TICKS,
+                });
+                if let Ok(frame) = crate::network::wire::calls::encode_create_weather_frame(
+                    weather_id, 1.0, LIFE_TICKS, 1.0, 0.0,
+                ) {
+                    drop(weather);
+                    self.world.game_state.extras.queue_call(frame);
+                }
+            }
+        } else if let Some(entry) = weather
+            .iter_mut()
+            .find(|entry| entry.weather_id == weather_id)
+        {
+            entry.remaining = entry.remaining.min(FADE_TICKS);
+        }
     }
 
     /// spawn: create a unit on the resolved team at logic tile (x, y) with the
@@ -1009,7 +1397,9 @@ impl<'a> WorldView<'a> {
             authority: crate::network::world::UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: Default::default(),
+            drown_progress: 0.0,
         };
         // P0-01: logic-spawned allies get their team's default controller.
         unit.authority = crate::network::units::default_unit_authority(self.world, &unit);
@@ -1072,7 +1462,7 @@ impl<'a> WorldView<'a> {
     /// without incrementing the wave counter.
     pub fn spawn_wave(&self, natural: bool, tile_x: f64, tile_y: f64) {
         if natural {
-            crate::network::combat::enemy::spawn_wave(self.world);
+            crate::network::combat::enemy::spawn_wave(self.world, self.out);
             return;
         }
         let wave = self
@@ -1082,8 +1472,6 @@ impl<'a> WorldView<'a> {
             .load(std::sync::atomic::Ordering::Relaxed)
             .saturating_sub(1);
         let packed = ((tile_x as i32) << 16) | (tile_y as i32 & 0xffff);
-        let spawn_x = (tile_x as f32) * 8.0;
-        let spawn_y = (tile_y as f32) * 8.0;
         let groups = {
             let rules = self.world.wave_rules.read();
             if rules.is_default() {
@@ -1096,61 +1484,18 @@ impl<'a> WorldView<'a> {
             }
         };
         let team = self.world.wave_rules.read().wave_team;
-        let mut index = 0u32;
+        let tile_x = tile_x as i16;
+        let tile_y = tile_y as i16;
         for group in groups {
-            let (health_multiplier, speed_multiplier, damage_multiplier) =
-                crate::game::status::status_multipliers(group.status_effect);
+            let team = group.team.unwrap_or(team);
             for _ in 0..group.amount {
                 let id = self
                     .world
                     .next_enemy_id
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let spread = (index as f32) * 2.0;
-                self.world.enemies.insert(
-                    id,
-                    crate::network::world::EnemyUnit {
-                        id,
-                        unit_type: group.spec.unit_type,
-                        entity_class: group.spec.entity_class,
-                        team,
-                        x: spawn_x + spread,
-                        y: spawn_y,
-                        rotation: -90.0,
-                        health: group.spec.health * health_multiplier,
-                        shield: group.shield,
-                        status_effect: group.status_effect,
-                        status_duration: f32::MAX,
-                        statuses: if group.status_effect >= 0 {
-                            vec![crate::game::status::ActiveStatus::simple(
-                                group.status_effect,
-                                f32::MAX,
-                            )]
-                        } else {
-                            Vec::new()
-                        },
-                        velocity_x: 0.0,
-                        velocity_y: 0.0,
-                        elevation: 0.0,
-                        payloads: Vec::new(),
-                        flag: 0.0,
-                        items: Vec::new(),
-                        mine_progress: 0.0,
-                        attack_reload: 0.0,
-                        secondary_attack_reload: 0.0,
-                        tertiary_attack_reload: 0.0,
-                        quaternary_attack_reload: 0.0,
-                        move_speed: group.spec.speed * speed_multiplier,
-                        attack_damage: group.spec.attack_damage * damage_multiplier,
-                        attack_reload_time: group.spec.attack_reload,
-                        attack_range: group.spec.attack_range,
-                        authority: crate::network::world::UnitAuthority::DefaultAi,
-                        build_plans: Vec::new(),
-                        update_building: true,
-                        status_agg: Default::default(),
-                    },
+                crate::network::combat::enemy::insert_wave_unit(
+                    self.world, &group, team, tile_x, tile_y, id, wave,
                 );
-                self.world.register_unit_group(id);
-                index += 1;
             }
         }
         self.world.game_state.enemies_count.store(
@@ -1170,6 +1515,10 @@ impl<'a> WorldView<'a> {
         p4: &LVar,
     ) {
         use crate::logic::executor::lvar_bool;
+        self.world
+            .game_state
+            .rules_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         match rule {
             LogicRule::WaveTimer => self.world.wave_rules.write().wave_timer = lvar_bool(value),
             LogicRule::Wave => {
@@ -1273,11 +1622,11 @@ impl<'a> WorldView<'a> {
             LogicRule::AttackMode
             | LogicRule::DropZoneRadius
             | LogicRule::Lighting
-            | LogicRule::AmbientLight
-            | LogicRule::SolarMultiplier
-            | LogicRule::DragMultiplier
-            | LogicRule::PauseDisabled
-            | LogicRule::MusicVolume => {}
+            | LogicRule::AmbientLight => {}
+            LogicRule::SolarMultiplier => {
+                self.world.wave_rules.write().solar_multiplier = (value.num() as f32).max(0.0);
+            }
+            LogicRule::DragMultiplier | LogicRule::PauseDisabled | LogicRule::MusicVolume => {}
         }
     }
 
@@ -1341,6 +1690,11 @@ impl<'a> WorldView<'a> {
                 explosion_falloff(dist, radius, damage)
             };
             let _ = crate::network::combat::enemy::damage_building(self.world, pos, applied);
+        }
+        if let Ok(frame) = crate::network::wire::calls::encode_logic_explosion_frame(
+            team, x, y, radius, damage, air, ground, pierce, false,
+        ) {
+            self.world.game_state.extras.queue_call(frame);
         }
     }
 
@@ -1481,6 +1835,30 @@ impl<'a> WorldView<'a> {
                 // Official UnitComp.java:88: `isFlying() { return elevation >= 0.09f; }`
                 SensorValue::Num(if unit.elevation >= 0.09 { 1.0 } else { 0.0 })
             }
+            LAccess::MaxHealth => SensorValue::Num(
+                crate::network::units::enemy_spec(unit.unit_type)
+                    .map(|spec| f64::from(spec.health))
+                    .unwrap_or(0.0),
+            ),
+            LAccess::Speed => SensorValue::Num(
+                crate::network::units::enemy_spec(unit.unit_type)
+                    .map(|spec| f64::from(spec.speed))
+                    .unwrap_or(0.0),
+            ),
+            LAccess::Type => SensorValue::Num(f64::from(unit.unit_type)),
+            LAccess::Id => SensorValue::Num(f64::from(unit.id)),
+            LAccess::VelocityX => SensorValue::Num(f64::from(unit.velocity_x)),
+            LAccess::VelocityY => SensorValue::Num(f64::from(unit.velocity_y)),
+            LAccess::ShootX => SensorValue::Num(f64::from(unit.x)),
+            LAccess::ShootY => SensorValue::Num(f64::from(unit.y)),
+            LAccess::PayloadCount | LAccess::TotalPayload => {
+                SensorValue::Num(unit.payloads.len() as f64)
+            }
+            LAccess::FirstItem => SensorValue::Num(
+                unit.items
+                    .first()
+                    .map_or(-1.0, |(item, _)| f64::from(*item)),
+            ),
             _ => SensorValue::Num(0.0),
         }
     }
@@ -1557,6 +1935,19 @@ impl<'a> WorldView<'a> {
             }
             LAccess::Range => SensorValue::Num(0.0),
             LAccess::Dead => SensorValue::Num(0.0),
+            LAccess::MaxHealth => {
+                SensorValue::Num(f64::from(crate::game::content::block_health(tile.block)))
+            }
+            LAccess::Progress => SensorValue::Num(f64::from(tile.production_progress)),
+            LAccess::Ammo => SensorValue::Num(f64::from(tile.ammo_units)),
+            LAccess::FirstItem => SensorValue::Num(f64::from(tile.stored_item.max(-1))),
+            LAccess::LiquidCapacity => SensorValue::Num(f64::from(
+                crate::network::economy::liquid_capacity(tile.block).unwrap_or(0.0),
+            )),
+            LAccess::MemoryCapacity => SensorValue::Num(
+                crate::network::economy::memory_capacity(tile.block).unwrap_or(0) as f64,
+            ),
+            LAccess::TotalPower => SensorValue::Num(f64::from(tile.power_stored)),
             _ => SensorValue::Num(0.0),
         }
     }

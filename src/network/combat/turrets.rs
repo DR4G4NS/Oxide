@@ -167,6 +167,42 @@ pub(crate) fn controlled_building_weapon_input(
     range: f32,
     can_target: impl Fn(&EnemyUnit) -> bool,
 ) -> ControlledWeaponInput {
+    // Logic control (audit H18): `control shoot x y shoot` / `shootp` on the
+    // building overrides automatic targeting, mirroring official
+    // TurretBuild.control: shooting=0 holds fire while logic-controlled.
+    if let Some(control) = world.tiles.get(&position).and_then(|t| t.logic_control) {
+        let (aim_x, aim_y, shooting_flag, unit_id) = control;
+        if shooting_flag <= 0.0 {
+            return ControlledWeaponInput::Idle;
+        }
+        // shootp aims at a live unit; fall back to its current position and
+        // re-validate range/targeting each tick.
+        if unit_id >= 0 {
+            if let Some(enemy) = world.enemies.get(&unit_id) {
+                let distance = (enemy.x - source_x).hypot(enemy.y - source_y);
+                if enemy.team == team || distance > range || !can_target(&enemy) {
+                    return ControlledWeaponInput::Idle;
+                }
+                return ControlledWeaponInput::Firing(ManualAim {
+                    target_id: unit_id,
+                    distance,
+                    x: enemy.x,
+                    y: enemy.y,
+                });
+            }
+            return ControlledWeaponInput::Idle;
+        }
+        let distance = (aim_x - source_x).hypot(aim_y - source_y);
+        if !distance.is_finite() || distance > range {
+            return ControlledWeaponInput::Idle;
+        }
+        return ControlledWeaponInput::Firing(ManualAim {
+            target_id: -1,
+            distance,
+            x: aim_x,
+            y: aim_y,
+        });
+    }
     let Some(controller) = controlling_session_for_building(world, position) else {
         return ControlledWeaponInput::Automatic;
     };

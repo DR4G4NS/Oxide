@@ -186,6 +186,8 @@ fn compare_executor_state(
 
 fn tile_at_pos(position: i32, block: i16) -> DynamicTile {
     DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position,
         block,
         rotation: 0,
@@ -249,7 +251,7 @@ fn parity_bare_world(save_name: &str) -> DynamicWorld {
         base_buildings: DashMap::new(),
         floors: Vec::new(),
         overlays: Vec::new(),
-        enemy_spawns: Vec::new(),
+        enemy_spawns: parking_lot::RwLock::new(Vec::new()),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -259,6 +261,7 @@ fn parity_bare_world(save_name: &str) -> DynamicWorld {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -269,10 +272,12 @@ fn parity_bare_world(save_name: &str) -> DynamicWorld {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: PathBuf::from(format!("/tmp/{save_name}")),
         network_template: Arc::new(Vec::new()),
         persistence_dirty: AtomicBool::new(false),
@@ -291,6 +296,8 @@ fn parity_bare_world(save_name: &str) -> DynamicWorld {
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     }
 }
 

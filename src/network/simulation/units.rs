@@ -9,16 +9,16 @@ use crate::logic::*;
 use crate::network::buildings::construction::{
     consume_requirements, dynamic_at, effective_block, encode_begin_place_for_unit,
 };
-use crate::network::buildings::plans::{rebuild_plan, AssistTarget};
+use crate::network::buildings::plans::{ai_rebuild_plan, rebuild_plan, AssistTarget};
 use crate::network::buildings::power as power_nodes;
 use crate::network::buildings::snapshot::dynamic_tile_health;
 use crate::network::buildings::snapshot::*;
 use crate::network::combat::enemy::{base_building_at, damage_building, navigation_index};
 use crate::network::combat::unit_combat::{
-    boost_properties, collect_allied_weapon_fire, collect_manual_weapon_fire,
+    boost_properties, collect_allied_weapon_fire_tick, collect_manual_weapon_fire,
     collision_position_passable, damaged_allied_building_target, effective_unit_build_speed,
     effective_unit_damage_multiplier, effective_unit_reload_delta, invalidate_navigation_for_block,
-    scaled_projectile_volley, spawn_allied_weapon_fire, spawn_weapon_fire_for_team, unit_can_shoot,
+    scaled_projectile_volley, spawn_weapon_fire_for_team, support_weapon_target, unit_can_shoot,
     unit_collision_layer, AlliedWeaponFire,
 };
 use crate::network::combat::*;
@@ -30,8 +30,8 @@ use crate::network::simulation::{
 };
 use crate::network::units::controller::{controlling_player_for_unit, unit_is_player_controlled};
 use crate::network::units::mining::{
-    heal_building_for_team, heal_buildings_in_radius, heal_nearest_building,
-    heal_nearest_building_flat, move_repair_unit, move_unit_toward, nearest_mineable_ore,
+    heal_building_for_team, heal_buildings_in_radius, heal_nearest_building_flat, move_repair_unit,
+    move_unit_toward, nearest_mineable_ore, team_has_damaged_building, unit_idle_retreat,
 };
 use crate::network::units::unit_orders::{
     advance_unit_order, apply_ordered_unit_movement, boost_should_land_near_target,
@@ -242,6 +242,13 @@ pub fn simulate_unit_collisions(world: &DynamicWorld) -> bool {
             if unit_collision_layer(unit) != 0 {
                 continue;
             }
+            // ASTRA C06: the core avatar and the possessed body are one combat
+            // entity. Do not push them apart.
+            if crate::network::units::controller::controlling_session_for_unit(world, unit.id)
+                .is_some_and(|session| session.unit_id == player.unit_id)
+            {
+                continue;
+            }
             let movement = crate::game::content::unit_movement(unit.unit_type);
             let required = (8.0 + movement.hit_size) * RADIUS_SCALE;
             let dx = player.x - unit.x;
@@ -336,19 +343,25 @@ pub fn simulate_allied_oxynoe_repair(
     };
     let volley = enemy_projectile_volley(31).unwrap();
     for shot in 0..shots {
-        spawn_allied_unit_projectile(
-            world,
-            out,
-            0,
-            -1,
-            Some(position),
-            volley,
-            snapshot.x,
-            snapshot.y,
-            target_x,
-            target_y,
-            u8::try_from(shot).unwrap_or(u8::MAX),
-        );
+        // Weapon.mirror: both mirrored mounts fire each scheduled shot.
+        for mount in 0..crate::network::combat::volley_mount_count(volley) {
+            let lateral = crate::network::combat::volley_mount_lateral(volley, mount);
+            crate::network::combat::spawn_allied_unit_projectile_lateral(
+                world,
+                out,
+                0,
+                -1,
+                Some(position),
+                volley,
+                snapshot.x,
+                snapshot.y,
+                target_x,
+                target_y,
+                lateral,
+                u8::try_from(shot).unwrap_or(u8::MAX),
+                1,
+            );
+        }
     }
     true
 }
@@ -358,15 +371,23 @@ pub fn simulate_allied_units(
     out: &dyn crate::network::outbound::FrameEmit,
     delta_ticks: f32,
 ) -> bool {
+    // Snapshot first: `unit_bound_to_logic` reads `world.enemies` and must
+    // not run while this map is iterated (DashMap shard deadlock).
     let allied_ids: Vec<_> = world
         .enemies
         .iter()
-        .filter(|unit| unit.team == 1 && !unit_is_player_controlled(world, unit.id))
+        .map(|unit| unit.clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .filter(|unit| {
+            !unit_is_player_controlled(world, unit.id)
+                && (unit_bound_to_logic(world, unit.id) || unit_uses_command_ai(Some(world), unit))
+        })
         .map(|unit| unit.id)
         .collect();
     let mut changed = false;
     for allied_id in allied_ids {
-        let Some(snapshot) = world.enemies.get(&allied_id).map(|unit| unit.clone()) else {
+        let Some(mut snapshot) = world.enemies.get(&allied_id).map(|unit| unit.clone()) else {
             continue;
         };
         let ramming = unit_has_stance(world, allied_id, 4);
@@ -394,11 +415,46 @@ pub fn simulate_allied_units(
             }
             continue;
         }
-        if apply_ordered_unit_movement(world, &snapshot, delta_ticks) && !ramming {
-            changed = true;
-            continue;
+        // ASTRA C03: pursueTarget re-acquires a hostile when the unit has
+        // no live attack target.
+        if unit_has_stance(world, allied_id, 2) {
+            let has_unit_target = world
+                .unit_orders
+                .get(&allied_id)
+                .is_some_and(|order| order.target_kind == 2 && order.target_id >= 0);
+            if !has_unit_target {
+                if let Some((id, x, y)) = crate::network::wire::transfer::nearest_opposing_unit(
+                    world,
+                    snapshot.team,
+                    snapshot.x,
+                    snapshot.y,
+                ) {
+                    if let Some(mut order) = world.unit_orders.get_mut(&allied_id) {
+                        order.target_kind = 2;
+                        order.target_id = id;
+                        order.target_x = Some(x);
+                        order.target_y = Some(y);
+                        if order.command != 0 {
+                            order.command = 0;
+                        }
+                    }
+                }
+            }
         }
-        if unit_mining(world, allied_id) {
+        let ordered_movement = apply_ordered_unit_movement(world, &snapshot, delta_ticks);
+        if ordered_movement {
+            changed = true;
+            if let Some(current) = world.enemies.get(&allied_id) {
+                snapshot = current.clone();
+            }
+        }
+        let command = world
+            .unit_orders
+            .get(&allied_id)
+            .map(|order| order.command)
+            .unwrap_or_else(|| default_unit_command(snapshot.unit_type));
+        let hold_fire = unit_has_stance(world, allied_id, 1);
+        if !matches!(command, 0 | 5) && unit_mining(world, allied_id) {
             simulate_logic_mining(world, &snapshot, delta_ticks);
             changed = true;
             continue;
@@ -413,24 +469,47 @@ pub fn simulate_allied_units(
             changed = true;
             continue;
         }
-        let command = world
-            .unit_orders
-            .get(&allied_id)
-            .map(|order| order.command)
-            .unwrap_or_else(|| default_unit_command(snapshot.unit_type));
-        if unit_has_stance(world, allied_id, 1) {
-            if let Some(mut ally) = world.enemies.get_mut(&allied_id) {
-                ally.velocity_x = 0.0;
-                ally.velocity_y = 0.0;
-            }
-            changed = true;
-            continue;
-        }
         if snapshot.unit_type == MONO.unit_type && command == 4 {
             continue;
         }
         if simulate_allied_oxynoe_repair(world, out, &snapshot, delta_ticks) {
             changed = true;
+            continue;
+        }
+        if matches!(snapshot.unit_type, 21 | 22) {
+            let target = support_weapon_target(world, &snapshot);
+            if let Some(target) = target.filter(|_| !hold_fire && unit_can_shoot(&snapshot)) {
+                let distance = (target.x - snapshot.x).hypot(target.y - snapshot.y);
+                let fires = world.enemies.get_mut(&allied_id).and_then(|mut unit| {
+                    // Poly's mounts are fixed to its body; Mega's mounts
+                    // rotate independently toward the synchronized aim.
+                    if unit.unit_type == 21 {
+                        unit.rotation = (target.y - unit.y).atan2(target.x - unit.x).to_degrees();
+                    }
+                    collect_allied_weapon_fire_tick(&mut unit, delta_ticks, distance)
+                });
+                if let Some(fires) = fires {
+                    spawn_weapon_fire_for_team(
+                        world,
+                        out,
+                        &fires,
+                        snapshot.id,
+                        target.unit_id,
+                        target.building_position,
+                        snapshot.x,
+                        snapshot.y,
+                        target.x,
+                        target.y,
+                        snapshot.team,
+                    );
+                    changed |= !fires.is_empty();
+                }
+            } else if let Some(mut unit) = world.enemies.get_mut(&allied_id) {
+                crate::network::combat::unit_combat::accumulate_unit_weapon_timers(
+                    &mut unit,
+                    delta_ticks,
+                );
+            }
             continue;
         }
         if matches!(command, 1..=4) {
@@ -444,13 +523,20 @@ pub fn simulate_allied_units(
             if let Some(mut ally) = world.enemies.get_mut(&allied_id) {
                 let distance = (target_x - ally.x).hypot(target_y - ally.y);
                 if distance <= ally.attack_range && !boosting {
-                    if !ramming {
+                    if !ramming && !ordered_movement {
                         ally.velocity_x = 0.0;
                         ally.velocity_y = 0.0;
                     }
-                    authoritative_fire =
-                        collect_allied_weapon_fire(&mut ally, delta_ticks, distance);
-                    if authoritative_fire.is_none() {
+                    if !hold_fire {
+                        authoritative_fire =
+                            collect_allied_weapon_fire_tick(&mut ally, delta_ticks, distance);
+                    } else {
+                        crate::network::combat::unit_combat::accumulate_unit_weapon_timers(
+                            &mut ally,
+                            delta_ticks,
+                        );
+                    }
+                    if authoritative_fire.is_none() && !hold_fire {
                         ally.attack_reload += effective_unit_reload_delta(&ally, delta_ticks);
                         if unit_can_shoot(&ally)
                             && ally.attack_damage > 0.0
@@ -463,7 +549,7 @@ pub fn simulate_allied_units(
                 }
             }
             if let Some(fires) = authoritative_fire {
-                spawn_allied_weapon_fire(
+                spawn_weapon_fire_for_team(
                     world,
                     out,
                     &fires,
@@ -474,6 +560,7 @@ pub fn simulate_allied_units(
                     snapshot.y,
                     target_x,
                     target_y,
+                    snapshot.team,
                 );
             } else if attack {
                 if let Some(volley) = enemy_projectile_volley(snapshot.unit_type) {
@@ -481,20 +568,26 @@ pub fn simulate_allied_units(
                         volley,
                         effective_unit_damage_multiplier(&snapshot),
                     );
-                    for shot_index in 0..volley.shots {
-                        spawn_allied_unit_projectile(
-                            world,
-                            out,
-                            snapshot.id,
-                            -1,
-                            Some(building_position),
-                            volley,
-                            snapshot.x,
-                            snapshot.y,
-                            target_x,
-                            target_y,
-                            shot_index,
-                        );
+                    // Weapon.mirror: fire once per mount (flipped copy x -> -x).
+                    for mount in 0..crate::network::combat::volley_mount_count(volley) {
+                        let lateral = crate::network::combat::volley_mount_lateral(volley, mount);
+                        for shot_index in 0..volley.shots {
+                            crate::network::combat::spawn_allied_unit_projectile_lateral(
+                                world,
+                                out,
+                                snapshot.id,
+                                -1,
+                                Some(building_position),
+                                volley,
+                                snapshot.x,
+                                snapshot.y,
+                                target_x,
+                                target_y,
+                                lateral,
+                                shot_index,
+                                snapshot.team,
+                            );
+                        }
                     }
                 } else if let Some((destroyed, health)) = damage_building(
                     world,
@@ -531,8 +624,14 @@ pub fn simulate_allied_units(
             .or_else(|| nearest_opposing_unit(world, snapshot.team, snapshot.x, snapshot.y))
         else {
             if let Some(mut ally) = world.enemies.get_mut(&allied_id) {
-                ally.velocity_x = 0.0;
-                ally.velocity_y = 0.0;
+                crate::network::combat::unit_combat::accumulate_unit_weapon_timers(
+                    &mut ally,
+                    delta_ticks,
+                );
+                if !ordered_movement {
+                    ally.velocity_x = 0.0;
+                    ally.velocity_y = 0.0;
+                }
             }
             continue;
         };
@@ -551,12 +650,20 @@ pub fn simulate_allied_units(
         let mut authoritative_fire = None;
         if let Some(mut ally) = world.enemies.get_mut(&allied_id) {
             if distance <= ally.attack_range && ally.attack_damage > 0.0 && !boosting {
-                if !ramming {
+                if !ramming && !ordered_movement {
                     ally.velocity_x = 0.0;
                     ally.velocity_y = 0.0;
                 }
-                authoritative_fire = collect_allied_weapon_fire(&mut ally, delta_ticks, distance);
-                if authoritative_fire.is_none() {
+                if !hold_fire {
+                    authoritative_fire =
+                        collect_allied_weapon_fire_tick(&mut ally, delta_ticks, distance);
+                } else {
+                    crate::network::combat::unit_combat::accumulate_unit_weapon_timers(
+                        &mut ally,
+                        delta_ticks,
+                    );
+                }
+                if authoritative_fire.is_none() && !hold_fire {
                     ally.attack_reload += effective_unit_reload_delta(&ally, delta_ticks);
                     if unit_can_shoot(&ally) && ally.attack_reload >= ally.attack_reload_time {
                         ally.attack_reload %= ally.attack_reload_time.max(0.0001);
@@ -564,7 +671,7 @@ pub fn simulate_allied_units(
                     }
                 }
             }
-            if distance > 0.001 && (ramming || distance > ally.attack_range) {
+            if !ordered_movement && distance > 0.001 && (ramming || distance > ally.attack_range) {
                 if let Some((x, y, velocity_x, velocity_y, rotation)) = routed {
                     ally.x = x;
                     ally.y = y;
@@ -578,7 +685,7 @@ pub fn simulate_allied_units(
             }
         }
         if let Some(fires) = authoritative_fire {
-            spawn_allied_weapon_fire(
+            spawn_weapon_fire_for_team(
                 world,
                 out,
                 &fires,
@@ -589,29 +696,37 @@ pub fn simulate_allied_units(
                 snapshot.y,
                 target_x,
                 target_y,
+                snapshot.team,
             );
         } else if attack {
             if let Some(volley) = enemy_projectile_volley(snapshot.unit_type) {
                 let volley =
                     scaled_projectile_volley(volley, effective_unit_damage_multiplier(&snapshot));
-                for shot_index in 0..volley.shots {
-                    spawn_allied_unit_projectile(
-                        world,
-                        out,
-                        snapshot.id,
-                        target_id,
-                        None,
-                        volley,
-                        snapshot.x,
-                        snapshot.y,
-                        target_x,
-                        target_y,
-                        shot_index,
-                    );
+                // Weapon.mirror: fire once per mount (flipped copy x -> -x).
+                for mount in 0..crate::network::combat::volley_mount_count(volley) {
+                    let lateral = crate::network::combat::volley_mount_lateral(volley, mount);
+                    for shot_index in 0..volley.shots {
+                        crate::network::combat::spawn_allied_unit_projectile_lateral(
+                            world,
+                            out,
+                            snapshot.id,
+                            target_id,
+                            None,
+                            volley,
+                            snapshot.x,
+                            snapshot.y,
+                            target_x,
+                            target_y,
+                            lateral,
+                            shot_index,
+                            snapshot.team,
+                        );
+                    }
                 }
             } else {
                 let dead = if let Some(mut target) = world.enemies.get_mut(&target_id) {
-                    let damage = apply_incoming_unit_damage(
+                    let damage = apply_incoming_unit_damage_in_world(
+                        world,
                         &target,
                         snapshot.attack_damage * effective_unit_damage_multiplier(&snapshot),
                         1.0,
@@ -785,6 +900,20 @@ pub(crate) fn simulate_controlled_navanax_lasers(
     shots > 0
 }
 
+/// Official per-tick repair output of the Erekir core-unit RepairBeamWeapons:
+/// flat health plus a percent of the target's max health, summed over mounts.
+/// Shared by the player-controlled aim-ray path and the autonomous
+/// builder-repair loop below.
+pub(crate) fn erekir_repair_rates(unit_type: i16) -> Option<(f32, f32)> {
+    match unit_type {
+        58 => Some((3.1, 0.06)), // evoke
+        59 => Some((3.3, 0.06)), // incite
+        // Emanate has two mirrored 1.8 + 0.03% mounts.
+        60 => Some((3.6, 0.06)),
+        _ => None,
+    }
+}
+
 /// The three Erekir core units deliberately override RepairBeamWeapon's
 /// autonomous defaults (`autoTarget=false`, `controllable=true`). These are
 /// manual tools, not BulletTypes: snap the aim ray to the first damaged allied
@@ -797,13 +926,8 @@ pub(crate) fn simulate_controlled_repair_beam(
     aim_y: f32,
     delta_ticks: f32,
 ) -> Option<bool> {
-    let (flat_per_tick, percent_per_tick) = match unit.unit_type {
-        58 => (3.1, 0.06), // evoke
-        59 => (3.3, 0.06), // incite
-        // Emanate has two mirrored 1.8 + 0.03% mounts.
-        60 => (3.6, 0.06),
-        _ => return None,
-    };
+    let (flat_per_tick, percent_per_tick) = erekir_repair_rates(unit.unit_type)?;
+
     let mut seen = std::collections::HashSet::new();
     let mut candidates: Vec<_> = world
         .tiles
@@ -847,6 +971,182 @@ pub(crate) fn simulate_controlled_repair_beam(
         out.broadcast(frame);
     }
     Some(true)
+}
+
+/// Official autonomous RepairBeamWeapon range per unit id
+/// (`UnitTypes.java` weapon `range` overrides: evoke/incite 60, emanate 65).
+fn erekir_repair_range(unit_type: i16) -> Option<f32> {
+    match unit_type {
+        60 => Some(65.0),
+        58..=59 => Some(60.0),
+        _ => None,
+    }
+}
+
+/// Official `BuildingComp.recentDamageTime` window (60f * 5f ticks) for the
+/// RepairBeamWeapon `wasRecentlyDamaged` heal modifier.
+const RECENT_DAMAGE_WINDOW_TICKS: f32 = 300.0;
+
+/// Official `RepairBeamWeapon.recentDamageMultiplier`.
+const RECENT_DAMAGE_MULTIPLIER: f32 = 0.1;
+
+/// Autonomous Erekir evoke/incite/emanate builder-repair (vanilla
+/// RepairBeamWeapon work channel): each idle unit picks the nearest damaged
+/// own-team standing building, approaches it when beyond the weapon range,
+/// and restores health per tick at the official beam rates scaled by the
+/// per-unit `HealBeamMount.strength` lerpDelta ramp (and the
+/// `wasRecentlyDamaged` 0.1x modifier). This is direct point-repair of
+/// standing structures; destroyed blocks stay owned by the team BuildAI
+/// rebuild path.
+pub fn simulate_erekir_builder_repair(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta_ticks: f32,
+) -> bool {
+    #[derive(Clone, Copy)]
+    struct Repairer {
+        id: i32,
+        unit_type: i16,
+        team: u8,
+        x: f32,
+        y: f32,
+    }
+    let mut repairers: Vec<Repairer> = world
+        .enemies
+        .iter()
+        .filter(|unit| matches!(unit.unit_type, 58..=60) && unit.health > 0.0)
+        .filter(|unit| {
+            !unit_is_player_controlled(world, unit.id)
+                && !unit_bound_to_logic(world, unit.id)
+                && !unit_has_active_rts_command(world, unit.id)
+        })
+        .map(|unit| Repairer {
+            id: unit.id,
+            unit_type: unit.unit_type,
+            team: unit.team,
+            x: unit.x,
+            y: unit.y,
+        })
+        .collect();
+    if repairers.is_empty() {
+        return false;
+    }
+    // Deterministic assignment order regardless of DashMap iteration order.
+    repairers.sort_by_key(|repairer| repairer.id);
+    let delta = delta_ticks.max(0.0);
+    let simulation_time = *world.game_state.simulation_time.read();
+    let mut changed = false;
+    for repairer in repairers {
+        let (Some((flat_per_tick, percent_per_tick)), Some(range)) = (
+            erekir_repair_rates(repairer.unit_type),
+            erekir_repair_range(repairer.unit_type),
+        ) else {
+            continue;
+        };
+        // Official HealBeamMount.strength ramp: lerpDelta toward 1 while a
+        // target is in reach and back toward 0 otherwise. Vanilla updates the
+        // strength before healing, so the fresh value feeds this tick.
+        let previous_strength = world
+            .repair_beam_strengths
+            .get(&repairer.id)
+            .map(|strength| *strength)
+            .unwrap_or(0.0);
+        let ramp = 1.0 - (1.0 - 0.2f32).powf(delta);
+        // Snapshot damaged own-team buildings once (dashmap guard: no nested
+        // world.tiles / world.base_buildings lookups while iterating).
+        let mut seen = HashSet::new();
+        let mut candidates: Vec<(f32, i32, i16, f32, f32)> = world
+            .tiles
+            .iter()
+            .filter(|tile| {
+                tile.block != 0 && tile.team == repairer.team && seen.insert(tile.position)
+            })
+            .filter_map(|tile| {
+                let maximum = crate::game::content::block_health(tile.block);
+                (dynamic_tile_health(&tile) < maximum - 0.0001).then(|| {
+                    let target_x = (tile.position >> 16) as i16 as f32 * 8.0;
+                    let target_y = tile.position as i16 as f32 * 8.0;
+                    (
+                        (target_x - repairer.x).hypot(target_y - repairer.y),
+                        tile.position,
+                        tile.block,
+                        target_x,
+                        target_y,
+                    )
+                })
+            })
+            .collect();
+        candidates.extend(world.base_buildings.iter().filter_map(|building| {
+            let maximum = crate::game::content::block_health(building.block);
+            if building.team != repairer.team
+                || !seen.insert(building.position)
+                || building.health >= maximum - 0.0001
+            {
+                return None;
+            }
+            let target_x = (building.position >> 16) as i16 as f32 * 8.0;
+            let target_y = building.position as i16 as f32 * 8.0;
+            Some((
+                (target_x - repairer.x).hypot(target_y - repairer.y),
+                building.position,
+                building.block,
+                target_x,
+                target_y,
+            ))
+        }));
+        // Nearest by distance; equal distances resolve to the lowest tile
+        // position for determinism.
+        candidates.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+        let Some((distance, position, block, target_x, target_y)) = candidates.into_iter().next()
+        else {
+            world.repair_beam_strengths.insert(
+                repairer.id,
+                previous_strength + (0.0 - previous_strength) * ramp,
+            );
+            continue;
+        };
+        if distance > range {
+            world.repair_beam_strengths.insert(
+                repairer.id,
+                previous_strength + (0.0 - previous_strength) * ramp,
+            );
+            if !unit_has_stance(world, repairer.id, 6) {
+                changed |= move_unit_toward(world, repairer.id, target_x, target_y, delta);
+            }
+            continue;
+        }
+        let strength = previous_strength + (1.0 - previous_strength) * ramp;
+        world.repair_beam_strengths.insert(repairer.id, strength);
+        if let Some(mut unit) = world.enemies.get_mut(&repairer.id) {
+            unit.velocity_x = 0.0;
+            unit.velocity_y = 0.0;
+            unit.rotation = (target_y - unit.y).atan2(target_x - unit.x).to_degrees();
+        }
+        let maximum = crate::game::content::block_health(block);
+        // Official heal: baseAmount * strength, x0.1 while the target was
+        // recently damaged (BuildingComp.wasRecentlyDamaged).
+        let recently_damaged = world
+            .building_last_damage
+            .get(&position)
+            .map(|last| simulation_time - *last <= RECENT_DAMAGE_WINDOW_TICKS)
+            .unwrap_or(false);
+        let damage_scale = if recently_damaged {
+            RECENT_DAMAGE_MULTIPLIER
+        } else {
+            1.0
+        };
+        let amount =
+            (flat_per_tick + maximum * percent_per_tick / 100.0) * strength * delta * damage_scale;
+        let Some(health) = heal_building_for_team(world, position, repairer.team, 0.0, amount)
+        else {
+            continue;
+        };
+        changed = true;
+        if let Ok(frame) = encode_build_health_update_frame(&[(position, health)]) {
+            out.broadcast(frame);
+        }
+    }
+    changed
 }
 
 pub fn simulate_unit_elevation(world: &DynamicWorld, delta_ticks: f32) -> bool {
@@ -1146,6 +1446,9 @@ pub fn simulate_builder_units(
             })
             .min_by(|left, right| left.0.total_cmp(&right.0));
         let Some((distance, position, target_x, target_y)) = target else {
+            if !unit_has_stance(world, builder.id, 6) {
+                changed |= unit_idle_retreat(world, &builder, 370.0, 110.0, delta_ticks);
+            }
             continue;
         };
         if distance > unit_build_range(builder.unit_type) {
@@ -1200,104 +1503,556 @@ pub fn simulate_builder_units(
         let Some((block, rotation, team, config, occupied)) = completed else {
             continue;
         };
-        if !consume_requirements(&world.game_state, 1, block) {
+        finish_ai_reconstruction(
+            world,
+            out,
+            builder.id,
+            AiConstruction {
+                position,
+                block,
+                rotation,
+                team,
+                config,
+                occupied,
+            },
+        );
+    }
+    changed
+}
+
+/// One completed AI rebuild ready for the shared ConstructFinish tail.
+pub(crate) struct AiConstruction {
+    position: i32,
+    block: i16,
+    rotation: u8,
+    team: u8,
+    config: Vec<u8>,
+    occupied: Vec<i32>,
+}
+
+/// Shared ConstructFinish tail for AI rebuilds: consumes the block cost from
+/// the owning team's core, restores the base-building template or inserts the
+/// dynamic tile, runs `after_placement` and broadcasts the official
+/// ConstructFinish frame. Used by the command-driven `simulate_builder_units`
+/// and by the autonomous team BuildAI below.
+pub(crate) fn finish_ai_reconstruction(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    builder_id: i32,
+    build: AiConstruction,
+) -> bool {
+    let AiConstruction {
+        position,
+        block,
+        rotation,
+        team,
+        config,
+        occupied,
+    } = build;
+    if !consume_requirements(&world.game_state, team, block) {
+        return false;
+    }
+    if let Some(template) = world
+        .base_building_templates
+        .iter()
+        .find(|template| {
+            template.position == position && template.block == block && template.team == team
+        })
+        // Powered rebuilds must stay in the dynamic authoritative registry:
+        // placement lifecycle and the server PowerGraph both consume it.
+        .filter(|_| power_role(block).is_none())
+    {
+        world.tiles.remove(&position);
+        world.base_buildings.insert(
+            position,
+            BaseBuildingState {
+                health: crate::game::content::block_health(block),
+                inventory: Vec::new(),
+                ..template.clone()
+            },
+        );
+    } else {
+        let generation = crate::network::world::assign_new_building_generation(world, position);
+        world.tiles.insert(
+            position,
+            DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
+                position,
+                block,
+                rotation,
+                team,
+                config: config.clone(),
+                enabled: true,
+                message: None,
+                occupied,
+                stored_item: -1,
+                stored_amount: 0,
+                production_progress: 0.0,
+                transport_progress: 0.0,
+                ammo_units: 0.0,
+                inventory: Vec::new(),
+                power_stored: 0.0,
+                power_links: Vec::new(),
+                liquid_inventory: Vec::new(),
+                stored_liquid: -1,
+                liquid_amount: 0.0,
+                output_liquid_amount: 0.0,
+                junction_items: Vec::new(),
+                mass_driver_incoming: Vec::new(),
+                mass_driver_rotation: 90.0,
+                mass_driver_waiting: Vec::new(),
+                payload: None,
+                payload_progress: 0.0,
+                payload_rotation: 0.0,
+                payload_accum: Vec::new(),
+                health: crate::game::content::block_health(block),
+                door_open: false,
+                shield: 0.0,
+                light_color: -1_900_545,
+                memory: crate::network::economy::memory_capacity(block)
+                    .map(|capacity| vec![0.0; capacity])
+                    .unwrap_or_default(),
+                duct_rec_dir: 0,
+                unloader_offset: 0,
+                conveyor_items: Vec::new(),
+                factory_command: None,
+                stack_state: 0,
+                stack_link: -1,
+                stack_cooldown: 0.0,
+                generation,
+            },
+        );
+    }
+    let placement_changes = building_placement::after_placement(world, position, &config);
+    let final_config = world
+        .tiles
+        .get(&position)
+        .map(|tile| tile.config.clone())
+        .unwrap_or(config);
+    invalidate_navigation_for_block(world, block);
+    if let Ok(payload) =
+        encode_construct_finish_for_unit(builder_id, position, block, rotation, team, &final_config)
+    {
+        if let Ok(frame) = frame_generated_packet(CONSTRUCT_FINISH_PACKET_ID, &payload, false) {
+            out.broadcast(frame);
+        }
+    }
+    let actor_id = world
+        .player_sessions
+        .iter()
+        .next()
+        .map(|session| session.id)
+        .unwrap_or(1);
+    let _ = broadcast_placement_power_configs(out, actor_id, &placement_changes);
+    true
+}
+
+/// Autonomous team BuildAI bound: at most this many fresh rebuild plans start
+/// per tick (deterministic builder-id order), mirroring the bounded plan scan
+/// of vanilla `BuilderAI.updateMovement` (`rebuildPeriod` timer + one active
+/// plan queue per unit).
+pub(crate) const AI_REBUILD_MAX_PLANS_PER_TICK: usize = 4;
+
+/// Official `BuilderAI.rebuildPeriod` rescan cadence for the autonomous team
+/// BuildAI: broken-block scans run on this tick period instead of every
+/// tick. Vanilla `defaultRebuildPeriod` is 120 ticks and drops to **10**
+/// when the owning team has `rules().buildAi` enabled — which is exactly the
+/// autonomous-team case this loop implements.
+pub(crate) const AI_REBUILD_SCAN_PERIOD: f32 = 10.0;
+
+/// Unreachable-plan abandonment window (ticks): a builder walking toward its
+/// plan drops it after this many ticks without improving on its best-so-far
+/// approach distance (vanilla-flavored version of BuildAI discarding plans
+/// it has no path to).
+pub(crate) const AI_PLAN_ABANDON_TICKS: f32 = 300.0;
+
+/// Minimum approach improvement (world units) that resets the abandonment
+/// stall counter.
+const AI_PLAN_IMPROVEMENT_EPSILON: f32 = 0.5;
+
+/// Team-aware requirement gate for the AI BuildAI (official
+/// `ConstructBlock.checkRequired` against the owning team's core items).
+fn ai_team_has_requirements(world: &DynamicWorld, team: u8, block: i16) -> bool {
+    if *world.game_state.mode.read() == crate::state::game_state::GameMode::Sandbox {
+        return true;
+    }
+    if world.game_state.infinite_resources.load(Ordering::Relaxed)
+        || world.wave_rules.read().team_rule(team).infinite_resources
+    {
+        return true;
+    }
+    let items = items_for_team(world, team);
+    crate::game::content::block_requirements(block)
+        .iter()
+        .all(|(item, amount)| items.get(*item).is_some_and(|stored| stored >= amount))
+}
+
+/// Autonomous team BuildAI: vanilla `mindustry.ai.types.BuilderAI` /
+/// `PrebuildAI` core loop generalized to every AI team. Destroyed blocks are
+/// already tombstoned into `world.tiles` by the damage path; each idle
+/// builder unit of the owning team picks the nearest own-team tombstone with
+/// available requirements, approaches it within `UnitType.buildRange`
+/// (official 220) and advances construction per tick through the shared
+/// ConstructFinish path. Command-driven player builders (team 1 command 2/3)
+/// stay owned by `simulate_builder_units` / `simulate_assist_units`.
+///
+/// Plan lifecycle mirrors vanilla `BuilderAI`: broken-block rescans run on
+/// [`AI_REBUILD_SCAN_PERIOD`] (`rebuildPeriod`), each site is claimed by at
+/// most one builder per tick, and a builder that cannot make progress toward
+/// its plan for [`AI_PLAN_ABANDON_TICKS`] ticks drops it (it is retried only
+/// after the next fresh scan). All ordering is deterministic by unit id and
+/// tile position.
+pub fn simulate_team_build_ai(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta_ticks: f32,
+) -> bool {
+    #[derive(Clone, Copy)]
+    struct AiBuilder {
+        id: i32,
+        unit_type: i16,
+        speed: f32,
+        team: u8,
+        x: f32,
+        y: f32,
+    }
+    let mut builders: Vec<AiBuilder> = world
+        .enemies
+        .iter()
+        .filter_map(|unit| {
+            let speed = effective_unit_build_speed(&unit)?;
+            let command = world
+                .unit_orders
+                .get(&unit.id)
+                .map(|order| order.command)
+                .unwrap_or_else(|| default_unit_command(unit.unit_type));
+            // Vanilla CommandAI never falls back to BuilderAI while an
+            // explicit command is active (`AIController.useFallback` is
+            // false for CommandAI): an ordered player-team unit is driven
+            // solely by its command path (rebuild/assist/repair/mine), so
+            // the autonomous team build AI must not touch its tombstones.
+            let explicitly_ordered = world.unit_orders.contains_key(&unit.id);
+            (unit.team != 1 || (!explicitly_ordered && !matches!(command, 2 | 3)))
+                .then_some(())
+                .filter(|_| {
+                    unit.update_building
+                        && !unit_is_player_controlled(world, unit.id)
+                        && !unit_bound_to_logic(world, unit.id)
+                        && !unit_has_active_rts_command(world, unit.id)
+                })
+                .map(|_| AiBuilder {
+                    id: unit.id,
+                    unit_type: unit.unit_type,
+                    speed,
+                    team: unit.team,
+                    x: unit.x,
+                    y: unit.y,
+                })
+        })
+        .collect();
+    if builders.is_empty() {
+        return false;
+    }
+    // Deterministic assignment order regardless of DashMap iteration order.
+    builders.sort_by_key(|builder| builder.id);
+
+    // Snapshot tombstones onto the periodic rebuildPeriod cache (dashmap
+    // guard: no nested world.tiles lookups while iterating). Sorted by
+    // position so distance ties resolve to the lowest tile deterministically.
+    struct AiSite {
+        position: i32,
+        x: f32,
+        y: f32,
+        block: i16,
+        rotation: u8,
+        team: u8,
+        config: Vec<u8>,
+    }
+    let simulation_time = *world.game_state.simulation_time.read();
+    {
+        let mut ai = world.ai_rebuild_state.lock();
+        if simulation_time - ai.last_scan_time >= AI_REBUILD_SCAN_PERIOD {
+            ai.sites = world
+                .tiles
+                .iter()
+                .filter_map(|tile| {
+                    let (block, rotation, team, config) = ai_rebuild_plan(&tile)?;
+                    Some(AiRebuildSite {
+                        position: tile.position,
+                        block,
+                        rotation,
+                        team,
+                        config,
+                    })
+                })
+                .collect();
+            ai.sites.sort_by_key(|site| site.position);
+            ai.abandoned.clear();
+            ai.last_scan_time = simulation_time;
+        }
+        // Pursuit bookkeeping only makes sense for live builders.
+        ai.pursuit
+            .retain(|id, _| builders.iter().any(|builder| builder.id == *id));
+    }
+    let (pursuits, abandoned): (HashMap<i32, AiPlanPursuit>, Vec<(i32, i32)>) = {
+        let ai = world.ai_rebuild_state.lock();
+        (ai.pursuit.clone(), ai.abandoned.clone())
+    };
+    let sites: Vec<AiSite> = world
+        .ai_rebuild_state
+        .lock()
+        .sites
+        .iter()
+        .map(|site| AiSite {
+            position: site.position,
+            x: (site.position >> 16) as i16 as f32 * 8.0,
+            y: (site.position as i16) as f32 * 8.0,
+            block: site.block,
+            rotation: site.rotation,
+            team: site.team,
+            config: site.config.clone(),
+        })
+        .collect();
+    if sites.is_empty() {
+        world.ai_rebuild_state.lock().pursuit.clear();
+        return false;
+    }
+
+    // Official `anyEnemyCoresWithin` gate: a team never builds inside the
+    // protected radius of an opposing core. Snapshot once per tick.
+    let rules = world.wave_rules.read();
+    let radii: std::collections::HashMap<u8, f32> = builders
+        .iter()
+        .map(|builder| builder.team)
+        .map(|team| (team, rules.enemy_core_radius_for(team)))
+        .collect();
+    drop(rules);
+    let cores: Vec<(u8, f32, f32)> = world
+        .team_core_lists
+        .iter()
+        .flat_map(|entry| {
+            let team = *entry.key();
+            entry
+                .value()
+                .iter()
+                .map(move |core| {
+                    (
+                        team,
+                        (core.position >> 16) as i16 as f32 * 8.0,
+                        (core.position as i16) as f32 * 8.0,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    // Sites already owned by a unit build queue or actively pursued by a
+    // walking builder are not reassigned; other idle builders may still
+    // converge on them and assist once the owner finishes or abandons.
+    let mut claimed: HashSet<i32> = world
+        .enemies
+        .iter()
+        .flat_map(|unit| {
+            unit.build_plans
+                .iter()
+                .filter(|plan| !plan.breaking)
+                .map(|plan| plan.position)
+                .collect::<Vec<_>>()
+        })
+        .chain(pursuits.values().map(|pursuit| pursuit.position))
+        .collect();
+
+    let mut changed = false;
+    let mut started = 0usize;
+    for builder in builders {
+        // Prune finished/stale plans from this unit's own queue first.
+        let own_plans: HashSet<i32> = if let Some(mut unit) = world.enemies.get_mut(&builder.id) {
+            unit.build_plans.retain(|plan| {
+                !plan.breaking
+                    && (world.pending_builds.contains_key(&plan.position)
+                        || world
+                            .tiles
+                            .get(&plan.position)
+                            .is_some_and(|tile| ai_rebuild_plan(&tile).is_some()))
+            });
+            unit.build_plans.iter().map(|plan| plan.position).collect()
+        } else {
+            HashSet::new()
+        };
+        let range = unit_build_range(builder.unit_type);
+        let Some(site) = sites
+            .iter()
+            // A builder keeps working its own claimed plan; fresh sites skip
+            // plans owned by another unit's queue or already pursued.
+            .filter(|site| {
+                site.team == builder.team
+                    && (!claimed.contains(&site.position)
+                        || own_plans.contains(&site.position)
+                        || pursuits
+                            .get(&builder.id)
+                            .is_some_and(|pursuit| pursuit.position == site.position))
+            })
+            // A site this builder abandoned as unreachable is only retried
+            // after the next fresh rebuildPeriod scan.
+            .filter(|site| {
+                !abandoned
+                    .iter()
+                    .any(|&(owner, position)| owner == builder.id && position == site.position)
+            })
+            .filter(|site| ai_team_has_requirements(world, builder.team, site.block))
+            .filter(|site| {
+                radii.get(&builder.team).copied().unwrap_or(0.0) == 0.0
+                    || cores.iter().all(|(core_team, cx, cy)| {
+                        *core_team == builder.team
+                            || (site.x - cx).hypot(site.y - cy) >= radii[&builder.team]
+                    })
+            })
+            // Nearest by distance; equal distances resolve to the lowest
+            // tile position (sites are pre-sorted) for determinism.
+            .min_by(|left, right| {
+                let dl = (left.x - builder.x).hypot(left.y - builder.y);
+                let dr = (right.x - builder.x).hypot(right.y - builder.y);
+                dl.total_cmp(&dr)
+                    .then_with(|| left.position.cmp(&right.position))
+            })
+        else {
+            continue;
+        };
+        let (position, px, py, block, rotation, config) = (
+            site.position,
+            site.x,
+            site.y,
+            site.block,
+            site.rotation,
+            site.config.clone(),
+        );
+        let distance = (px - builder.x).hypot(py - builder.y);
+        // Single claim per tick: mark the site for the rest of this pass so
+        // a second builder in the same tick skips it deterministically
+        // (builders iterate in ascending id order).
+        claimed.insert(position);
+        if distance > range {
+            // Live read (not the pre-tick snapshot): this builder's own
+            // pursuit entry must accumulate across ticks.
+            let pursued = world
+                .ai_rebuild_state
+                .lock()
+                .pursuit
+                .get(&builder.id)
+                .copied();
+            match pursued {
+                Some(pursuit) if pursuit.position == position => {
+                    let stall = pursuit.stall_ticks + delta_ticks.max(0.0);
+                    if distance < pursuit.best_distance - AI_PLAN_IMPROVEMENT_EPSILON {
+                        world.ai_rebuild_state.lock().pursuit.insert(
+                            builder.id,
+                            AiPlanPursuit {
+                                position,
+                                best_distance: distance,
+                                stall_ticks: 0.0,
+                            },
+                        );
+                    } else if stall >= AI_PLAN_ABANDON_TICKS {
+                        // Vanilla BuildAI discards plans it cannot reach:
+                        // drop the plan and try something else next scan.
+                        if let Some(mut unit) = world.enemies.get_mut(&builder.id) {
+                            unit.build_plans.retain(|plan| plan.position != position);
+                        }
+                        let mut ai = world.ai_rebuild_state.lock();
+                        ai.pursuit.remove(&builder.id);
+                        ai.abandoned.push((builder.id, position));
+                        continue;
+                    } else {
+                        world.ai_rebuild_state.lock().pursuit.insert(
+                            builder.id,
+                            AiPlanPursuit {
+                                position,
+                                best_distance: pursuit.best_distance,
+                                stall_ticks: stall,
+                            },
+                        );
+                    }
+                }
+                _ => {
+                    world.ai_rebuild_state.lock().pursuit.insert(
+                        builder.id,
+                        AiPlanPursuit {
+                            position,
+                            best_distance: distance,
+                            stall_ticks: 0.0,
+                        },
+                    );
+                }
+            }
+            if !unit_has_stance(world, builder.id, 6) {
+                changed |= move_unit_toward(world, builder.id, px, py, delta_ticks);
+            }
             continue;
         }
-        if let Some(template) = world
-            .base_building_templates
-            .iter()
-            .find(|template| {
-                template.position == position && template.block == block && template.team == team
-            })
-            // Powered rebuilds must stay in the dynamic authoritative registry:
-            // placement lifecycle and the server PowerGraph both consume it.
-            .filter(|_| power_role(block).is_none())
-        {
-            world.tiles.remove(&position);
-            world.base_buildings.insert(
-                position,
-                BaseBuildingState {
-                    health: crate::game::content::block_health(block),
-                    inventory: Vec::new(),
-                    ..template.clone()
-                },
-            );
-        } else {
-            world.tiles.insert(
-                position,
-                DynamicTile {
+        // Within build range: pursuit bookkeeping has served its purpose.
+        world.ai_rebuild_state.lock().pursuit.remove(&builder.id);
+        if let Some(mut unit) = world.enemies.get_mut(&builder.id) {
+            unit.velocity_x = 0.0;
+            unit.velocity_y = 0.0;
+            unit.rotation = (py - unit.y).atan2(px - unit.x).to_degrees();
+            if !unit
+                .build_plans
+                .iter()
+                .any(|plan| plan.position == position && !plan.breaking)
+            {
+                unit.build_plans.push(crate::network::world::UnitBuildPlan {
+                    breaking: false,
                     position,
                     block,
                     rotation,
-                    team,
                     config: config.clone(),
-                    enabled: true,
-                    message: None,
-                    occupied,
-                    stored_item: -1,
-                    stored_amount: 0,
-                    production_progress: 0.0,
-                    transport_progress: 0.0,
-                    ammo_units: 0.0,
-                    inventory: Vec::new(),
-                    power_stored: 0.0,
-                    power_links: Vec::new(),
-                    liquid_inventory: Vec::new(),
-                    stored_liquid: -1,
-                    liquid_amount: 0.0,
-                    output_liquid_amount: 0.0,
-                    junction_items: Vec::new(),
-                    mass_driver_incoming: Vec::new(),
-                    mass_driver_rotation: 90.0,
-                    mass_driver_waiting: Vec::new(),
-                    payload: None,
-                    payload_progress: 0.0,
-                    payload_rotation: 0.0,
-                    payload_accum: Vec::new(),
-                    health: crate::game::content::block_health(block),
-                    door_open: false,
-                    shield: 0.0,
-                    light_color: -1_900_545,
-                    memory: crate::network::economy::memory_capacity(block)
-                        .map(|capacity| vec![0.0; capacity])
-                        .unwrap_or_default(),
-                    duct_rec_dir: 0,
-                    unloader_offset: 0,
-                    conveyor_items: Vec::new(),
-                    factory_command: None,
-                    stack_state: 0,
-                    stack_link: -1,
-                    stack_cooldown: 0.0,
-                    generation: 0,
-                },
-            );
-        }
-        let placement_changes = building_placement::after_placement(world, position, &config);
-        let final_config = world
-            .tiles
-            .get(&position)
-            .map(|tile| tile.config.clone())
-            .unwrap_or(config);
-        invalidate_navigation_for_block(world, block);
-        if let Ok(payload) = encode_construct_finish_for_unit(
-            builder.id,
-            position,
-            block,
-            rotation,
-            team,
-            &final_config,
-        ) {
-            if let Ok(frame) = frame_generated_packet(CONSTRUCT_FINISH_PACKET_ID, &payload, false) {
-                out.broadcast(frame);
+                });
             }
         }
-        let actor_id = world
-            .player_sessions
-            .iter()
-            .next()
-            .map(|session| session.id)
-            .unwrap_or(1);
-        let _ = broadcast_placement_power_configs(out, actor_id, &placement_changes);
+        let completed = if let Some(mut tile) = world.tiles.get_mut(&position) {
+            let Some((block, rotation, team, config)) = ai_rebuild_plan(&tile) else {
+                continue;
+            };
+            let starting = tile.production_progress <= f32::EPSILON;
+            if starting && started >= AI_REBUILD_MAX_PLANS_PER_TICK {
+                continue;
+            }
+            tile.production_progress += builder.speed * delta_ticks.max(0.0);
+            changed = true;
+            if starting {
+                started += 1;
+                if let Ok(payload) = encode_begin_place_for_unit(
+                    builder.id, position, block, rotation, team, &config,
+                ) {
+                    if let Ok(frame) =
+                        frame_generated_packet(BEGIN_PLACE_PACKET_ID, &payload, false)
+                    {
+                        out.broadcast(frame);
+                    }
+                }
+            }
+            (tile.production_progress >= crate::game::content::block_build_time(block))
+                .then(|| (block, rotation, team, config, tile.occupied.clone()))
+        } else {
+            None
+        };
+        let Some((block, rotation, team, config, occupied)) = completed else {
+            continue;
+        };
+        finish_ai_reconstruction(
+            world,
+            out,
+            builder.id,
+            AiConstruction {
+                position,
+                block,
+                rotation,
+                team,
+                config,
+                occupied,
+            },
+        );
     }
     changed
 }
@@ -1311,9 +2066,12 @@ pub fn simulate_support_units(
         .enemies
         .iter()
         .filter(|unit| {
-            unit.team == 1
-                && matches!(unit.unit_type, 5 | 20 | 21 | 22 | 30 | 32)
+            matches!(unit.unit_type, 5 | 20 | 21 | 22 | 30 | 32)
                 && !unit_is_player_controlled(world, unit.id)
+                && !matches!(
+                    unit.authority,
+                    UnitAuthority::Player { .. } | UnitAuthority::Logic { .. }
+                )
         })
         .map(|unit| unit.id)
         .collect();
@@ -1333,14 +2091,25 @@ pub fn simulate_support_units(
             .map(|order| order.command)
             .unwrap_or_else(|| default_unit_command(snapshot.unit_type));
         if command == 1 {
-            let repair_range = match snapshot.unit_type {
-                21 => 45.0,
-                22 => 170.0,
-                _ => 0.0,
+            let repair_range = if matches!(snapshot.unit_type, 21 | 22) {
+                snapshot.attack_range * 0.65
+            } else {
+                0.0
             };
             if repair_range > 0.0 && !unit_has_stance(world, id, 6) {
-                changed |=
-                    move_repair_unit(world, id, snapshot.x, snapshot.y, repair_range, delta_ticks);
+                if team_has_damaged_building(world, snapshot.team) {
+                    changed |= move_repair_unit(
+                        world,
+                        id,
+                        snapshot.x,
+                        snapshot.y,
+                        repair_range,
+                        delta_ticks,
+                    );
+                } else {
+                    // RepairAI idle retreat (retreatDst 160, fleeRange 310).
+                    changed |= unit_idle_retreat(world, &snapshot, 310.0, 160.0, delta_ticks);
+                }
             }
         }
         match snapshot.unit_type {
@@ -1356,17 +2125,6 @@ pub fn simulate_support_units(
             }
             21 if crossed(480.0) => {
                 changed |= heal_buildings_in_radius(world, out, snapshot.x, snapshot.y, 50.0, 5.0);
-            }
-            22 => {
-                if let Some(mut unit) = world.enemies.get_mut(&id) {
-                    unit.secondary_attack_reload += delta_ticks;
-                    if unit.secondary_attack_reload >= 15.0 {
-                        unit.secondary_attack_reload %= 15.0;
-                        drop(unit);
-                        changed |=
-                            heal_nearest_building(world, out, snapshot.x, snapshot.y, 182.0, 5.5);
-                    }
-                }
             }
             30 => {
                 changed |= heal_nearest_building_flat(
@@ -1404,8 +2162,13 @@ pub fn simulate_mono_mining(
         world.mono_mining_targets.remove(&unit_id);
         return false;
     };
-    let carried_amount = snapshot.secondary_attack_reload.max(0.0).round() as i32;
-    let carried_item = snapshot.tertiary_attack_reload.round() as i16 - 1;
+    let carried_amount: i32 = snapshot.items.iter().map(|(_, amount)| *amount).sum();
+    let carried_item = snapshot
+        .items
+        .iter()
+        .find(|(_, amount)| *amount > 0)
+        .map(|(item, _)| *item)
+        .unwrap_or(-1);
     let team = snapshot.team;
     let (core_x, core_y) = core_world_for_team(world, team);
     if carried_amount >= 30 {
@@ -1428,8 +2191,7 @@ pub fn simulate_mono_mining(
             );
             if let Some(mut unit) = world.enemies.get_mut(&unit_id) {
                 unit.attack_reload = 0.0;
-                unit.secondary_attack_reload = 0.0;
-                unit.tertiary_attack_reload = 0.0;
+                unit.items.clear();
                 unit.velocity_x = 0.0;
                 unit.velocity_y = 0.0;
             }
@@ -1460,6 +2222,8 @@ pub fn simulate_mono_mining(
     // over or the item no longer matches, and failed scans back off 60 ticks.
     let desired_item = if carried_item >= 0 {
         Some(carried_item)
+    } else if snapshot.tertiary_attack_reload.round() as i16 > 0 {
+        Some(snapshot.tertiary_attack_reload.round() as i16 - 1)
     } else {
         mono_target_item(world, team)
     };
@@ -1516,8 +2280,11 @@ pub fn simulate_mono_mining(
         unit.attack_reload += delta_ticks.max(0.0) * 2.5;
         if unit.attack_reload >= 50.0 + f32::from(hardness) * 15.0 {
             unit.attack_reload = 0.0;
-            unit.secondary_attack_reload = (carried_amount + 1) as f32;
-            unit.tertiary_attack_reload = f32::from(item + 1);
+            if let Some(entry) = unit.items.iter_mut().find(|(held, _)| *held == item) {
+                entry.1 += 1;
+            } else {
+                unit.items.push((item, 1));
+            }
         }
         unit.rotation = (target_y - unit.y).atan2(target_x - unit.x).to_degrees();
     }

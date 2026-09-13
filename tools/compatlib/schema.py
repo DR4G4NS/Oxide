@@ -115,7 +115,5 @@ def validate_compat_dir(compat_dir: Path, expected_build: str | None = None) -> 
         if name not in present:
             errors.append(f"missing required artifact {name}")
     for path in sorted(compat_dir.glob("*.json")):
-        if path.name == "certification-ledger.json":
-            continue
         errors.extend(validate_artifact_file(path, expected_build=expected_build or compat_dir.name))
     return errors

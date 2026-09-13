@@ -46,7 +46,9 @@ pub(crate) fn item_transport_speed(block: i16) -> Option<f32> {
         260 => Some(0.08),
         262 => Some(1.0 / 74.0),
         263 => Some(0.5),
-        266 | 267 => Some(0.1),
+        // Router.java:14 speed = 8f with time += 1/speed * delta(): one
+        // item forwarded every 8 ticks (distributor shares the constant).
+        266 | 267 => Some(0.125),
         // 259 (plastanium-conveyor) is a StackConveyor in 158.1 and is
         // driven by the stack machine in simulate_erekir_ducts, not by the
         // generic per-item conveyor mover.
@@ -308,6 +310,12 @@ pub(crate) fn accept_logistics_item_from(
     if snapshot.block == 413 {
         return snapshot.enabled;
     }
+    // Incinerator.acceptItem (Incinerator.java:66-69): burns ANY item while
+    // enabled. The official heat > 0.5f warmup gate is approximated as
+    // immediately hot once powered (the burn is synchronous like ItemVoid).
+    if snapshot.block == 198 {
+        return snapshot.enabled;
+    }
     // Stack conveyors (plastanium 259, surge 279) take items through the
     // official StackConveyorBuild.acceptItem gates (state/cooldown/capacity),
     // not the generic conveyor queue (round 74: a normal conveyor feeding a
@@ -508,7 +516,14 @@ pub(crate) fn accept_logistics_item_from(
         return true;
     }
     if let Some(plan) = unit_factory_recipe(target.block, &target.config) {
-        let capacity = unit_factory_item_capacity(target.block, item);
+        let cost_multiplier = world.wave_rules.read().unit_cost_multiplier.max(0.0)
+            * world
+                .wave_rules
+                .read()
+                .team_rule(target.team)
+                .unit_cost_multiplier;
+        let capacity = (unit_factory_item_capacity(target.block, item) as f32 * cost_multiplier)
+            .round() as i32;
         if capacity == 0
             || !plan
                 .requirements
@@ -522,7 +537,15 @@ pub(crate) fn accept_logistics_item_from(
         return true;
     }
     if let Some(recipe) = reconstructor_recipe(target.block) {
-        let capacity = reconstructor_item_capacity(target.block, item);
+        let cost_multiplier = world.wave_rules.read().unit_cost_multiplier.max(0.0)
+            * world
+                .wave_rules
+                .read()
+                .team_rule(target.team)
+                .unit_cost_multiplier;
+        let capacity = (reconstructor_item_capacity(target.block, item) as f32
+            * cost_multiplier.max(0.0))
+        .round() as i32;
         if capacity == 0
             || !recipe.items.iter().any(|(accepted, _)| *accepted == item)
             || inventory_count(&target.inventory, item) >= capacity
@@ -579,25 +602,45 @@ pub(crate) fn simulate_junctions(world: &DynamicWorld, delta_ticks: f32) -> bool
             }
             changed = true;
         }
+        // Java Junction.updateTile walks the four directional buffers
+        // independently (Junction.java:55-76): a jammed output must not
+        // head-of-line block items whose own output direction is free.
         loop {
-            let ready = world.tiles.get(&key).and_then(|junction| {
-                junction
-                    .junction_items
+            let snapshot = world
+                .tiles
+                .get(&key)
+                .map(|junction| junction.junction_items.clone())
+                .unwrap_or_default();
+            let mut delivered = false;
+            for direction in 0..4u8 {
+                let Some((index, (_, item, _))) = snapshot
                     .iter()
-                    .position(|(_, _, remaining)| *remaining <= 0.0)
-                    .map(|index| (index, junction.junction_items[index]))
-            });
-            let Some((index, (direction, item, _))) = ready else {
-                break;
-            };
-            let output = offset_position(key, direction);
-            if !accept_logistics_item_from(world, output, item, Some(key), 0) {
+                    .enumerate()
+                    .find(|(_, (dir, _, remaining))| *dir == direction && *remaining <= 0.0)
+                else {
+                    continue;
+                };
+                let item = *item;
+                let output = offset_position(key, direction);
+                if !accept_logistics_item_from(world, output, item, Some(key), 0) {
+                    // This direction's head is blocked; keep serving the
+                    // remaining directions.
+                    continue;
+                }
+                if let Some(mut junction) = world.tiles.get_mut(&key) {
+                    if index < junction.junction_items.len()
+                        && junction.junction_items[index].0 == direction
+                        && junction.junction_items[index].1 == item
+                    {
+                        junction.junction_items.remove(index);
+                        delivered = true;
+                        changed = true;
+                    }
+                }
                 break;
             }
-            if let Some(mut junction) = world.tiles.get_mut(&key) {
-                if index < junction.junction_items.len() {
-                    junction.junction_items.remove(index);
-                }
+            if !delivered {
+                break;
             }
         }
     }
@@ -794,47 +837,95 @@ pub(crate) fn route_instant_item(
     else {
         return false;
     };
+    // instantTransfer family (Sorter.isSame): sorters 264/265 and overflow
+    // gates 268/269 reject chained transfers through each other.
+    let is_instant = |position: i32| -> bool {
+        world
+            .tiles
+            .get(&position)
+            .map(|tile| matches!(tile.block, 264 | 265 | 268 | 269))
+            .unwrap_or(false)
+    };
+    let source_instant = is_instant(source);
     let straight = offset_position(block.position, forward);
-    let left = offset_position(block.position, (forward + 1) % 4);
-    let right = offset_position(block.position, (forward + 3) % 4);
-    let mut targets = Vec::with_capacity(3);
+    // Sorter.java getTileTarget probes a = nearby(mod(dir - 1, 4)) and
+    // b = nearby(mod(dir + 1, 4)); the gate labels swap because its `from`
+    // points back at the source ((from + 2) % 4 is straight).
+    let side_ccw = offset_position(block.position, (forward + 3) % 4);
+    let side_cw = offset_position(block.position, (forward + 1) % 4);
+    let accept_target =
+        |target: i32| accept_logistics_item_from(world, target, item, Some(block.position), depth);
+
+    // Ordered candidate list; the first accepting probe delivers (each
+    // accept attempt IS the deposit), mirroring the official
+    // sole-side / both-side tie-break outcomes.
+    let mut candidates: Vec<i32> = Vec::with_capacity(3);
+    // Side-alternation flip bit: sorters use `dir`, gates use
+    // `from = dir + 2` (Sorter.java:134 / OverflowGate.java:77).
+    let mut flip_mask = 0u8;
     match block.block {
         264 | 265 => {
+            let invert = block.block == 265;
             let selected = configured_item(&block.config);
-            let goes_straight = (selected == Some(item)) != (block.block == 265);
+            // ((item == sortItem) != invert) == enabled (Sorter.java:116):
+            // a disabled sorter never routes straight.
+            let goes_straight = ((selected == Some(item)) != invert) == block.enabled;
             if goes_straight {
-                targets.push(straight);
-            } else if block.rotation.is_multiple_of(2) {
-                targets.extend([left, right]);
+                // Prevent 3-chains: source and straight target both
+                // instantTransfer blocks (Sorter.java:119-121).
+                if !(source_instant && is_instant(straight)) {
+                    candidates.push(straight);
+                }
             } else {
-                targets.extend([right, left]);
+                flip_mask = 1u8 << forward;
+                if block.rotation & flip_mask == 0 {
+                    candidates.push(side_ccw);
+                    candidates.push(side_cw);
+                } else {
+                    candidates.push(side_cw);
+                    candidates.push(side_ccw);
+                }
             }
         }
-        268 => {
-            targets.push(straight);
-            if block.rotation.is_multiple_of(2) {
-                targets.extend([left, right]);
+        268 | 269 => {
+            let invert = block.block == 269;
+            // inv = invert == enabled (OverflowGate.java:60): a normal
+            // powered gate runs forward-first and overflows to the sides
+            // only when straight refuses; inverted swaps the priority.
+            let inv = invert == block.enabled;
+            let straight_conflict = source_instant && is_instant(straight);
+            let gate_mask = 1u8 << ((forward + 2) % 4);
+            flip_mask = gate_mask;
+            let sides_first = inv || straight_conflict;
+            let bit_clear = block.rotation & gate_mask == 0;
+            let (first_side, second_side) = if bit_clear {
+                (side_cw, side_ccw)
             } else {
-                targets.extend([right, left]);
-            }
-        }
-        269 => {
-            if block.rotation.is_multiple_of(2) {
-                targets.extend([left, right]);
+                (side_ccw, side_cw)
+            };
+            if sides_first {
+                candidates.push(first_side);
+                candidates.push(second_side);
+                if !straight_conflict {
+                    candidates.push(straight);
+                }
             } else {
-                targets.extend([right, left]);
+                candidates.push(straight);
+                candidates.push(first_side);
+                candidates.push(second_side);
             }
-            targets.push(straight);
         }
         _ => return false,
     }
-    for target in targets {
-        if target == source {
+    for candidate in candidates {
+        if candidate == source {
             continue;
         }
-        if accept_logistics_item_from(world, target, item, Some(block.position), depth) {
-            if let Some(mut tile) = world.tiles.get_mut(&block.position) {
-                tile.rotation ^= 1;
+        if accept_target(candidate) {
+            if flip_mask != 0 {
+                if let Some(mut tile) = world.tiles.get_mut(&block.position) {
+                    tile.rotation ^= flip_mask;
+                }
             }
             return true;
         }
@@ -986,6 +1077,25 @@ pub(crate) fn valid_bridge_link(
     tile: &DynamicTile,
     range: i32,
 ) -> Option<i32> {
+    if tile.block == 298 {
+        // DirectionBridgeBuild.findLink (DirectionBridge.java:252-260): the
+        // reinforced bridge has NO config - it auto-links to the FIRST same
+        // block/team tile along its rotation, distance 1..=range.
+        for i in 1..=range {
+            // Sign-safe step: positions pack x/y as i16 halves.
+            let dx = [1i32, -1, 0, 0][usize::from(tile.rotation)];
+            let dy = [0i32, 0, 1, -1][usize::from(tile.rotation)];
+            let px = ((tile.position >> 16) as i16 as i32) + dx * i;
+            let py = (tile.position as i16 as i32) + dy * i;
+            let target = (px << 16) | (py as u16 as i32);
+            if let Some(other) = dynamic_at(world, target) {
+                if other.block == tile.block && other.team == tile.team {
+                    return Some(target);
+                }
+            }
+        }
+        return None;
+    }
     let target = configured_link(tile, world.width, world.height)?;
     let tx = (target >> 16) as i16 as i32;
     let ty = target as i16 as i32;
@@ -1030,4 +1140,40 @@ pub(crate) fn offset_position(position: i32, rotation: u8) -> i32 {
         _ => (0, -1),
     };
     ((x + dx) << 16) | ((y + dy) as u16 as i32)
+}
+
+#[cfg(test)]
+mod inventory_gate {
+    #[test]
+    fn turret_ammo_bullet_ids_are_inventoried() {
+        use super::{liquid_turret_weapon, power_turret_weapon, turret_ammo};
+        use crate::game::bullet_catalog::bullet_is_inventoried;
+        for block in 349..=376 {
+            for item in 0..22 {
+                if let Some(ammo) = turret_ammo(block, item) {
+                    assert!(
+                        bullet_is_inventoried(ammo.bullet_id),
+                        "turret {block} item {item} bullet {} missing from inventory (C2)",
+                        ammo.bullet_id
+                    );
+                }
+            }
+            if let Some(ammo) = power_turret_weapon(block) {
+                assert!(
+                    bullet_is_inventoried(ammo.bullet_id),
+                    "power turret {block} bullet {} missing from inventory (C2)",
+                    ammo.bullet_id
+                );
+            }
+            for liquid in 0..4 {
+                if let Some(ammo) = liquid_turret_weapon(block, liquid) {
+                    assert!(
+                        bullet_is_inventoried(ammo.bullet_id),
+                        "liquid turret {block} liquid {liquid} bullet {} missing (C2)",
+                        ammo.bullet_id
+                    );
+                }
+            }
+        }
+    }
 }

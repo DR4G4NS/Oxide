@@ -47,3 +47,8 @@ admin-data.json
 
 # Downloaded official server jars for local bench (large binaries)
 /tools/bench/*.jar
+
+# Local audits and client trial sessions
+/ASTRA*.md
+/e2e-campaign-*/
+/wasteland.msav

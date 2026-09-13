@@ -1,0 +1,6 @@
+# Official Mindustry 8 build 159.7 BeamNode.range: block ID, range (blocks).
+# Oracle: core/src/mindustry/content/Blocks.java v159.7
+#	beamNode range=10, beamTower range=23. Footprint size lives in
+#	block_sizes.tsv. LongPowerNode (319) is not a BeamNode.
+317	10
+318	23

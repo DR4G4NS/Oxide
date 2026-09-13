@@ -20,8 +20,9 @@ use crate::network::economy::payload::{
     drop_carried_build, dump_deconstructor_items, encode_payload_dropped_frame,
     encode_picked_build_payload_frame, encode_picked_unit_payload_frame,
     insert_into_payload_conveyor, offset_position_by, payload_block_accepts, payload_block_limit,
-    payload_capacity, payload_conveyor_move_time, payload_fits_limit, payload_used,
-    refresh_build_payload_sync, transfer_payload_forward, valid_payload_mass_driver_link,
+    payload_capacity, payload_conveyor_move_time, payload_dump_world_clear, payload_fits_limit,
+    payload_used, refresh_build_payload_sync, transfer_payload_forward,
+    valid_payload_mass_driver_link,
 };
 use crate::network::economy::spec::{
     accept_logistics_item_from, inventory_add, inventory_count, inventory_remove, inventory_total,
@@ -113,9 +114,14 @@ pub fn simulate_payload_conveyors(
             let Some(CarriedPayload::Unit(mut unit)) = snapshot.payload.as_deref().cloned() else {
                 continue;
             };
-            unit.id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
             let x = (next_position >> 16) as i16 as f32 * 8.0;
             let y = next_position as i16 as f32 * 8.0;
+            if !can_create_unit(world, unit.team, unit.unit_type)
+                || !payload_dump_world_clear(world, &unit, x, y)
+            {
+                continue;
+            }
+            unit.id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
             unit.x = x;
             unit.y = y;
             unit.rotation = f32::from(snapshot.rotation) * 90.0;
@@ -614,33 +620,39 @@ pub fn simulate_payload_carriers(
             } else {
                 match payload {
                     CarriedPayload::Unit(mut payload) => {
-                        payload.id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
-                        payload.x = carrier.x;
-                        payload.y = carrier.y;
-                        payload.velocity_x = 0.0;
-                        payload.velocity_y = 0.0;
-                        // P0-01: a payload-dropped unit starts with a fresh
-                        // controller (the carried copy kept the old authority).
-                        payload.authority =
-                            crate::network::units::default_unit_authority(world, &payload);
-                        world.register_unit_group(payload.id);
-                        world.enemies.insert(payload.id, payload.clone());
-                        world.unit_orders.insert(
-                            payload.id,
-                            UnitOrder {
-                                unit_id: payload.id,
-                                command: default_unit_command(payload.unit_type),
-                                stances: 0,
-                                payload_cooldown: 0.0,
-                                target_kind: 0,
-                                target_id: -1,
-                                target_x: None,
-                                target_y: None,
-                                logic_control: 0,
-                                queue: Vec::new(),
-                            },
-                        );
-                        true
+                        if !can_create_unit(world, payload.team, payload.unit_type)
+                            || !payload_dump_world_clear(world, &payload, carrier.x, carrier.y)
+                        {
+                            false
+                        } else {
+                            payload.id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
+                            payload.x = carrier.x;
+                            payload.y = carrier.y;
+                            payload.velocity_x = 0.0;
+                            payload.velocity_y = 0.0;
+                            // P0-01: a payload-dropped unit starts with a fresh
+                            // controller (the carried copy kept the old authority).
+                            payload.authority =
+                                crate::network::units::default_unit_authority(world, &payload);
+                            world.register_unit_group(payload.id);
+                            world.enemies.insert(payload.id, payload.clone());
+                            world.unit_orders.insert(
+                                payload.id,
+                                UnitOrder {
+                                    unit_id: payload.id,
+                                    command: default_unit_command(payload.unit_type),
+                                    stances: 0,
+                                    payload_cooldown: 0.0,
+                                    target_kind: 0,
+                                    target_id: -1,
+                                    target_x: None,
+                                    target_y: None,
+                                    logic_control: 0,
+                                    queue: Vec::new(),
+                                },
+                            );
+                            true
+                        }
                     }
                     CarriedPayload::Build(build) => {
                         placement_changes = drop_carried_build(world, &carrier, build);

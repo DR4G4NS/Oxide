@@ -9,6 +9,7 @@ use std::io::Read;
 
 pub const TYPEIO_NULL: u8 = 0;
 pub const TYPEIO_CONTENT: u8 = 5;
+pub const TYPEIO_BOOLEAN: u8 = 10;
 pub const TYPEIO_BYTE_ARRAY: u8 = 14;
 
 pub const CONTENT_ITEM: u8 = 0;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/compat_jar_gate.sh — exact JAR-backed certification (layer B).
+# tools/compat_jar_gate.sh — JAR-backed compatibility checks (layer B).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

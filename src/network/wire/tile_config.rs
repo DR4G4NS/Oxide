@@ -1,9 +1,12 @@
 //! Block rotation / tile-config / factory-command wire application. The
 //! listener adapter re-exports these through crate::network::listener::*.
 
+use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
+
 use crate::network::world::{DynamicTile, DynamicWorld, SessionPlayer};
 
-use crate::network::buildings::construction::dynamic_at;
+use crate::network::buildings::construction::{block_footprint, dynamic_at};
 use crate::network::buildings::{
     config as building_config, placement as building_placement, power as power_nodes,
 };
@@ -60,7 +63,8 @@ pub(crate) fn valid_tile_config(block: i16, config: &[u8]) -> bool {
     match block {
         // Unit factories accept either a plan index or the UnitType content itself.
         377..=379 => {
-            unit_factory_plan(block, config).is_some()
+            factory_plan_deselected(config)
+                || unit_factory_plan(block, config).is_some()
                 || decode_unit_command_config(config).is_some()
         }
         // Reconstructors are configured with a UnitCommand or null.
@@ -100,12 +104,31 @@ pub(crate) fn valid_tile_config(block: i16, config: &[u8]) -> bool {
         262 | 263 | 271 | 293 | 294 | 402 | 403 => {
             matches!(config, [1, _, _, _, _] | [7, _, _, _, _, _, _, _, _])
         }
+        // Door (228) / DoorLarge (229): TypeIO Boolean (tag 10). Tapping
+        // sends configure(!open) (Door.java:148-154). AutoDoor (239) has no
+        // tap config — it is server-toggled via AutoDoorToggleCallPacket.
+        228 | 229 => matches!(
+            config,
+            [building_config::TYPEIO_BOOLEAN, 0] | [building_config::TYPEIO_BOOLEAN, 1]
+        ),
         // SwitchBlock is configured with a TypeIO Boolean (tapped to toggle).
-        430 => matches!(config, [1, 0] | [1, 1]),
+        430 => matches!(config, [1, 0] | [1, 1] | [10, 0] | [10, 1]),
         // Message blocks accept a TypeIO String (tag 4 + u16 length + utf8).
         429 | 441 => {
             matches!(config, [4, high, low, rest @ ..]
                 if rest.len() == i16::from_be_bytes([*high, *low]) as usize)
+        }
+        // CanvasBuild.config(byte[]): TypeIO tag 14 + i32 length + packed
+        // pixels; the length MUST equal the block's fixed buffer
+        // (canvasSize^2 * log2(palette=8) bits -> 54 / 216 bytes,
+        // CanvasBlock.init + Blocks.java canvasSize 12 / 24).
+        439 | 440 => {
+            matches!(config, [14, a, b, c, d, rest @ ..]
+                if rest.len() == i32::from_be_bytes([*a, *b, *c, *d]) as usize)
+                && match block {
+                    439 => config.len() == 59,
+                    _ => config.len() == 221,
+                }
         }
         // Logic processors accept a null config or the compressed program
         // container produced by LogicBlock.compress (zlib stream).
@@ -122,6 +145,10 @@ pub(crate) fn unit_factory_plan(block: i16, config: &[u8]) -> Option<(i16, i16)>
         377 => &[0, 10, 5], // Dagger, Crawler, Nova
         378 => &[15, 20],   // Flare, Mono
         379 => &[25, 30],   // Risso, Retusa
+        // Erekir fabricators are configurable=false with a single plan.
+        386 => &[38],
+        387 => &[49],
+        388 => &[43],
         _ => return None,
     };
     let plan_config = config
@@ -146,11 +173,46 @@ pub(crate) fn unit_factory_plan(block: i16, config: &[u8]) -> Option<(i16, i16)>
         .and_then(|index| units.get(index).copied().map(|unit| (index as i16, unit)))
 }
 
+fn factory_plan_bytes(config: &[u8]) -> &[u8] {
+    config
+        .iter()
+        .position(|byte| *byte == FACTORY_COMMAND_MARKER)
+        .map_or(config, |index| &config[..index])
+}
+
+/// Resolve the same effective plan for simulation and writeSync. An explicit
+/// deselect/invalid selection must not reappear as plan zero on the client.
+pub(crate) fn resolved_unit_factory_plan(block: i16, config: &[u8]) -> Option<(i16, i16)> {
+    if matches!(block, 386..=388) {
+        return unit_factory_plan(block, &[1, 0, 0, 0, 0]);
+    }
+    unit_factory_plan(block, config).or_else(|| {
+        if factory_plan_configured(config) {
+            None
+        } else {
+            unit_factory_plan(block, &[1, 0, 0, 0, 0])
+        }
+    })
+}
+
+/// TypeIO Integer -1: explicit UnitFactory plan deselect (ASTRA F03).
+pub(crate) fn factory_plan_deselected(config: &[u8]) -> bool {
+    matches!(factory_plan_bytes(config), [1, 255, 255, 255, 255])
+}
+
+/// A plan index or unit Content object was actually sent (not created() default).
+pub(crate) fn factory_plan_configured(config: &[u8]) -> bool {
+    matches!(factory_plan_bytes(config), [1, _, _, _, _] | [5, 6, _, _])
+}
+
 pub(crate) fn configured_unit_command(tile: &DynamicTile) -> Option<u8> {
-    if matches!(tile.block, 377..=379) {
+    if matches!(tile.block, 377..=379 | 386..=388) {
         // P0-10: typed field is authoritative; the legacy `[254, command]`
         // suffix inside config is only read for tiles that predate the
         // separation (loaded from old checkpoints before migration).
+        // Erekir fabricators 386-388 share UnitFactoryBuild.command and the
+        // spawn path (`spawn_factory_unit`); they are configurable=false for
+        // plan selection only.
         tile.factory_command.or_else(|| {
             tile.config
                 .windows(2)
@@ -184,6 +246,9 @@ pub(crate) fn apply_tile_config(
             .is_some_and(|combat| combat.dead)
     {
         return false;
+    }
+    if matches!(tile.block, 228 | 229) {
+        return apply_manual_door_config(world, tile.position, config);
     }
     let power_node = power_nodes::is_power_node(tile.block);
     let Some(mut live) = world.tiles.get_mut(&tile.position) else {
@@ -220,9 +285,19 @@ pub(crate) fn apply_tile_config(
     if matches!(live.block, 406 | 407) {
         live.production_progress = 0.0;
     }
+    if matches!(live.block, 377..=379) {
+        // Official UnitFactory Integer/UnitType config resets progress when
+        // the selected plan changes (UnitFactory.java config handlers).
+        let previous = unit_factory_plan(live.block, &live.config);
+        let next = unit_factory_plan(live.block, config);
+        if previous != next {
+            live.production_progress = 0.0;
+        }
+    }
     if live.block == 430 {
-        if let [1, value] = config {
-            live.enabled = *value != 0;
+        match config {
+            [1, value] | [10, value] => live.enabled = *value != 0,
+            _ => {}
         }
     }
     if matches!(live.block, 429 | 441) {
@@ -232,6 +307,11 @@ pub(crate) fn apply_tile_config(
                 live.message = Some(String::from_utf8_lossy(rest).into_owned());
             }
         }
+    }
+    // CanvasBuild.config: the raw byte[] payload lands in `config` (tag 14 +
+    // i32 length + pixels) and encode_canvas_sync re-emits it verbatim.
+    if matches!(live.block, 439 | 440) {
+        live.payload_progress = 0.0; // invalidated -> repaint on clients
     }
     let factory_command = configured_unit_command(&live);
     live.config.clear();
@@ -290,4 +370,132 @@ pub(crate) fn broadcast_placement_power_configs(
         out.broadcast(encode_tile_config_broadcast(actor_id, *position, config)?);
     }
     Ok(())
+}
+
+fn typeio_boolean(config: &[u8]) -> Option<bool> {
+    match config {
+        [building_config::TYPEIO_BOOLEAN, 0] => Some(false),
+        [building_config::TYPEIO_BOOLEAN, 1] => Some(true),
+        _ => None,
+    }
+}
+
+fn door_occupied(world: &DynamicWorld, tile: &DynamicTile) -> Vec<i32> {
+    if !tile.occupied.is_empty() {
+        tile.occupied.clone()
+    } else {
+        block_footprint(world, tile.position, tile.block).unwrap_or_else(|| vec![tile.position])
+    }
+}
+
+fn tiles_share_edge(left: &[i32], right: &[i32]) -> bool {
+    left.iter().any(|a| {
+        let ax = *a >> 16;
+        let ay = *a as i16 as i32;
+        right.iter().any(|b| {
+            let bx = *b >> 16;
+            let by = *b as i16 as i32;
+            (ax - bx).abs() + (ay - by).abs() == 1
+        })
+    })
+}
+
+fn door_chain(world: &DynamicWorld, origin: i32) -> Vec<i32> {
+    let Some(start) = world.tiles.get(&origin) else {
+        return Vec::new();
+    };
+    if !matches!(start.block, 228 | 229) {
+        return vec![origin];
+    }
+    let block = start.block;
+    let team = start.team;
+    drop(start);
+    let candidates: Vec<(i32, Vec<i32>)> = world
+        .tiles
+        .iter()
+        .filter(|tile| tile.block == block && tile.team == team)
+        .map(|tile| (tile.position, door_occupied(world, &tile)))
+        .collect();
+    let Some(start_occupied) = candidates
+        .iter()
+        .find(|(position, _)| *position == origin)
+        .map(|(_, occupied)| occupied.clone())
+    else {
+        return vec![origin];
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut ordered = Vec::new();
+    let mut queue = VecDeque::new();
+    seen.insert(origin);
+    ordered.push(origin);
+    queue.push_back((origin, start_occupied));
+    while let Some((_, occupied)) = queue.pop_front() {
+        for (position, other_occupied) in &candidates {
+            if seen.contains(position) {
+                continue;
+            }
+            if !tiles_share_edge(&occupied, other_occupied) {
+                continue;
+            }
+            seen.insert(*position);
+            ordered.push(*position);
+            queue.push_back((*position, other_occupied.clone()));
+        }
+    }
+    ordered
+}
+
+fn door_world_center(position: i32, block: i16) -> (f32, f32) {
+    let tx = (position >> 16) as i16 as f32;
+    let ty = position as i16 as f32;
+    let size = f32::from(crate::game::content::block_size(block));
+    let extra = ((size as i32 + 1) % 2) as f32 * 4.0;
+    (tx * 8.0 + 4.0 + extra, ty * 8.0 + 4.0 + extra)
+}
+
+fn point_in_building(x: f32, y: f32, position: i32, block: i16, extra_margin: f32) -> bool {
+    let (cx, cy) = door_world_center(position, block);
+    let half = f32::from(crate::game::content::block_size(block)) * 4.0 + extra_margin;
+    (x - cx).abs() <= half && (y - cy).abs() <= half
+}
+
+fn units_overlap_building(world: &DynamicWorld, position: i32, block: i16) -> bool {
+    world
+        .enemies
+        .iter()
+        .any(|unit| point_in_building(unit.x, unit.y, position, block, 0.0))
+        || world.players.iter().any(|player| {
+            !player.dead && point_in_building(player.x, player.y, position, block, 0.0)
+        })
+}
+
+fn apply_manual_door_config(world: &DynamicWorld, origin: i32, config: &[u8]) -> bool {
+    let Some(open) = typeio_boolean(config) else {
+        return false;
+    };
+    let chain = door_chain(world, origin);
+    let mut changed = false;
+    for position in chain {
+        let Some(tile) = world.tiles.get(&position) else {
+            continue;
+        };
+        if tile.door_open == open {
+            continue;
+        }
+        let block = tile.block;
+        drop(tile);
+        if !open && units_overlap_building(world, position, block) {
+            continue;
+        }
+        if let Some(mut live) = world.tiles.get_mut(&position) {
+            live.door_open = open;
+            live.config.clear();
+            live.config.extend_from_slice(config);
+            changed = true;
+        }
+    }
+    if changed {
+        world.navigation_revision.fetch_add(1, Ordering::Relaxed);
+    }
+    changed
 }

@@ -291,7 +291,7 @@ mod tests {
             base_buildings: DashMap::new(),
             floors: Vec::new(),
             overlays: Vec::new(),
-            enemy_spawns: Vec::new(),
+            enemy_spawns: parking_lot::RwLock::new(Vec::new()),
             enemies: DashMap::new(),
             players: DashMap::new(),
             player_sessions: DashMap::new(),
@@ -301,6 +301,7 @@ mod tests {
             next_player_unit_id: AtomicI32::new(2_500_000),
             next_enemy_id: AtomicI32::new(3_000_000),
             unit_group_order: parking_lot::Mutex::new(Vec::new()),
+            damaged_window: parking_lot::Mutex::new(Vec::new()),
             projectiles: DashMap::new(),
             next_projectile_id: AtomicI32::new(4_000_000),
             overdrive_boosts: DashMap::new(),
@@ -311,10 +312,12 @@ mod tests {
             pending_breaks: DashMap::new(),
             mineable_ore: std::sync::OnceLock::new(),
             mono_mining_targets: DashMap::new(),
+            ai_rebuild_state: Default::default(),
             tile_footprint: DashMap::new(),
             navigation_revision: AtomicU64::new(0),
             ground_navigation: parking_lot::Mutex::new(None),
             leg_navigation: parking_lot::Mutex::new(None),
+            naval_navigation: parking_lot::Mutex::new(None),
             save_path: std::env::temp_dir().join("payload-rpc-test.json"),
             network_template: Arc::new(Vec::new()),
             persistence_dirty: AtomicBool::new(false),
@@ -333,6 +336,8 @@ mod tests {
             votekick_voters: DashMap::new(),
             votekick_cooldowns: DashMap::new(),
             puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+            building_last_damage: DashMap::new(),
+            repair_beam_strengths: DashMap::new(),
         }
     }
 
@@ -344,6 +349,7 @@ mod tests {
         let origin = pos(x, y);
         let occupied = footprint(world, origin, block).expect("footprint");
         let tile = DynamicTile {
+            logic_control: None,
             position: origin,
             block,
             team,
@@ -390,7 +396,9 @@ mod tests {
             authority: UnitAuthority::Player { player_id: 1 },
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         }
     }
 
@@ -416,9 +424,13 @@ mod tests {
             mouse_x: 0.0,
             mouse_y: 0.0,
             rotation: 0.0,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
             boosting: false,
             shooting: false,
+            building: true,
             last_command: None,
+            docked_type: None,
             active_plans: std::collections::HashSet::new(),
             mining_position: None,
             mining_progress: 0.0,
@@ -431,6 +443,100 @@ mod tests {
             admin: false,
             chat_rate: crate::network::wire::ChatRateLimiter::new(),
         }
+    }
+
+    #[test]
+    fn infinite_resources_after_schedule_finishes_stale_build_in_one_tick() {
+        // The regression this pins: a build SCHEDULED under non-infinite rules
+        // (long remaining_ticks) must finish on the first simulate pass after
+        // the mode switches to Sandbox -- ConstructBlock.construct re-reads
+        // state.rules.infiniteResources every update.
+        let world = test_world();
+        world.game_state.start_hosting(
+            "sandbox-stale".into(),
+            crate::state::game_state::GameMode::Survival,
+        );
+
+        let position = pos(20, 20);
+        let builder = player_for(1);
+        let pending = crate::network::world::PendingBuild {
+            position,
+            block: 217, // 2x2 wall: long build time
+            previous_block: 0,
+            rotation: 0,
+            config: Vec::new(),
+            occupied: vec![position],
+            team: 1,
+            builder: builder.clone(),
+            last_seen: std::time::Instant::now(),
+            assist_progress: 0.0,
+            remaining_ticks: f32::MAX,
+            applied_assist: 0.0,
+        };
+        // Schedule under SURVIVAL rules (no instant finish).
+        world.pending_builds.insert(position, pending.clone());
+        crate::network::buildings::construction::schedule_build(&world, &pending);
+        assert!(
+            world.pending_builds.get(&position).unwrap().remaining_ticks > 0.0,
+            "survival schedule must keep a positive work budget"
+        );
+
+        // NOW switch to Sandbox (infiniteResources=true) and run one tick.
+        {
+            let mut rules = world.wave_rules.read().clone();
+            rules.infinite_resources = true;
+            *world.wave_rules.write() = rules;
+        }
+        let out = DashMap::new();
+        assert!(crate::network::buildings::construction::simulate_constructions(&world, &out, 1.0));
+        assert!(
+            !world.pending_builds.contains_key(&position),
+            "stale build must finish instantly once infiniteResources is on"
+        );
+    }
+
+    #[test]
+    fn sandbox_infinite_resources_finishes_pending_break_stale_schedule() {
+        // Deconstruct mirrors construct: vanilla finishes immediately under
+        // infiniteResources even when scheduled under survival rules.
+        let world = test_world();
+        world.game_state.start_hosting(
+            "sandbox-break".into(),
+            crate::state::game_state::GameMode::Survival,
+        );
+
+        let position = pos(30, 30);
+        let builder = player_for(1);
+        let pending_break = crate::network::world::PendingBreak {
+            position,
+            block: 216,
+            occupied: vec![position],
+            team: 1,
+            dynamic: true,
+            builder: builder.clone(),
+            last_seen: std::time::Instant::now(),
+            remaining_ticks: f32::MAX,
+        };
+        world.pending_breaks.insert(position, pending_break.clone());
+        crate::network::buildings::construction::schedule_break(&world, &pending_break);
+        assert!(
+            world.pending_breaks.get(&position).unwrap().remaining_ticks > 0.0,
+            "survival break schedule must keep a positive budget"
+        );
+
+        {
+            let mut rules = world.wave_rules.read().clone();
+            rules.infinite_resources = true;
+            *world.wave_rules.write() = rules;
+        }
+        let out = DashMap::new();
+        assert!(crate::network::buildings::construction::simulate_breaks(
+            &world, &out, 1.0
+        ));
+        assert!(
+            !world.pending_breaks.contains_key(&position),
+            "stale deconstruct must finish instantly once infiniteResources is on"
+        );
     }
 
     fn give_wall(world: &DynamicWorld, carrier_id: i32, tile: DynamicTile) {
@@ -512,6 +618,7 @@ mod tests {
         let world = test_world();
         let origin = insert_building(&world, 5, 5, 398, 1);
         let inner = DynamicTile {
+            logic_control: None,
             position: 0,
             block: 216,
             team: 1,
@@ -555,6 +662,7 @@ mod tests {
         let world = test_world();
         world.enemies.insert(10, mega(10, 80.0, 80.0));
         let wall = DynamicTile {
+            logic_control: None,
             position: 0,
             block: 216,
             team: 1,
@@ -606,6 +714,7 @@ mod tests {
         // Blocked drop: target cell already occupied.
         world.enemies.insert(12, mega(12, 80.0, 80.0));
         let wall = DynamicTile {
+            logic_control: None,
             position: 0,
             block: 216,
             team: 1,
@@ -627,6 +736,7 @@ mod tests {
             &world,
             10,
             DynamicTile {
+                logic_control: None,
                 position: 0,
                 block: 216,
                 team: 1,
@@ -1054,5 +1164,101 @@ mod tests {
         for cell in occupied {
             assert!(!world.tile_footprint.contains_key(&cell));
         }
+    }
+    // --- Mirrored from tests/src/test/java/ApplicationTests.java ---
+
+    #[test]
+    fn block_overlap_removed_matches_applicationtests() {
+        // Java: coreShard at tile(1,1), then coreShard at tile(2,2) overwrites
+        // it -- the old 3x3 building is removed and its far cells go air.
+        let world = test_world();
+        let first = insert_building(&world, 1, 1, 339, 1); // 3x3 core
+        assert_eq!(
+            world.tiles.get(&first).unwrap().occupied.len(),
+            9,
+            "core occupies 3x3"
+        );
+        // Vanilla setBlock REPLACES overlapping buildings: the port's contract
+        // is remove-then-attach, so replicate the observable end state.
+        assert!(detach_building_from_world(&world, first).is_some());
+        let second = insert_building(&world, 2, 2, 339, 1);
+        // Old far cell (0,0) is air; new building stands at its origin.
+        assert!(!world.tiles.contains_key(&first));
+        assert!(!world.tile_footprint.contains_key(&pos(0, 0)));
+        assert!(world.tiles.get(&second).is_some());
+        for cell in world.tiles.get(&second).unwrap().occupied.clone() {
+            assert_eq!(*world.tile_footprint.get(&cell).unwrap(), second);
+        }
+    }
+
+    #[test]
+    fn attach_on_occupied_footprint_is_rejected_until_removal() {
+        // Port contract behind the vanilla overwrite: an overlapping attach
+        // fails cleanly instead of corrupting occupancy.
+        let world = test_world();
+        let first = insert_building(&world, 10, 10, 217, 1); // 2x2 wall
+        let mut carried = world.tiles.get(&first).unwrap().clone();
+        carried.position = pos(11, 11);
+        // Overlapping the live 2x2 wall (cells 10..12 x 10..12) is refused...
+        assert!(attach_building_to_world(&world, carried.clone(), pos(11, 11)).is_none());
+        // ...and after removal the same attach succeeds.
+        assert!(detach_building_from_world(&world, first).is_some());
+        assert!(attach_building_to_world(&world, carried, pos(11, 11)).is_some());
+    }
+
+    #[test]
+    fn building_destruction_clears_footprint_and_power_matches_applicationtests() {
+        // Java: a partially built/complete wall is deconstructed; every tile
+        // becomes air and side effects (power links) are dropped.
+        let world = test_world();
+        let node = insert_building(&world, 5, 5, 302, 1);
+        after_placement(&world, node, &[]);
+        let wall = insert_building(&world, 8, 5, 217, 1); // 2x2 wall next to it
+        after_placement(&world, wall, &[]);
+        // Proximity power links between the node and the 2x2 wall are fine;
+        // destruction must drop whatever links existed.
+        let removed = remove_building_from_world(&world, wall).unwrap();
+        for cell in removed.occupied {
+            assert!(!world.tile_footprint.contains_key(&cell));
+        }
+        assert!(!world.tiles.contains_key(&wall));
+        // The neighbor building survives with its own links intact.
+        assert!(world.tiles.get(&node).is_some());
+    }
+
+    #[test]
+    fn edges_neighbor_offsets_match_applicationtests() {
+        // Java Edges.getEdges(1): [(1,0),(0,1),(-1,0),(0,-1)] -- the four
+        // orthogonal neighbors. The port models adjacency through footprint
+        // vectors + power proximity; pin the same offsets here so any future
+        // edge helper stays consistent.
+        let expected = [(1i32, 0i32), (0, 1), (-1, 0), (0, -1)];
+        let origin = pos(20, 20);
+        let neighbors: Vec<(i32, i32)> = expected
+            .iter()
+            .map(|(dx, dy)| {
+                let x = (origin >> 16) as i16 as i32;
+                let y = origin as i16 as i32;
+                (x + dx, y + dy)
+            })
+            .collect();
+        assert_eq!(neighbors, vec![(21, 20), (20, 21), (19, 20), (20, 19)]);
+        // Size-2 ring has 8 edge offsets (Edges.getEdges(2)): four straights
+        // plus four corners.
+        let ring2: Vec<(i32, i32)> = vec![
+            (2, 0),
+            (0, 2),
+            (-2, 0),
+            (0, -2),
+            (2, 2),
+            (2, -2),
+            (-2, 2),
+            (-2, -2),
+        ];
+        assert_eq!(ring2.len(), 8);
+        assert_eq!(
+            std::collections::HashSet::<(i32, i32)>::from_iter(ring2.iter().copied()).len(),
+            8
+        );
     }
 }
