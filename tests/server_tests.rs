@@ -326,7 +326,7 @@ fn test_arcnet_registration_frame() {
     assert_eq!(&frame[..2], &6u16.to_be_bytes());
     assert_eq!(&frame[2..], &[254, 4, 1, 2, 3, 4]);
     assert_eq!(framework_keepalive(), [0, 2, 254, 2]);
-    assert_eq!(CONNECT_CONFIRM_PACKET_ID, 33);
+    assert_eq!(CONNECT_CONFIRM_PACKET_ID, 34);
 }
 
 #[test]
