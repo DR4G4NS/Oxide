@@ -909,9 +909,9 @@ pub(crate) fn frame_generated_packet(
 //   InfoToast (59):      writeString(message), f duration
 // ---------------------------------------------------------------------------
 
-pub(crate) const ANNOUNCE_PACKET_ID: u8 = 7;
-pub(crate) const INFO_MESSAGE_PACKET_ID: u8 = 54;
-pub(crate) const INFO_TOAST_PACKET_ID: u8 = 59;
+pub(crate) const ANNOUNCE_PACKET_ID: u8 = 8;
+pub(crate) const INFO_MESSAGE_PACKET_ID: u8 = 59;
+pub(crate) const INFO_TOAST_PACKET_ID: u8 = 64;
 
 pub(crate) fn encode_announce_frame(message: &str) -> std::io::Result<Vec<u8>> {
     let mut payload = Vec::new();
@@ -932,7 +932,7 @@ pub(crate) fn encode_info_toast_frame(message: &str, duration: f32) -> std::io::
     frame_generated_packet(INFO_TOAST_PACKET_ID, &payload, false)
 }
 
-/// `AssemblerDroneSpawnedCallPacket` (id 8): TypeIO.writeTile (packed i32) +
+/// `AssemblerDroneSpawnedCallPacket` (id 9): TypeIO.writeTile (packed i32) +
 /// int unit id. Official `Call.assemblerDroneSpawned(tile, unit.id)`.
 pub(crate) fn encode_assembler_drone_spawned_frame(
     position: i32,

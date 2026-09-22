@@ -2420,7 +2420,10 @@ mod p2b1_unit_ai_breadth_tests {
                     !has_spec,
                     "{name} ({id}) marked REJECTED but has enemy_spec"
                 ),
-                "INTERNAL" => assert_eq!(*id, 68, "only build-tower is INTERNAL"),
+                "INTERNAL" => assert!(
+                    matches!(*id, 64 | 69),
+                    "only dummy and build-tower are INTERNAL"
+                ),
                 other => panic!("unknown rust_status '{other}' for {name}"),
             }
             assert_eq!(

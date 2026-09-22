@@ -24,13 +24,13 @@ fn official_msav(name: &str) -> Option<Vec<u8>> {
 }
 
 #[test]
-fn desktop_159_client_noop_call_ids_and_payload_guards_are_verified() {
-    assert_eq!(DEBUG_STATUS_CLIENT_PACKET_ID, 39);
-    assert_eq!(DEBUG_STATUS_CLIENT_UNRELIABLE_PACKET_ID, 40);
-    assert_eq!(TILE_TAP_PACKET_ID, 140);
-    assert_eq!(REQUEST_DEBUG_STATUS_PACKET_ID, 89);
-    assert_eq!(MENU_CHOOSE_PACKET_ID, 71);
-    assert_eq!(TEXT_INPUT_RESULT_PACKET_ID, 138);
+fn desktop_160_client_noop_call_ids_and_payload_guards_are_verified() {
+    assert_eq!(DEBUG_STATUS_CLIENT_PACKET_ID, 40);
+    assert_eq!(DEBUG_STATUS_CLIENT_UNRELIABLE_PACKET_ID, 41);
+    assert_eq!(TILE_TAP_PACKET_ID, 148);
+    assert_eq!(REQUEST_DEBUG_STATUS_PACKET_ID, 97);
+    assert_eq!(MENU_CHOOSE_PACKET_ID, 79);
+    assert_eq!(TEXT_INPUT_RESULT_PACKET_ID, 146);
 
     // TileTap.write emits one packed tile position.
     assert!(valid_client_noop_payload(TILE_TAP_PACKET_ID, &[0; 4]));
@@ -730,7 +730,7 @@ fn unit_item_stack_never_serializes_a_null_item_with_contents() {
 use crate::network::codec::{Reads, Writes};
 
 #[test]
-fn generated_packet_ids_match_exact_desktop_159_registry() {
+fn generated_packet_ids_match_exact_desktop_160_registry() {
     assert_eq!(
         [
             CONNECT_CONFIRM_PACKET_ID,
@@ -783,20 +783,20 @@ fn generated_packet_ids_match_exact_desktop_159_registry() {
             UNIT_CONTROL_PACKET_ID,
         ],
         [
-            33, 28, 29, 30, 76, 78, 80, 81, 97, 98, 128, 129, 133, 48, 36, 151, 152, 149, 146, 157,
-            73, 74, 75, 154, 34, 12, 11, 13, 14, 15, 41, 84, 87, 91, 95, 135, 139, 142, 144, 60,
-            50, 16, 26, 27, 42, 44, 77, 150,
+            34, 29, 30, 31, 84, 86, 88, 89, 105, 106, 136, 137, 141, 49, 37, 159, 160, 157, 154,
+            165, 81, 82, 83, 162, 35, 13, 12, 14, 15, 16, 42, 92, 95, 99, 103, 143, 147, 150, 152,
+            65, 54, 17, 27, 28, 43, 45, 85, 158,
         ]
     );
 }
 
 #[test]
-fn rust_packet_ids_match_committed_159_7_packets_json() {
+fn rust_packet_ids_match_committed_160_5_packets_json() {
     let doc: serde_json::Value =
         serde_json::from_str(include_str!("../../../compat/160.5/packets.json")).unwrap();
     assert_eq!(doc["schema_version"], 2);
     let packets = doc["packets"].as_array().unwrap();
-    assert_eq!(packets.len(), 165);
+    assert_eq!(packets.len(), 173);
     let by_name: std::collections::HashMap<&str, i64> = packets
         .iter()
         .map(|p| (p["name"].as_str().unwrap(), p["id"].as_i64().unwrap()))
@@ -805,8 +805,8 @@ fn rust_packet_ids_match_committed_159_7_packets_json() {
         by_name["ConnectConfirmCallPacket"],
         CONNECT_CONFIRM_PACKET_ID as i64
     );
-    assert_eq!(by_name["RequestAssetsCallPacket"], 86);
-    assert_eq!(by_name["RequestWorldCallPacket"], 93);
+    assert_eq!(by_name["RequestAssetsCallPacket"], 94);
+    assert_eq!(by_name["RequestWorldCallPacket"], 101);
     assert_eq!(
         by_name["WorldDataBeginCallPacket"],
         WORLD_DATA_BEGIN_PACKET_ID as i64
@@ -5515,7 +5515,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
             .get(&assist_position)
             .unwrap()
             .assist_progress,
-        5.0
+        4.0
     );
     world.pending_builds.remove(&assist_position);
 
@@ -5554,7 +5554,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     assert!(simulate_assist_units(&world, 10.0));
     assert_eq!(
         world.tiles.get(&wall_position).unwrap().production_progress,
-        5.5
+        4.4
     );
     let rebuild_ticks = crate::game::content::block_build_time(216) / 0.5;
     assert!(simulate_builder_units(
@@ -9380,10 +9380,10 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     assert!(!turret_can_target(352, FLARE.unit_type));
     // The shared registry covers Serpulo/Erekir/core/missile flyers and
     // does not confuse hovering ground units with flying units.
-    for unit in [15, 19, 20, 23, 35, 37, 46, 50, 55, 58, 60, 62, 67] {
+    for unit in [15, 19, 20, 23, 35, 37, 46, 50, 55, 58, 60, 62, 67, 68] {
         assert!(unit_type_is_flying(unit), "unit {unit} must be flying");
     }
-    for unit in [0, 14, 25, 34, 38, 49, 56, 57, 61, 68] {
+    for unit in [0, 14, 25, 34, 38, 49, 56, 57, 61, 69] {
         assert!(!unit_type_is_flying(unit), "unit {unit} must be grounded");
     }
     assert!(turret_can_target(350, 50)); // scatter -> avert
@@ -20614,9 +20614,9 @@ fn scathe_launcher_expiry_inserts_missile_with_no_splash() {
     // damage in vanilla (the damage lives in the missiles' shootOnDeath
     // death explosions 187/190/193, applied by kill_enemy). The
     // surge-split frag carrier 194 carries no spawnUnit payload of its own.
-    assert_eq!(spawn_unit_bullet_payload(186), Some(64));
-    assert_eq!(spawn_unit_bullet_payload(189), Some(65));
-    assert_eq!(spawn_unit_bullet_payload(192), Some(66));
+    assert_eq!(spawn_unit_bullet_payload(186), Some(65));
+    assert_eq!(spawn_unit_bullet_payload(189), Some(66));
+    assert_eq!(spawn_unit_bullet_payload(192), Some(67));
     assert_eq!(spawn_unit_frag_carrier(186), 186);
     assert_eq!(spawn_unit_frag_carrier(189), 189);
     assert_eq!(spawn_unit_frag_carrier(192), 192);

@@ -349,7 +349,7 @@ def run_suite(args):
     print(f"  log     : {log_path}")
     if kind != CLASS_PASS:
         print("  last stdout/stderr (tail):")
-        for line in tail_text(log_path).splitlines()[-80:]:
+        for line in tail_text(log_path).splitlines()[-800:]:
             print("   ", line)
     return 0 if kind == CLASS_PASS else 1
 

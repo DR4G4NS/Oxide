@@ -252,7 +252,7 @@ mod tests {
         // a separate per-mount timing concern.
         for (unit_type, expected) in [
             (0, vec![(6, 30)]),
-            (5, vec![(14, 16)]),
+            (5, vec![(14, 13)]),
             (11, vec![(22, 43)]),
             (21, vec![(37, 13)]),
             (3, vec![(9, 58), (10, 8)]),

@@ -5243,7 +5243,7 @@ fn two_builders_do_not_share_plan_progress() {
     let pa = world.tiles.get(&a).unwrap().production_progress;
     let pb = world.tiles.get(&b).unwrap().production_progress;
     assert!(
-        (pa - 5.0).abs() < 0.001 && (pb - 5.0).abs() < 0.001,
+        (pa - 4.0).abs() < 0.001 && (pb - 4.0).abs() < 0.001,
         "each poly (0.4 speed) advances only its own plan: {pa} / {pb}"
     );
 }
@@ -5280,8 +5280,8 @@ fn assist_adds_builder_speed_to_the_same_construct() {
     assert!(simulate_builder_units(&world, &DashMap::new(), 1.0));
     assert!(simulate_assist_units(&world, 10.0));
     assert!(
-        (world.tiles.get(&site).unwrap().production_progress - 5.5).abs() < 0.001,
-        "rebuild 0.5 + assist 5.0"
+        (world.tiles.get(&site).unwrap().production_progress - 4.4).abs() < 0.001,
+        "rebuild 0.4 + assist 4.0"
     );
 }
 
@@ -8988,8 +8988,8 @@ fn assembler_ai_spawns_drones_and_flies_them_to_the_perimeter() {
     assert_eq!(world.assembler_drone_ids(pos).len(), 4);
     let calls = world.game_state.extras.take_calls();
     assert!(
-        calls.iter().any(|frame| frame.get(2).copied() == Some(8)),
-        "AssemblerDroneSpawnedCallPacket (id 8) must be queued"
+        calls.iter().any(|frame| frame.get(2).copied() == Some(9)),
+        "AssemblerDroneSpawnedCallPacket (id 9) must be queued"
     );
 }
 
