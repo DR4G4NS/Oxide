@@ -356,7 +356,7 @@ impl UnitInventoryEntry {
     }
 }
 
-/// Inventory row for a vanilla unit id, if registered (0..=68).
+/// Inventory row for a vanilla unit id, if registered (0..=69).
 pub fn unit_inventory(unit: i16) -> Option<&'static UnitInventoryEntry> {
     UNIT_INVENTORY
         .get_or_init(|| {
@@ -861,14 +861,14 @@ mod unit_weapon_tests {
 
     fn player_controllable(unit: i16) -> bool {
         // MissileUnitType plus manifold/assembly-drone/scathe missiles have
-        // `playerControllable=false` in the official v158.1 registry.
-        !matches!(unit, 46 | 53 | 55 | 62..=67)
+        // `playerControllable=false` in the official v160.5 registry.
+        !matches!(unit, 46 | 53 | 55 | 62..=68)
     }
 
     #[test]
     fn unit_weapon_registry_matches_every_offensive_tsv_field_and_order() {
         let raw = raw_weapons();
-        assert_eq!(raw.len(), 91, "the v158.1 export has 91 mount rows");
+        assert_eq!(raw.len(), 91, "the v160.5 export has 91 mount rows");
 
         let mut expected: HashMap<i16, Vec<UnitWeapon>> = HashMap::new();
         for row in &raw {
@@ -892,7 +892,7 @@ mod unit_weapon_tests {
         }
 
         assert_eq!(expected.values().map(Vec::len).sum::<usize>(), 76);
-        for unit in 0..=68 {
+        for unit in 0..=69 {
             assert_eq!(
                 unit_weapons(unit),
                 expected.get(&unit).map_or(&[][..], Vec::as_slice),
@@ -900,7 +900,7 @@ mod unit_weapon_tests {
             );
         }
         assert!(unit_weapons(-1).is_empty());
-        assert!(unit_weapons(69).is_empty());
+        assert!(unit_weapons(70).is_empty());
     }
 
     #[test]
@@ -1020,7 +1020,7 @@ mod unit_weapon_tests {
             (54, 1),
         ];
 
-        let actual: Vec<_> = (0..=68)
+        let actual: Vec<_> = (0..=69)
             .filter(|unit| player_controllable(*unit))
             .filter_map(|unit| {
                 let count = unit_weapons(unit).len();
@@ -1032,7 +1032,7 @@ mod unit_weapon_tests {
 
     #[test]
     fn independently_reloading_mount_groups_fit_runtime_slots_except_navanax() {
-        let multiple: Vec<_> = (0..=68)
+        let multiple: Vec<_> = (0..=69)
             .filter_map(|unit| {
                 let count = unit_weapons(unit).len();
                 (count > 1).then_some((unit, count))
@@ -1056,7 +1056,7 @@ mod unit_weapon_tests {
                 (41, 3),
             ]
         );
-        let oversized: Vec<_> = (0..=68)
+        let oversized: Vec<_> = (0..=69)
             .filter_map(|unit| {
                 let count = unit_weapons(unit).len();
                 (count > 4).then_some((unit, count))

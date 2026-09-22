@@ -646,8 +646,8 @@ pub(crate) fn block_can_emp_boost(block: i16) -> bool {
             | 306..=307 // batteries
             | 339..=344 // cores
             | 408..=409 // payload loader / unloader
-            | 427 // landing pad
-            | 432..=440 // logic processors, memory, displays, canvas
+            | 428 // landing pad
+            | 433..=441 // logic processors, memory, displays, canvas
     )
 }
 

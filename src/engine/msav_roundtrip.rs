@@ -612,7 +612,7 @@ fn payload_kind(payload: &crate::network::world::CarriedPayload) -> Value {
 fn logic_snapshot(world: &DynamicWorld) -> Value {
     let mut out = Vec::new();
     for tile in world.tiles.iter() {
-        if !matches!(tile.block, 431..=433 | 442) {
+        if !matches!(tile.block, 432..=434 | 443) {
             continue;
         }
         let n = world.logic_executors.get(&tile.position).and_then(|exec| {
@@ -984,7 +984,7 @@ mod tests {
             DynamicTile {
                 logic_control: None,
                 position: proc_pos,
-                block: 431,
+                block: 432,
                 team: 1,
                 health: 90.0,
                 config,

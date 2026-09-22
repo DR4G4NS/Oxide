@@ -403,6 +403,10 @@ pub(crate) struct WaveRules {
     pub(crate) place_range_check: bool,
     /// Rules.lighting (Rules.java:207, default false).
     pub(crate) lighting: bool,
+    /// Rules.unitLight (v160.5, default true).
+    pub(crate) unit_light: bool,
+    /// Rules.coreBuildAndConfig (v160.5, default false).
+    pub(crate) core_build_and_config: bool,
     /// Rules.staticFog (Rules.java:201, default true).
     pub(crate) static_fog: bool,
     /// Rules.ghostBlocks (Rules.java:95, default true).
@@ -482,6 +486,8 @@ impl Default for WaveRules {
             polygon_core_protection: false,
             place_range_check: false,
             lighting: false,
+            unit_light: true,
+            core_build_and_config: false,
             static_fog: true,
             ghost_blocks: true,
         }
@@ -1077,6 +1083,12 @@ pub(crate) fn serialize_live_rules_json(map_rules: &str, rules: &WaveRules) -> S
     );
     insert_bool(&mut root, "placeRangeCheck", rules.place_range_check);
     insert_bool(&mut root, "lighting", rules.lighting);
+    insert_bool(&mut root, "unitLight", rules.unit_light);
+    insert_bool(
+        &mut root,
+        "coreBuildAndConfig",
+        rules.core_build_and_config,
+    );
     insert_bool(&mut root, "staticFog", rules.static_fog);
     insert_bool(&mut root, "ghostBlocks", rules.ghost_blocks);
     root.insert("loadout".into(), serialize_loadout(&rules.loadout));
@@ -1705,6 +1717,8 @@ pub(crate) fn parse_wave_rules_report(rules_json: &str) -> (WaveRules, Vec<Strin
             polygon_core_protection: flag("polygonCoreProtection", false),
             place_range_check: flag("placeRangeCheck", false),
             lighting: flag("lighting", false),
+            unit_light: flag("unitLight", true),
+            core_build_and_config: flag("coreBuildAndConfig", false),
             static_fog: flag("staticFog", true),
             ghost_blocks: flag("ghostBlocks", true),
         },

@@ -107,9 +107,9 @@ pub(crate) fn power_role(block: i16) -> Option<PowerRole> {
         406 => (0.0, 2.5, 0.0, 0.0),
         407 => (0.0, 3.0, 0.0, 0.0),
         408 | 409 => (0.0, 2.0, 0.0, 0.0),
-        426 => (0.0, 8.0, 0.0, 0.0),
-        425 => (0.0, 4.0, 0.0, 0.0),
-        428 => (0.0, 10.0, 0.0, 0.0),
+        427 => (0.0, 8.0, 0.0, 0.0),
+        426 => (0.0, 4.0, 0.0, 0.0),
+        429 => (0.0, 10.0, 0.0, 0.0),
         309 => (1.8, 0.0, 0.0, 0.0),
         310 => (5.5, 0.0, 0.0, 0.0),
         312 => (4.5, 0.0, 0.0, 0.0),
@@ -134,7 +134,7 @@ pub(crate) fn power_role(block: i16) -> Option<PowerRole> {
         395 => (0.0, 3.0, 0.0, 0.0),
         396 => (0.0, 3.5, 0.0, 0.0),
         397 => (0.0, 1.0, 0.0, 0.0),
-        419 => (0.0, 0.05, 0.0, 0.0),
+        420 => (0.0, 0.05, 0.0, 0.0),
         // Round 74f: every official hasPower block (JAR 158.1 probe) must
         // have a role — the relink sweep and link_valid_for_node reject
         // and PRUNE links to buildings missing here, which made manual
@@ -148,10 +148,10 @@ pub(crate) fn power_role(block: i16) -> Option<PowerRole> {
         376 => (0.0, 3.0, 0.0, 0.0),  // malign
         402 => (0.0, 1.75, 0.0, 0.0), // payload-mass-driver
         403 => (0.0, 2.5, 0.0, 0.0),  // large-payload-mass-driver
-        420 => (0.0, 1.0, 0.0, 0.0),  // legacy-mech-pad
-        421 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory
-        422 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-air
-        423 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-ground
+        421 => (0.0, 1.0, 0.0, 0.0),  // legacy-mech-pad
+        422 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory
+        423 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-air
+        424 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-ground
         _ => return None,
     };
     Some(PowerRole {

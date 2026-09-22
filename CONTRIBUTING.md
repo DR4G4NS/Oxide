@@ -16,7 +16,7 @@ If a **coding agent** will touch the tree, point it at [AGENTS.md](AGENTS.md) fi
 
 ## Setup
 
-Rust stable (edition 2021). Wire and client checks also need Java 17 and the official desktop JAR **159.7**. The JAR is an external oracle; never commit it. Historical `*_158` harness names do not imply that the current binary supports 158.1.
+Rust stable (edition 2021). Wire and client checks also need Java 17 and the official desktop JAR **160.5**. The JAR is an external oracle; never commit it. Historical harness names do not imply that the current binary supports older builds.
 
 ## Validation
 
@@ -53,7 +53,7 @@ For JAR setup, smoke commands, and their success markers, use [navigation.md](na
 
 ## What we want
 
-- Fixes and small, reviewable features on the **documented 0.1 scope** (playable vanilla Serpulo on 159.7 clients).
+- Fixes and small, reviewable features on the **documented 0.1 scope** (playable vanilla Serpulo on 160.5 clients).
 - Tests that fail without the change when behaviour is involved.
 - Update README for product limitations and [gaps.md](gaps.md) for located divergences. Remove a closed gap rather than keeping a changelog.
 
@@ -93,7 +93,7 @@ Si usas un **agente de código**, que lea [AGENTS.md](AGENTS.md). Arquitectura: 
 
 ## Arranque
 
-Rust stable (edición 2021). Para validar protocolo o cliente: Java 17 y JAR oficial **159.7**, externo al repositorio. Los nombres históricos `*_158` no implican compatibilidad del binario actual con 158.1.
+Rust stable (edición 2021). Para validar protocolo o cliente: Java 17 y JAR oficial **160.5**, externo al repositorio. Los nombres históricos de harness no implican compatibilidad del binario actual con versiones anteriores.
 
 La [matriz de validación](#validation) centraliza los comandos y cuándo ejecutarlos: documentación → enlaces, anclas, comandos y coherencia entre idiomas; runtime → fmt, clippy y suite Rust; módulos/concurrencia → guards; protocolo/save/stream → fixtures y JAR; bloques que el cliente predice → más de 360 ticks cruzando un `BlockSnapshot` y escenario con cliente real.
 
@@ -101,7 +101,7 @@ Usa `--test-threads=1` en los tests Rust por las colisiones de shards de DashMap
 
 ## Qué sí / qué no
 
-Sí: arreglos y features pequeños del scope 0.1 (Serpulo vanilla, clientes 159.7), tests que fallen sin el cambio, README para limitaciones del producto y [gaps.md](gaps.md) para divergencias localizadas.
+Sí: arreglos y features pequeños del scope 0.1 (Serpulo vanilla, clientes 160.5), tests que fallen sin el cambio, README para limitaciones del producto y [gaps.md](gaps.md) para divergencias localizadas.
 
 No: mods/plugins, refactors de pasada, layouts de paquetes inventados o saltarse CI para poner verde el check.
 

@@ -10,7 +10,7 @@ use crate::network::wire::transfer::enemy_weapon_mount_count;
 use crate::state::game_state::GameMode;
 
 pub(crate) fn unit_player_controllable(unit_type: i16) -> bool {
-    !matches!(unit_type, 46 | 53 | 55 | 62..=67)
+    !matches!(unit_type, 46 | 53 | 55 | 62..=68)
 }
 
 /// Whether vanilla `UnitType.controller` creates CommandAI for this unit.

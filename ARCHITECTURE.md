@@ -1,6 +1,6 @@
 # Architecture
 
-Where gameplay changes belong, and which invariants are non-negotiable. The **compatibility target** is Mindustry desktop **159.7** (`compat/current.toml`). The **historical smoke/codec baseline** is **158.1**; a 159.7 layout is never inferred from source order.
+Where gameplay changes belong, and which invariants are non-negotiable. The **compatibility target** is Mindustry desktop **160.5** (`compat/current.toml`). Older smoke/codec artifacts are historical evidence; a 160.5 layout is never inferred from earlier source order.
 
 Read the sections relevant to the changed behaviour. For finding code or probing the target JAR, use [navigation.md](navigation.md); for local checks, use [CONTRIBUTING.md](CONTRIBUTING.md#validation).
 
@@ -59,7 +59,7 @@ Valid handler: decode with limits → authenticate → delegate **without** hold
 17. Every construction path runs the post-placement hook.
 18. Reactor heat/warmup must not appear as cryofluid in `LiquidModule`.
 
-Sandbox preset (158.1/159.7 bytecode): `infiniteResources`, `allowEditRules`, `waves=true`, `waveTimer=false`. Builds complete immediately when `infiniteResources` is set.
+Sandbox preset (target bytecode): `infiniteResources`, `allowEditRules`, `waves=true`, `waveTimer=false`. Builds complete immediately when `infiniteResources` is set.
 
 Conveyor: Rust keeps FIFO front at index 0; the official client treats `ids[len-1]` as front — reverse on serialize.
 

@@ -120,7 +120,7 @@ fn apply_move_out_slide(tile: &mut DynamicTile, delta: f32) -> (f32, f32) {
 pub(crate) fn unit_allowed_in_payloads(unit_type: i16) -> bool {
     // Official UnitType.allowedInPayloads is true for combat units and false
     // for missiles / the internal `block` unit / assembly drones.
-    !matches!(unit_type, 46 | 53 | 55 | 61..=67)
+    !matches!(unit_type, 46 | 53 | 55 | 61..=69)
 }
 
 pub(crate) fn unit_spawned_by_core(unit_type: i16) -> bool {

@@ -19,23 +19,23 @@ completion checks. Known divergences live in [gaps.md](gaps.md).
 The target identity and SHA-256 are in [compat/current.toml](compat/current.toml).
 Use these sources in order:
 
-1. **The verified target JAR** is authoritative for 159.7 behaviour and wire
+1. **The verified target JAR** is authoritative for 160.5 behaviour and wire
    layout. If bytecode and documentation disagree, update the stale document.
-2. **[compat/159.7/](compat/159.7/)** contains extracted facts. Query existing
+2. **[compat/160.5/](compat/160.5/)** contains extracted facts. Query existing
    manifests before repeating an extraction: `packets.json` (IDs/classes),
    `rpc.json` (`source_remote`), `typeio.json`, `content.json`,
    `entity-sync.json`, `streams.json`, `saves.json`, `rules.json`, `logic.json`.
 3. **An external Mindustry source checkout** explains control flow. Compare its
    revision with `source_commit` in `compat/current.toml`; a checkout of master
-   may differ from 159.7. Confirm layout and constants against the target JAR.
+   may differ from 160.5. Confirm layout and constants against the target JAR.
    Java remains an external reference and is never copied into `src/`.
 
 Set the JAR path explicitly rather than relying on a script's local default:
 
 ```bash
-export MINDUSTRY_1597_JAR=/absolute/path/to/159.7.jar
-test -f "$MINDUSTRY_1597_JAR"
-sha256sum "$MINDUSTRY_1597_JAR"
+export MINDUSTRY_CURRENT_JAR=/absolute/path/to/160.5.jar
+test -f "$MINDUSTRY_CURRENT_JAR"
+sha256sum "$MINDUSTRY_CURRENT_JAR"
 rg -n 'jar_sha256' compat/current.toml
 ```
 
@@ -43,20 +43,20 @@ The digest must match **`[target].jar_sha256`**, not the historical entry.
 For a full identity/manifest/probe check (broader than one gameplay smoke):
 
 ```bash
-MINDUSTRY_CURRENT_JAR="$MINDUSTRY_1597_JAR" bash tools/compat_jar_gate.sh
+bash tools/compat_jar_gate.sh
 ```
 
 When a fact is not already extracted:
 
 ```bash
 # Declared fields and serialization bytecode for a generated packet.
-javap -c -p -cp "$MINDUSTRY_1597_JAR" mindustry.gen.UnitBlockSpawnCallPacket
+javap -c -p -cp "$MINDUSTRY_CURRENT_JAR" mindustry.gen.UnitBlockSpawnCallPacket
 
 # Quote nested class names so the shell does not expand the dollar sign.
-javap -c -p -cp "$MINDUSTRY_1597_JAR" \
+javap -c -p -cp "$MINDUSTRY_CURRENT_JAR" \
   'mindustry.world.blocks.units.Reconstructor$ReconstructorBuild'
 
-unzip -l "$MINDUSTRY_1597_JAR" | rg -i 'reconstructor'
+unzip -l "$MINDUSTRY_CURRENT_JAR" | rg -i 'reconstructor'
 ```
 
 A field listing alone does not establish serialization order; inspect the
@@ -70,7 +70,7 @@ arrives as a plan inside `ClientSnapshot`.
 
 | Step | Search or owner |
 |---|---|
-| Name → ID/direction | `rg -n -C1 'BeginBreakCallPacket' compat/159.7/packets.json`; consult `rpc.json` for the source remote method |
+| Name → ID/direction | `rg -n -C1 'BeginBreakCallPacket' compat/160.5/packets.json`; consult `rpc.json` for the source remote method |
 | ID → named constant | `rg -n 'BEGIN_BREAK_PACKET_ID' src/network/protocol.rs` |
 | Constant → codec/callers | `rg -n 'BEGIN_BREAK_PACKET_ID' src/network/` |
 | Incoming build/break action | `rg -n -e CLIENT_SNAPSHOT_PACKET_ID -e apply_build_plans src/network/session/mod.rs` |
@@ -88,7 +88,7 @@ symptom, trace backward from the field the client reads to its server writer.
 For `additiveReconstructor`:
 
 ```bash
-rg -n 'additive-reconstructor' compat/159.7/content.json src/game/block_names.tsv
+rg -n 'additive-reconstructor' compat/160.5/content.json src/game/block_names.tsv
 rg -n '^380\b' src/game/*.tsv
 rg -n '\b380\b' src/network/ --glob '*.rs'
 ```
@@ -235,7 +235,7 @@ rule that affects the client. The two are patched through different paths.
   JSON with `serde_json`; `patch_rules_json` preserves unrelated content when
   applying overrides.
 - [SmokeUnitPayload1597.java](tools/smoke/SmokeUnitPayload1597.java):
-  `readStreamedRules` inflates the stream, checks the 159.7 data-patch prefix,
+  `readStreamedRules` inflates the stream, checks the current-target data-patch prefix,
   skips its 8-byte header, and reads the Rules with Java `readUTF` (modified
   UTF-8, not a plain UTF-8 string).
 

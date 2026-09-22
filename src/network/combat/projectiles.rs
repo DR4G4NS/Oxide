@@ -2140,15 +2140,15 @@ pub(crate) fn spawn_unit_bullet_payload(bullet_id: i16) -> Option<i16> {
         // on death"); the carrier's spawnUnit inserts quell-missile.
         104 => Some(53),
         106 => Some(55), // disrupt -> disrupt-missile
-        // scathe turret launchers (Blocks.java v159.7, economy/erekir.rs
+        // scathe turret launchers (Blocks.java v160.5, economy/erekir.rs
         // module comment): 186/189/192 are BulletType(0,0) payloads carrying
         // spawnUnit scathe-missile/-phase/-surge; they never become bullet
-        // entities in vanilla. The surge-split(67) payload rides frag
+        // entities in vanilla. The surge-split(68) payload rides frag
         // carrier 194 of the surge missile's own death explosion (193),
         // which the port does not fly as a projectile - see README.
-        186 => Some(64), // scathe: scathe-missile
-        189 => Some(65), // scathe: scathe-missile-phase
-        192 => Some(66), // scathe: scathe-missile-surge
+        186 => Some(65), // scathe: scathe-missile
+        189 => Some(66), // scathe: scathe-missile-phase
+        192 => Some(67), // scathe: scathe-missile-surge
         _ => None,
     }
 }

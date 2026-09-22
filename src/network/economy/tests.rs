@@ -1286,7 +1286,7 @@ fn erekir_snapshot_closure_classes_match_v1597_jar() {
 
 #[test]
 fn remaining_vanilla_units_have_official_specs() {
-    // UnitTypes.java / Blocks.java / BuildTurret.java v159.7 stats for the
+    // UnitTypes.java / Blocks.java / BuildTurret.java v160.5 stats for the
     // last strictly-rejected vanilla types. Entity classes confirmed against
     // desktop.jar 159.7 EntityMapping idMap bytecode: LegsUnit=24,
     // TimedKillUnit=39 (all MissileUnitType content), PayloadUnit=5,
@@ -1303,11 +1303,12 @@ fn remaining_vanilla_units_have_official_specs() {
         (61, 2, 1.0, 0.0, 0.0),        // hidden internal block
         (62, 36, 200.0, 3.5, 0.0),     // manifold (CargoAI, no weapons)
         (63, 36, 90.0, 1.3, 0.0),      // assembly-drone (AssemblerAI)
-        (64, 39, 240.0, 4.6, 1_000.0), // scathe-missile: Explosion(1000, 65)
-        (65, 39, 500.0, 2.5, 320.0),   // phase: Explosion(320, 120)
-        (66, 39, 300.0, 4.4, 1_800.0), // surge: Explosion(1800, 40)
-        (67, 39, 50.0, 4.8, 180.0),    // surge-split: Explosion(180, 35)
-        (68, 2, 1.0, 0.0, 0.0),        // generated turret-unit-build-tower
+        (64, 49, 200.0, 1.1, 0.0),     // target-dummy internal unit
+        (65, 39, 240.0, 4.6, 1_000.0), // scathe-missile: Explosion(1000, 65)
+        (66, 39, 500.0, 2.5, 320.0),   // phase: Explosion(320, 120)
+        (67, 39, 300.0, 4.4, 1_800.0), // surge: Explosion(1800, 40)
+        (68, 39, 50.0, 4.8, 180.0),    // surge-split: Explosion(180, 35)
+        (69, 2, 1.0, 0.0, 0.0),        // generated turret-unit-build-tower
     ];
     for &(id, class, health, speed, damage) in cases {
         let spec = crate::network::units::enemy_spec(id)
@@ -1324,7 +1325,7 @@ fn remaining_vanilla_units_have_official_specs() {
 }
 
 #[test]
-fn missile_lifetimes_match_v1597_jar() {
+fn missile_lifetimes_match_v1605_jar() {
     use crate::game::unit_types::unit_missile_lifetime;
     // MissileUnitType.lifetime (TimedKillUnit.lifetime on the wire);
     // constructor default is 60f * 1.7f = 102.
@@ -1332,17 +1333,17 @@ fn missile_lifetimes_match_v1597_jar() {
         (46, 99.6),
         (53, 54.24),
         (55, 102.0),
-        (64, 330.0),
-        (65, 586.2),
-        (66, 84.0),
-        (67, 222.0),
+        (65, 330.0),
+        (66, 586.2),
+        (67, 84.0),
+        (68, 222.0),
     ];
     for (id, lifetime) in cases {
         let got = unit_missile_lifetime(id).unwrap_or_else(|| panic!("lifetime of {id}"));
         assert!((got - lifetime).abs() < 0.001, "lifetime of unit {id}");
     }
     // Non-missile types have no TimedKillUnit lifetime.
-    for id in [0i16, 45, 52, 58, 61, 62, 68] {
+    for id in [0i16, 45, 52, 58, 61, 62, 64, 69] {
         assert!(unit_missile_lifetime(id).is_none(), "unit {id}");
     }
 }
@@ -1352,16 +1353,18 @@ fn internal_unit_specs_are_never_spawnable() {
     // The internal types carry specs for wire/persistence parity, but wave
     // rules and the console must not place them in the world.
     assert!(crate::game::unit_types::unit_type_internal(61));
-    assert!(crate::game::unit_types::unit_type_internal(68));
+    assert!(crate::game::unit_types::unit_type_internal(64));
+    assert!(crate::game::unit_types::unit_type_internal(69));
     assert!(enemy_spec(61).is_some());
-    assert!(enemy_spec(68).is_some());
-    let rules = r#"{"spawns":[{"type":"turret-unit-build-tower"},{"type":"block"}]}"#;
+    assert!(enemy_spec(64).is_some());
+    assert!(enemy_spec(69).is_some());
+    let rules = r#"{"spawns":[{"type":"turret-unit-build-tower"},{"type":"dummy"},{"type":"block"}]}"#;
     let (parsed, diagnostics) = parse_wave_rules_report(rules);
     assert!(
         parsed.spawn_groups.iter().all(|group| group.unit_type == 0),
         "internal types fall back to dagger (ASTRA W04)"
     );
-    assert_eq!(parsed.spawn_groups.len(), 2);
+    assert_eq!(parsed.spawn_groups.len(), 3);
     let _ = diagnostics;
 }
 
@@ -5240,7 +5243,7 @@ fn two_builders_do_not_share_plan_progress() {
     let pb = world.tiles.get(&b).unwrap().production_progress;
     assert!(
         (pa - 5.0).abs() < 0.001 && (pb - 5.0).abs() < 0.001,
-        "each poly (0.5 speed) advances only its own plan: {pa} / {pb}"
+        "each poly (0.4 speed) advances only its own plan: {pa} / {pb}"
     );
 }
 
@@ -5991,10 +5994,10 @@ fn latum_spawns_five_renale_on_death() {
     }));
 }
 
-/// Vanilla chain: scathe-missile-surge (66) carries a shootOnDeath weapon
+/// Vanilla chain: scathe-missile-surge (67) carries a shootOnDeath weapon
 /// firing death-explosion bullet 193 whose createFrags fan (fragBullets=5,
 /// fragSpread=20) produces frags at deathRotation + {-40,-20,0,+20,+40}
-/// degrees; each frag has spawnUnit -> scathe-missile-surge-split (67).
+/// degrees; each frag has spawnUnit -> scathe-missile-surge-split (68).
 /// Each split spawns at death point + trns(angle, range(1..7)) with its
 /// rotation set to that angle; the range offset is deterministic per
 /// (dying unit id, frag index).
@@ -6003,7 +6006,7 @@ fn surge_missile_death_inserts_five_splits_in_frag_fan() {
     let world = erekir_test_world();
     let connections = DashMap::new();
     let tile = (10 << 16) | 10;
-    let mut unit = ground_unit_on_tile(1, 66, tile, 300.0, 0.0);
+    let mut unit = ground_unit_on_tile(1, 67, tile, 300.0, 0.0);
     unit.rotation = 90.0;
     world.enemies.insert(1, unit);
     kill_enemy(&world, &connections, 1);
@@ -6011,7 +6014,7 @@ fn surge_missile_death_inserts_five_splits_in_frag_fan() {
     let splits: Vec<_> = world
         .enemies
         .iter()
-        .filter(|unit| unit.unit_type == 67)
+        .filter(|unit| unit.unit_type == 68)
         .map(|unit| (unit.team, unit.x, unit.y, unit.rotation, unit.health))
         .collect();
     assert_eq!(splits.len(), 5);
@@ -6035,7 +6038,7 @@ fn surge_missile_death_inserts_five_splits_in_frag_fan() {
         assert!((rotation - expected_angle).abs() < 0.001);
         assert!((x - expected_x).abs() < 0.001, "x {x} vs {expected_x}");
         assert!((y - expected_y).abs() < 0.001, "y {y} vs {expected_y}");
-        assert!((health - 50.0).abs() < 0.001); // spec health of unit 67
+        assert!((health - 50.0).abs() < 0.001); // spec health of unit 68
     }
 }
 
@@ -6045,7 +6048,7 @@ fn surge_missile_death_inserts_five_splits_in_frag_fan() {
 fn other_scathe_family_deaths_insert_no_split() {
     let world = erekir_test_world();
     let connections = DashMap::new();
-    for (id, unit_type) in [(1, 64), (2, 65), (3, 67)] {
+    for (id, unit_type) in [(1, 65), (2, 66), (3, 68)] {
         let tile = ((10 + id) << 16) | 10;
         world
             .enemies
@@ -6060,15 +6063,15 @@ fn other_scathe_family_deaths_insert_no_split() {
 /// Vanilla scathe damage model (Blocks.java v159.7): the launcher bullets
 /// 186/189/192 carry NO splash; each missile's shootOnDeath death explosion
 /// applies its own splash at the DEATH point with buildingDamageMultiplier
-/// 0.1: 64 -> ExplosionBulletType(1000f, 65f), 65 -> (320f, 120f),
-/// 66 -> (1800f, 40f), 67 -> (180f, 35f).
+/// 0.1: 65 -> ExplosionBulletType(1000f, 65f), 66 -> (320f, 120f),
+/// 67 -> (1800f, 40f), 68 -> (180f, 35f).
 #[test]
 fn scathe_missile_deaths_apply_death_explosion_splash() {
     let cases: &[(i16, f32, f32)] = &[
-        (64, 1_000.0, 65.0),
-        (65, 320.0, 120.0),
-        (66, 1_800.0, 40.0),
-        (67, 180.0, 35.0),
+        (65, 1_000.0, 65.0),
+        (66, 320.0, 120.0),
+        (67, 1_800.0, 40.0),
+        (68, 180.0, 35.0),
     ];
     for &(unit_type, splash, radius) in cases.iter() {
         let world = erekir_test_world();
@@ -6112,7 +6115,7 @@ fn scathe_missile_deaths_apply_death_explosion_splash() {
 /// hits it once, so the total is deterministic: roots * lightningDamage.
 #[test]
 fn surge_family_deaths_chain_deterministic_lightning() {
-    let cases: &[(i16, usize, f32, f32)] = &[(66, 10, 45.0, 1_800.0), (67, 4, 25.0, 180.0)];
+    let cases: &[(i16, usize, f32, f32)] = &[(67, 10, 45.0, 1_800.0), (68, 4, 25.0, 180.0)];
     for &(unit_type, roots, lightning_damage, splash) in cases.iter() {
         let world = erekir_test_world();
         let connections = DashMap::new();
@@ -6146,7 +6149,7 @@ fn surge_missile_death_applies_explosion_and_keeps_split_fan() {
     let world = erekir_test_world();
     let connections = DashMap::new();
     let missile_tile = (12 << 16) | 10;
-    let mut unit = ground_unit_on_tile(1, 66, missile_tile, 300.0, 0.0);
+    let mut unit = ground_unit_on_tile(1, 67, missile_tile, 300.0, 0.0);
     unit.rotation = 90.0;
     world.enemies.insert(1, unit);
     let near = (14 << 16) | 10;
@@ -6157,7 +6160,7 @@ fn surge_missile_death_applies_explosion_and_keeps_split_fan() {
     let splits = world
         .enemies
         .iter()
-        .filter(|entry| entry.unit_type == 67)
+        .filter(|entry| entry.unit_type == 68)
         .count();
     assert_eq!(splits, 5);
     let expected_near = crate::game::content::block_health(216) - 1_800.0 * 0.1;
@@ -6179,7 +6182,7 @@ fn scathe_frag_fan_is_deterministic_across_runs() {
     let run = || -> Vec<(f32, f32, f32, f32, f32)> {
         let world = erekir_test_world();
         let connections = DashMap::new();
-        let mut unit = ground_unit_on_tile(1, 64, (12 << 16) | 10, 240.0, 0.0);
+        let mut unit = ground_unit_on_tile(1, 65, (12 << 16) | 10, 240.0, 0.0);
         unit.rotation = 37.0;
         world.enemies.insert(1, unit);
         kill_enemy(&world, &connections, 1);
@@ -6209,7 +6212,7 @@ fn scathe_frag_fan_is_deterministic_across_runs() {
 fn scathe_missile_death_inserts_seven_artillery_frags() {
     let world = erekir_test_world();
     let connections = DashMap::new();
-    let mut unit = ground_unit_on_tile(1, 64, (12 << 16) | 10, 240.0, 0.0);
+    let mut unit = ground_unit_on_tile(1, 65, (12 << 16) | 10, 240.0, 0.0);
     unit.rotation = 0.0;
     world.enemies.insert(1, unit);
     kill_enemy(&world, &connections, 1);
@@ -6233,7 +6236,7 @@ fn scathe_missile_death_inserts_seven_artillery_frags() {
 fn scathe_artillery_frag_applies_building_damage_multiplier() {
     let mut world = erekir_test_world();
     let connections = DashMap::new();
-    let mut unit = ground_unit_on_tile(1, 64, (12 << 16) | 10, 240.0, 0.0);
+    let mut unit = ground_unit_on_tile(1, 65, (12 << 16) | 10, 240.0, 0.0);
     unit.team = 2;
     unit.rotation = 0.0;
     world.enemies.insert(1, unit);
@@ -6752,7 +6755,7 @@ fn test_batch_snapshot_excludes_client_predicted_blocks_and_includes_synced_bloc
         295, 296, 297, 299, 300, 301, // conduits and liquid tanks
         261, 264, 265, 266, 267, 268, 269, 270, 274, 278, // routers, sorters, junctions
         411, 412, 413, 414, 415, 418, // sandbox sources and voids
-        429, 430, 431, 432, 433, 435, 439, 440, 441, 442, // logic, switch, memory, display
+        430, 431, 432, 433, 434, 436, 440, 441, 442, 443, // logic, switch, memory, display
     ];
     for block in client_predicted {
         assert!(
@@ -6773,7 +6776,7 @@ fn test_batch_snapshot_excludes_client_predicted_blocks_and_includes_synced_bloc
         201, 202, 203, 204, 205, 210, 212, 213, 214, 215, 330, 332, // crafters, cultivator
         193, 194, // separators
         271, // mass driver
-        252, 281, 426, 427, // pads and towers
+        252, 281, 427, 428, // pads and towers
         345, 346, 347, 348, // storage blocks (container, vault, reinforced container/vault)
         353, 354, 355, 360, 366, 369, 372, 373, 376, // turrets
         377, 378, 379, 380, 381, 382, 383, 386, 387, 388, // unit factories and reconstructors
@@ -7342,7 +7345,7 @@ fn unit_payload_gates_match_1597_allowed_and_core_spawned() {
 
     assert!(unit_allowed_in_payloads(0), "dagger");
     assert!(unit_allowed_in_payloads(38), "stell");
-    for banned in [46, 53, 55, 61, 67] {
+    for banned in [46, 53, 55, 61, 64, 68, 69] {
         assert!(
             !unit_allowed_in_payloads(banned),
             "unit {banned} is not allowedInPayloads"

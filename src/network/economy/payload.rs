@@ -367,12 +367,12 @@ pub(crate) const LARGE_CONSTRUCTOR_RECIPES: &[i16] = &[
     252, 253, 254, 271, 281, 285, 291, 301, 307, 311, 314, 315, 316, 318, 319, 320, 321, 322, 327,
     328, 331, 332, 334, 336, 337, 346, 348, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370,
     371, 372, 373, 374, 377, 378, 379, 380, 386, 387, 388, 389, 390, 391, 398, 399, 400, 401, 402,
-    404, 406, 408, 409, 426, 427, 433, 436, 440,
+    404, 406, 408, 409, 427, 428, 434, 437, 441,
 ];
 pub(crate) const NEW_LARGE_CODEC_RECIPES: &[i16] = &[
     194, 199, 200, 201, 202, 204, 206, 208, 210, 212, 213, 214, 252, 281, 301, 311, 315, 316, 318,
     319, 320, 321, 322, 327, 328, 331, 332, 334, 336, 337, 367, 368, 369, 370, 371, 372, 373, 374,
-    386, 387, 388, 389, 390, 391, 426, 427, 433, 436, 440,
+    386, 387, 388, 389, 390, 391, 427, 428, 434, 437, 441,
 ];
 
 pub(crate) fn decode_constructor_recipe(block: i16, config: &[u8]) -> Option<i16> {
@@ -508,7 +508,7 @@ pub(crate) fn building_can_pickup(block: i16) -> bool {
     }
     // Storage, radar, logic/message/switch/memory — `Building.canPickup()` is
     // false in 158.1. Hidden/non-snapshot blocks are also rejected here.
-    if matches!(block, 251 | 345..=348 | 429..=435 | 441..=444) {
+    if matches!(block, 251 | 345..=348 | 430..=436 | 442..=445) {
         return false;
     }
     is_pickup_payload_supported(block)

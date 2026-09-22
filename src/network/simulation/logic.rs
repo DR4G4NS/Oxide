@@ -114,8 +114,8 @@ pub fn simulate_logic_control_leases(world: &DynamicWorld, delta_ticks: f32) -> 
     changed
 }
 
-/// Runs the live logic processors (micro 431, logic 432, hyper 433, and
-/// privileged world processor 442) for one
+/// Runs the live logic processors (micro 432, logic 433, hyper 434, and
+/// privileged world processor 443) for one
 /// simulation tick. Compiles each processor's config once and recompiles when
 /// the program changes; executes up to the block's instructions-per-tick and
 /// applies side effects (memory cells, message blocks, control enabled).
@@ -128,7 +128,7 @@ pub fn simulate_logic(
     let processors: Vec<(i32, i16, Vec<u8>)> = world
         .tiles
         .iter()
-        .filter(|tile| matches!(tile.block, 431..=433 | 442))
+        .filter(|tile| matches!(tile.block, 432..=434 | 443))
         .filter_map(|tile| {
             building_config::logic_payload(&tile.config)
                 .map(|payload| (tile.position, tile.block, payload.to_vec()))
@@ -194,7 +194,7 @@ pub fn simulate_logic(
                 .collect();
             let mut state = crate::logic::ExecutorState::new(program.clone(), links);
             state.config_hash = hash;
-            state.privileged = block == 442;
+            state.privileged = block == 443;
             state
         });
         if entry.config_hash != hash {
@@ -206,7 +206,7 @@ pub fn simulate_logic(
                 .collect();
             let mut state = crate::logic::ExecutorState::new(program, links);
             state.config_hash = hash;
-            state.privileged = block == 442;
+            state.privileged = block == 443;
             *entry = state;
         }
         // LogicBlock instructionsPerTick from Blocks.java: micro=2,
@@ -214,13 +214,13 @@ pub fn simulate_logic(
         // and may raise their rate through `setrate` up to
         // maxInstructionsPerTick=40 (LogicBlock.java:46-48). Ordinary
         // processors clamp setrate to their own per-block ipt.
-        entry.privileged = block == 442;
+        entry.privileged = block == 443;
         let budget = match block {
-            431 => 2,
-            432 | 442 => 8,
+            432 => 2,
+            433 | 443 => 8,
             _ => 25,
         };
-        entry.ipt_cap = if block == 442 { 40 } else { budget as u32 };
+        entry.ipt_cap = if block == 443 { 40 } else { budget as u32 };
         let ipt_var = entry.program.ipt_var;
         // @ipt mirrors the official build.ipt: the block default unless a
         // previous setrate raised it (SetRateI keeps it updated; we must not

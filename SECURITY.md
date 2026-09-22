@@ -16,7 +16,7 @@ We will acknowledge the report and work on a fix before any public write-up.
 
 ## Scope
 
-**In scope:** remote crashes, unauthorized admin, wire or world-state corruption a vanilla 159.7 client can trigger, secrets in logs.
+**In scope:** remote crashes, unauthorized admin, wire or world-state corruption a vanilla 160.5 client can trigger, secrets in logs.
 
 **Out of scope:** missing vanilla features already listed in the README, client-side bugs, filling the server with legitimate players up to `--max-players`.
 

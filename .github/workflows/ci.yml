@@ -183,11 +183,9 @@ jobs:
             exit 1
           fi
 
-  # The current-target JAR is resolved from the official itch.io Linux
-  # distribution (the upload is discovered by exact build/platform metadata)
-  # and verified against compat/current.toml. GitHub still authenticates the
-  # source tag/commit. This is a required PR dependency after normal gates;
-  # workflow_dispatch remains available for reruns.
+  # Resolve the current-target JAR from the exact official GitHub release tag
+  # and verify it against compat/current.toml. This avoids mutable "latest"
+  # download pages advancing underneath a pinned target.
   current-jar-checks:
     name: current-target JAR checks
     runs-on: ubuntu-latest
@@ -238,11 +236,11 @@ jobs:
       - name: Survival unit production and factory deselection
         timeout-minutes: 10
         env:
-          MINDUSTRY_1597_JAR: ${{ steps.resolve.outputs.path }}
+          MINDUSTRY_CURRENT_JAR: ${{ steps.resolve.outputs.path }}
           OXIDE_SMOKE_PROFILE: debug
           OXIDE_SMOKE_SCENARIO: survival-cycle
         run: |
-          test -f "$MINDUSTRY_1597_JAR"
+          test -f "$MINDUSTRY_CURRENT_JAR"
           bash tools/smoke/smoke_unit_payload_1597.sh 6599
 
   # Path-filter the frozen upstream oracle so unrelated Rust/docs PRs do not
@@ -285,8 +283,8 @@ jobs:
           fi
           echo "run-upstream=$run_upstream" >> "$GITHUB_OUTPUT"
 
-  upstream-v1597-reference:
-    name: upstream-v1597-reference
+  upstream-current-reference:
+    name: upstream-current-reference
     runs-on: ubuntu-latest
     needs: compatibility-scope
     if: needs.compatibility-scope.outputs.run-upstream == 'true'
@@ -391,7 +389,7 @@ jobs:
       - gates
       - current-jar-checks
       - compatibility-scope
-      - upstream-v1597-reference
+      - upstream-current-reference
     steps:
       - name: Require normal gates and current-target JAR checks
         env:
@@ -399,7 +397,7 @@ jobs:
           CURRENT_JAR_RESULT: ${{ needs.current-jar-checks.result }}
           SCOPE_RESULT: ${{ needs.compatibility-scope.result }}
           RUN_UPSTREAM: ${{ needs.compatibility-scope.outputs.run-upstream }}
-          UPSTREAM_RESULT: ${{ needs.upstream-v1597-reference.result }}
+          UPSTREAM_RESULT: ${{ needs.upstream-current-reference.result }}
         run: |
           set -euo pipefail
           printf 'gates=%s\ncurrent-jar-checks=%s\nscope=%s (%s)\nupstream=%s\n' \

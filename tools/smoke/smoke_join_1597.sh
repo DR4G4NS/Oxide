@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Real-socket join smoke against the official Mindustry v8 159.7 desktop JAR.
+# Real-socket join smoke against the official current-target desktop JAR.
 # Uses the same battle-tested client flow as smoke_join_158.sh, compiled
-# against the 159.7 JAR so every packet is produced by the official
-# serializer, and announces Version.build = 159 like a real 159.7 client.
+# against the 160.5 JAR so every packet is produced by the official
+# serializer, and announces Version.build = 160 like a real 160.x client.
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-desktop_jar="${MINDUSTRY_1597_JAR:-/home/dr4g4ns/Escritorio/mindustry-159.7/jre/desktop.jar}"
+desktop_jar="${MINDUSTRY_CURRENT_JAR:-$project_dir/.cache/mindustry/160.5.jar}"
 smoke_port="${1:-6597}"
-class_dir="$project_dir/target/protocol-1597-classes"
+class_dir="$project_dir/target/protocol-1605-classes"
 
 cd "$project_dir"
 case "${OXIDE_SMOKE_PROFILE:-release}" in
@@ -19,7 +19,7 @@ case "${OXIDE_SMOKE_PROFILE:-release}" in
 esac
 mkdir -p "$class_dir"
 javac -d "$class_dir" -cp "$desktop_jar" tools/smoke/SmokeJoin1597.java
-run_dir="$(mktemp -d "$project_dir/target/smoke-join-1597.XXXXXX")"
+run_dir="$(mktemp -d "$project_dir/target/smoke-join-1605.XXXXXX")"
 server_log="$run_dir/server.log"
 save_file="$run_dir/world.json"
 server_args=(--no-tui)
@@ -64,4 +64,4 @@ if ! grep -q "finished loading the world" "$server_log"; then
     echo "Server did not confirm the joined state. Log: $server_log" >&2
     exit 1
 fi
-echo "159.7 join smoke passed."
+echo "160.5 join smoke passed."

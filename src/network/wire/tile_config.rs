@@ -112,9 +112,9 @@ pub(crate) fn valid_tile_config(block: i16, config: &[u8]) -> bool {
             [building_config::TYPEIO_BOOLEAN, 0] | [building_config::TYPEIO_BOOLEAN, 1]
         ),
         // SwitchBlock is configured with a TypeIO Boolean (tapped to toggle).
-        430 => matches!(config, [1, 0] | [1, 1] | [10, 0] | [10, 1]),
+        431 => matches!(config, [1, 0] | [1, 1] | [10, 0] | [10, 1]),
         // Message blocks accept a TypeIO String (tag 4 + u16 length + utf8).
-        429 | 441 => {
+        430 | 442 => {
             matches!(config, [4, high, low, rest @ ..]
                 if rest.len() == i16::from_be_bytes([*high, *low]) as usize)
         }
@@ -122,17 +122,17 @@ pub(crate) fn valid_tile_config(block: i16, config: &[u8]) -> bool {
         // pixels; the length MUST equal the block's fixed buffer
         // (canvasSize^2 * log2(palette=8) bits -> 54 / 216 bytes,
         // CanvasBlock.init + Blocks.java canvasSize 12 / 24).
-        439 | 440 => {
+        440 | 441 => {
             matches!(config, [14, a, b, c, d, rest @ ..]
                 if rest.len() == i32::from_be_bytes([*a, *b, *c, *d]) as usize)
                 && match block {
-                    439 => config.len() == 59,
+                    440 => config.len() == 59,
                     _ => config.len() == 221,
                 }
         }
         // Logic processors accept a null config or the compressed program
         // container produced by LogicBlock.compress (zlib stream).
-        431..=433 | 442 => building_config::valid_logic_object(config),
+        432..=434 | 443 => building_config::valid_logic_object(config),
         // Sandbox source selection is a nullable typed Content object.
         412 => building_config::selected_item(config).is_some(),
         414 => building_config::selected_liquid(config).is_some(),
@@ -294,13 +294,13 @@ pub(crate) fn apply_tile_config(
             live.production_progress = 0.0;
         }
     }
-    if live.block == 430 {
+    if live.block == 431 {
         match config {
             [1, value] | [10, value] => live.enabled = *value != 0,
             _ => {}
         }
     }
-    if matches!(live.block, 429 | 441) {
+    if matches!(live.block, 430 | 442) {
         if let [4, high, low, rest @ ..] = config {
             let len = i16::from_be_bytes([*high, *low]) as usize;
             if rest.len() == len {
@@ -310,7 +310,7 @@ pub(crate) fn apply_tile_config(
     }
     // CanvasBuild.config: the raw byte[] payload lands in `config` (tag 14 +
     // i32 length + pixels) and encode_canvas_sync re-emits it verbatim.
-    if matches!(live.block, 439 | 440) {
+    if matches!(live.block, 440 | 441) {
         live.payload_progress = 0.0; // invalidated -> repaint on clients
     }
     let factory_command = configured_unit_command(&live);

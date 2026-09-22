@@ -752,7 +752,7 @@ pub struct DynamicWorld {
     pub(crate) base_turret_progress: DashMap<i32, f32>,
     /// Reload progress (ticks) for prebuilt map menders.
     pub(crate) base_mender_progress: DashMap<i32, f32>,
-    /// Live logic executors for processor tiles (431-433), keyed by position.
+    /// Live logic executors for processor tiles (432-434), keyed by position.
     pub(crate) logic_executors: DashMap<i32, crate::logic::ExecutorState>,
     /// Pending packed DisplayCmd values for logic displays. This mirrors
     /// LogicDisplayBuild.commands; it is transient rendering state and is not

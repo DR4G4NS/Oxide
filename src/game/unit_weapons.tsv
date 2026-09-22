@@ -6,7 +6,7 @@
 3	scepter	scepter-mount	12.0	1	9	12.0	20.0	17.333334	0.0	-1.0	false	false	0	480.0	true	8.5
 3	scepter	scepter-mount	15.0	1	9	12.0	20.0	17.333334	0.0	-1.0	false	false	0	480.0	true	8.5
 4	reign	reign-weapon	9.0	1	12	13.0	80.0	15.0	18.0	13.0	true	false	0	480.0	true	21.5
-5	nova	heal-weapon	24.0	1	14	5.2	13.0	30.0	0.0	-1.0	false	false	0	480.0	true	4.5
+5	nova	heal-weapon	30.0	1	14	5.2	13.0	30.0	0.0	-1.0	true	true	0	480.0	true	4.5
 6	pulsar	heal-shotgun-weapon	36.0	3	15	0.0	15.0	1.0	0.0	-1.0	false	false	17	480.0	true	5.0
 7	quasar	beam-weapon	55.0	1	17	0.0	45.0	16.0	0.0	-1.0	true	false	0	480.0	true	6.5
 8	vela	vela-weapon	155.0	1	18	0.0	35.0	160.0	0.0	-1.0	true	false	0	480.0	false	0.0
@@ -53,7 +53,7 @@
 32	cyerce	plasma-missile-mount	60.0	1	56	2.5	25.0	80.0	25.0	30.0	false	false	0	480.0	true	9.0
 33	aegires	point-defense-mount	4.0	1	58	1.0	30.0	40.0	0.0	-1.0	false	false	0	480.0	true	12.5
 33	aegires	point-defense-mount	4.0	1	59	1.0	30.0	40.0	0.0	-1.0	false	false	0	480.0	true	12.5
-34	navanax	emp-cannon-mount	65.0	1	60	5.0	60.0	60.0	70.0	100.0	false	false	10	480.0	true	17.5
+34	navanax	emp-cannon-mount	65.0	1	60	5.0	110.0	60.0	110.0	100.0	false	false	10	480.0	true	17.5
 34	navanax	plasma-laser-mount	170.0	1	61	0.0	27.0	155.0	0.0	-1.0	true	false	0	480.0	false	-21.0
 34	navanax	plasma-laser-mount	170.0	1	62	0.0	27.0	155.0	0.0	-1.0	true	false	0	480.0	false	21.0
 34	navanax	plasma-laser-mount	170.0	1	63	0.0	27.0	155.0	0.0	-1.0	true	false	0	480.0	false	-21.0
@@ -86,7 +86,7 @@
 59	incite		20.0	1	109	1.0	0.75	40.0	0.0	-1.0	false	false	0	480.0	false	0.0
 59	incite	build-weapon	1.0	1	110	1.0	0.75	40.0	0.0	-1.0	false	false	0	480.0	true	3.5
 60	emanate		20.0	1	111	1.0	0.75	40.0	0.0	-1.0	false	false	0	480.0	true	4.75
-64	scathe-missile		1.0	1	187	0.0	1.0	1.0	1000.0	65.0	false	false	0	480.0	false	5.0
-65	scathe-missile-phase		1.0	1	190	0.0	1.0	1.0	320.0	120.0	false	false	0	480.0	false	5.0
-66	scathe-missile-surge		1.0	1	193	0.0	1.0	1.0	1800.0	40.0	false	false	0	480.0	true	5.0
-67	scathe-missile-surge-split		1.0	1	195	0.0	1.0	1.0	180.0	35.0	false	false	0	480.0	false	5.0
+65	scathe-missile		1.0	1	187	0.0	1.0	1.0	1000.0	65.0	false	false	0	480.0	false	5.0
+66	scathe-missile-phase		1.0	1	190	0.0	1.0	1.0	320.0	120.0	false	false	0	480.0	false	5.0
+67	scathe-missile-surge		1.0	1	193	0.0	1.0	1.0	1800.0	40.0	false	false	0	480.0	true	5.0
+68	scathe-missile-surge-split		1.0	1	195	0.0	1.0	1.0	180.0	35.0	false	false	0	480.0	false	5.0

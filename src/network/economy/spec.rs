@@ -205,13 +205,13 @@ pub(crate) fn turret_shots(block: i16) -> u8 {
     }
 }
 
-/// Official v158.1 `UnitType.flying` registry. Keep this shared by both
+/// Official v160.5 `UnitType.flying` registry. Keep this shared by both
 /// Serpulo and Erekir turret paths; `hovering` ground units (notably elude)
 /// deliberately do not count as air targets.
 pub(crate) fn unit_type_is_flying(unit_type: i16) -> bool {
     matches!(
         unit_type,
-        15..=24 | 35..=37 | 46 | 50..=55 | 58..=60 | 62..=67
+        15..=24 | 35..=37 | 46 | 50..=55 | 58..=60 | 62..=63 | 65..=68
     )
 }
 

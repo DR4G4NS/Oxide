@@ -276,7 +276,7 @@ pub struct ApplyStatusSpec {
     pub duration: Expr,
 }
 
-/// Official `LogicRule` (desktop 158.1).
+/// Official `LogicRule` (desktop 160.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogicRule {
     CurrentWaveTime,
@@ -293,6 +293,7 @@ pub enum LogicRule {
     Lighting,
     CanGameOver,
     AmbientLight,
+    UnitLight,
     SolarMultiplier,
     DragMultiplier,
     Ban,
@@ -328,6 +329,7 @@ impl LogicRule {
             "lighting" => Self::Lighting,
             "canGameOver" => Self::CanGameOver,
             "ambientLight" => Self::AmbientLight,
+            "unitLight" => Self::UnitLight,
             "solarMultiplier" => Self::SolarMultiplier,
             "dragMultiplier" => Self::DragMultiplier,
             "ban" => Self::Ban,
@@ -612,7 +614,7 @@ pub struct ExecutorState {
     /// resets the cursors, matching the fresh LExecutor Java installs on
     /// code change.
     pub bind_cursors: Vec<usize>,
-    /// World processors (block 442) execute privileged LExecutor code;
+    /// World processors (block 443) execute privileged LExecutor code;
     /// ordinary micro/logic/hyper processors remain unprivileged.
     pub privileged: bool,
     /// P0-7: set when strict mode rejected this program (unsupported or

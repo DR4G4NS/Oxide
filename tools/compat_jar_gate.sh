@@ -23,7 +23,7 @@ if got != want_sha:
 with zipfile.ZipFile(jar) as z:
     props = z.read("version.properties").decode()
 if f"build={build}" not in props.replace(" ", ""):
-    # properties uses build=159.7
+    # Accept the formatting variants emitted by upstream version.properties.
     if f"build={build}" not in props and f"build = {build}" not in props:
         if f"build={build}" not in props.replace("\r", ""):
             if not any(line.strip() == f"build={build}" for line in props.splitlines()):

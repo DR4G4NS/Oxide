@@ -431,7 +431,7 @@ mod tests {
             assert!(!unit_immune_to_status(naval, 8), "naval {naval} can melt");
         }
         // No other unit has immunities.
-        for unit_type in [0, 2, 3, 5, 10, 30, 49, 50, 60, 68] {
+        for unit_type in [0, 2, 3, 5, 10, 30, 49, 50, 60, 69] {
             assert!(!unit_immune_to_status(unit_type, 1));
             assert!(!unit_immune_to_status(unit_type, 8));
         }
@@ -1677,7 +1677,7 @@ mod tests {
         missile.missile_time = 2.0;
         world.enemies.insert(1, missile);
         let mut survivor = enemy_unit(2);
-        survivor.unit_type = 65; // scathe-missile-phase
+        survivor.unit_type = 66; // scathe-missile-phase
         survivor.entity_class = 39;
         survivor.missile_time = 586.2;
         world.enemies.insert(2, survivor);

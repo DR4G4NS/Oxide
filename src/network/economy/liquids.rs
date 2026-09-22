@@ -15,8 +15,8 @@ use super::*;
 
 pub(crate) fn memory_capacity(block: i16) -> Option<usize> {
     match block {
-        434 => Some(64),
-        435 | 443 => Some(512),
+        435 => Some(64),
+        436 | 444 => Some(512),
         _ => None,
     }
 }
@@ -92,9 +92,9 @@ pub(crate) fn liquid_capacity(block: i16) -> Option<f32> {
         324 => Some(80.0),
         335 | 338 => Some(40.0),
         385 => Some(40.0),
-        426 => Some(40.0),
-        427 => Some(3_000.0),
-        433 => Some(10.0),
+        427 => Some(40.0),
+        428 => Some(3_000.0),
+        434 => Some(10.0),
         _ => None,
     }
 }

@@ -1,0 +1,21 @@
+{
+  "build": "160.5",
+  "entity_sync": {
+    "alias_count": 148,
+    "id_map_length": 256,
+    "mapped_count": 50,
+    "mapping_fingerprint": "c45200e2f7d8d67c8316267a5aae1433ee73b1f1582c2342f5818677bd62665e"
+  },
+  "generator": {
+    "name": "tools/mindustry_manifest.py",
+    "version": "2.0.0"
+  },
+  "jar": {
+    "filename": "160.5.jar",
+    "sha256": "c2fd5a5dcb8d306525bb47ff28121237d4d25f53868562946491f2ef261dc272",
+    "size_bytes": 88902250
+  },
+  "schema_version": 2,
+  "source_commit": "067c720a8817c1c9fb586c03898a7d948caaed56",
+  "source_ref": "v160.5"
+}

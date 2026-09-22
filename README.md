@@ -12,7 +12,7 @@
 <p align="center">
   <img alt="version" src="https://img.shields.io/badge/version-0.2.0-orange">
   <img alt="channel" src="https://img.shields.io/badge/channel-alpha-yellow">
-  <img alt="target" src="https://img.shields.io/badge/Mindustry-v8%20159.7-2ea44f">
+  <img alt="target" src="https://img.shields.io/badge/Mindustry-v8%20160.5-2ea44f">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue">
   <a href="https://discord.gg/AQ6Awkk48w"><img alt="Discord" src="https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white"></a>
   <img alt="lang" src="https://img.shields.io/badge/Rust-2021-dea584">
@@ -27,7 +27,7 @@
 |---|---|
 | **Product** | `0.2.0` |
 | **Crate** (`Cargo.toml`) | `0.2.0` |
-| **Compatibility target** | Mindustry v8 **159.7** (`compat/current.toml`) |
+| **Compatibility target** | Mindustry v8 **160.5** (`compat/current.toml`) |
 | **Historical smoke baseline** | desktop.jar **158.1** (many harnesses still named `*_158`) |
 | **Original code license** | Apache-2.0 — [LICENSE](LICENSE), [NOTICE](NOTICE), [THIRD_PARTY.md](THIRD_PARTY.md) |
 | **Official campaign maps** | GPLv3 (Anuken) — [third_party/mindustry-maps](third_party/mindustry-maps/) |
@@ -52,19 +52,19 @@ Find documentation by task:
 
 ## What it is (and is not)
 
-**It is** an authoritative server: the client predicts; Rust validates and advances the state that is then replicated (`EntitySnapshot`, `BlockSnapshot`, RPC). This alpha aims to be **experimentally hostable in production** for vanilla Serpulo (survival / sandbox / pvp / attack) with official 159.7 clients. It is not byte-for-byte behavioral parity of all vanilla.
+**It is** an authoritative server: the client predicts; Rust validates and advances the state that is then replicated (`EntitySnapshot`, `BlockSnapshot`, RPC). This alpha aims to be **experimentally hostable in production** for vanilla Serpulo (survival / sandbox / pvp / attack) with official 160.5 clients. It is not byte-for-byte behavioral parity of all vanilla.
 
 **It is not**
 
 - a 100% drop-in for `server-release.jar` (full Erekir campaign, exact AI behaviour, mods…)
 - compatible with **mods, plugins, scripts, custom packets, or an event bus** — modded clients are rejected. This is an explicit product decision: zip/jar/hjson/scripts require a dedicated product change.
-- a multi-build runtime: one binary, one target (`159.7`)
+- a multi-build runtime: one binary, one target (`160.5`)
 
-Wire/save compatibility is checked with the pinned 159.7 manifests, Rust fixtures and target-JAR probes. There is no runtime-SHA certification gate; passing these checks does **not** mean the entire Java game is ported.
+Wire/save compatibility is checked with the pinned 160.5 manifests, Rust fixtures and target-JAR probes. There is no runtime-SHA certification gate; passing these checks does **not** mean the entire Java game is ported.
 
 ## Alpha status
 
-Playable today (Serpulo critical path): TCP+UDP, LAN discovery, join and world stream; movement, timed build/break, mining, chat and ping; survival waves, main Serpulo turrets and authoritative projectiles; transport, power, liquids, factories and reconstructors; Logic `ubind`/`ucontrol`; operator TUI (`--tui` / `--no-tui`, outside vanilla parity). The current compatibility target is **159.7**; 158.1 smoke artifacts are historical evidence.
+Playable today (Serpulo critical path): TCP+UDP, LAN discovery, join and world stream; movement, timed build/break, mining, chat and ping; survival waves, main Serpulo turrets and authoritative projectiles; transport, power, liquids, factories and reconstructors; Logic `ubind`/`ucontrol`; operator TUI (`--tui` / `--no-tui`, outside vanilla parity). The current compatibility target is **160.5**; older smoke artifacts are historical evidence.
 
 The tables below summarize coverage and remaining product limitations. Concrete behavioural divergences, their code anchors, and required regression evidence live in [gaps.md](gaps.md). Implemented content does not imply exact vanilla parity. The Serpulo audit
 has incomplete closure evidence and remaining behaviour gaps; see
@@ -139,7 +139,7 @@ cargo run -- --help
 
 Use the [validation matrix](CONTRIBUTING.md#validation) for the changed surface. It contains the Rust commands, module/concurrency guards, and fixture requirements. Documentation-only edits have their own checks; CI gates remain mandatory.
 
-For current-target JAR setup and runnable 159.7 join/gameplay scenarios, see [the client harness guide](navigation.md#client-in-the-loop-harness). Historical `*_158` scripts are not proof of current-target compatibility.
+For current-target JAR setup and runnable 160.5 join/gameplay scenarios, see [the client harness guide](navigation.md#client-in-the-loop-harness). Historical script names are not proof of compatibility with older targets.
 
 Differential parity using captured fixtures:
 
@@ -159,7 +159,7 @@ tools/
   bench/         BenchLoadN + Rust vs Java 159.7 suite
   archguard/     module dependency guard
   dashmap_guard/ DashMap analyzer DM001–DM005
-  compatlib/     159.7 ledger and manifests
+  compatlib/     current-target ledger and manifests
 ```
 
 CI gates (stay at `tools/` root): `architecture_guard.sh`, `compat_gate.sh`, `compat_jar_gate.sh`, `low_core_test.py`, `mindustry_manifest.py`.
@@ -184,19 +184,19 @@ Human PRs: [CONTRIBUTING.md](CONTRIBUTING.md). If you use a coding agent on the 
 
 ## Qué es (y qué no)
 
-**Es** un servidor autoritativo: el cliente predice; Rust valida y avanza el estado que luego se replica (`EntitySnapshot`, `BlockSnapshot`, RPC). Objetivo de esta alpha: **hosteable en producción experimental** para partidas vanilla Serpulo (survival / sandbox / pvp / attack) con clientes oficiales 159.7. No es paridad conductual byte-a-byte de todo vanilla.
+**Es** un servidor autoritativo: el cliente predice; Rust valida y avanza el estado que luego se replica (`EntitySnapshot`, `BlockSnapshot`, RPC). Objetivo de esta alpha: **hosteable en producción experimental** para partidas vanilla Serpulo (survival / sandbox / pvp / attack) con clientes oficiales 160.5. No es paridad conductual byte-a-byte de todo vanilla.
 
 **No es**
 
 - un drop-in 100 % del `server-release.jar` (campaña Erekir completa, IA exacta, mods…)
 - compatible con **mods, plugins, scripts, packets custom o event bus** — los clientes con mods se rechazan. Es una decisión explícita del producto: zip/jar/hjson/scripts requieren un cambio de producto dedicado.
-- un runtime multi-build: un binario, un target (`159.7`)
+- un runtime multi-build: un binario, un target (`160.5`)
 
-La compatibilidad wire/save se comprueba con los manifiestos 159.7 fijados, fixtures Rust y probes del JAR objetivo. No hay un gate de certificación por SHA del runtime; pasar esas pruebas **no** significa que todo el juego Java esté portado.
+La compatibilidad wire/save se comprueba con los manifiestos 160.5 fijados, fixtures Rust y probes del JAR objetivo. No hay un gate de certificación por SHA del runtime; pasar esas pruebas **no** significa que todo el juego Java esté portado.
 
 ## Estado de la alpha
 
-Jugable hoy (Serpulo): TCP+UDP, LAN, conexión y world stream; movimiento, construcción/deconstrucción temporizada, minería, chat y ping; oleadas, torretas principales y proyectiles autoritativos; transporte, energía, líquidos, fábricas y reconstructores; Logic `ubind`/`ucontrol`; TUI de operador (`--tui` / `--no-tui`, fuera de paridad vanilla). El objetivo actual es **159.7**; los artefactos de smokes 158.1 son evidencia histórica.
+Jugable hoy (Serpulo): TCP+UDP, LAN, conexión y world stream; movimiento, construcción/deconstrucción temporizada, minería, chat y ping; oleadas, torretas principales y proyectiles autoritativos; transporte, energía, líquidos, fábricas y reconstructores; Logic `ubind`/`ucontrol`; TUI de operador (`--tui` / `--no-tui`, fuera de paridad vanilla). El objetivo actual es **160.5**; los artefactos de smokes anteriores son evidencia histórica.
 
 Las tablas resumen cobertura y limitaciones del producto. Las divergencias concretas, sus anclas de código y la evidencia necesaria para cerrarlas están en [gaps.md](gaps.md). Contenido implementado no implica paridad exacta. La auditoría de Serpulo
 conserva contratos pendientes y evidencia de cierre incompleta; consulta

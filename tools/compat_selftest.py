@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from compatlib import SCHEMA_VERSION
 from compatlib.atomic import canonical_dumps
 from compatlib.classifier import classify_path
+from compatlib.current import current_build
 from compatlib.diff import diff_builds, diff_packets
 from compatlib.schema import contains_local_path, validate_artifact_file, validate_provenance
 from compatlib.wrap import provenance, wrap
@@ -104,7 +105,9 @@ def test_provenance() -> None:
 
 
 def test_rules_defaults_are_jvm_stable() -> None:
-    payload = json.loads((REPO_ROOT / "compat/159.7/rules.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (REPO_ROOT / "compat" / current_build() / "rules.json").read_text(encoding="utf-8")
+    )
     fields = {row["name"]: row for row in payload["rules"]}
     check("MapObjectives default is JVM-stable", fields["objectives"]["default"] == "mindustry.game.MapObjectives")
     check("TeamRules default is JVM-stable", fields["teams"]["default"] == "mindustry.game.Rules$TeamRules")
@@ -495,8 +498,8 @@ def test_release_jar_resolver() -> None:
                 failed = True
             check(name, failed == expected)
 
-        # End-to-end hermetic path: exact GitHub tag fixture, discovered Linux
-        # upload fixture, binary ZIP fixture, and atomic final-JAR identity.
+        # End-to-end hermetic path: exact GitHub tag fixture, exact release
+        # asset, atomic download, and final-JAR identity.
         archive = root / "linux.zip"
         with zipfile.ZipFile(archive, "w") as outer:
             outer.write(correct, "jre/desktop.jar")
@@ -568,21 +571,26 @@ def test_release_jar_resolver() -> None:
                 {
                     "name": "Mindustry.jar",
                     "browser_download_url": "https://example.test/github.jar",
-                    "size": size + 123,
+                    "size": size,
                 }
             ],
         }
+
+        def release_asset_opener(request, timeout=60):
+            del timeout
+            if request.full_url != "https://example.test/github.jar":
+                raise AssertionError(f"unexpected hermetic URL: {request.full_url}")
+            return _BinaryResponse(correct.read_bytes())
+
         resolved = resolve_current_jar(
             current_path=current_file,
             output_dir=root / "cache",
             tag_metadata=tag_fixture,
-            itch_landing_html=itch_html,
-            itch_file_url="https://itchio-mirror.example.r2.cloudflarestorage.com/linux.zip",
             release_metadata=release_fixture,
-            opener=archive_opener,
+            opener=release_asset_opener,
         )
-        check("itch_end_to_end_resolve_download_extract_passes", resolved.is_file())
-        check("itch_end_to_end_final_identity_passes", verify_current_jar(resolved, target).sha256 == digest)
+        check("github_end_to_end_resolve_download_passes", resolved.is_file())
+        check("github_end_to_end_final_identity_passes", verify_current_jar(resolved, target).sha256 == digest)
         check(
             "itch_tag_fixture_still_requires_exact_commit",
             validate_tag_commit_metadata(target, tag_fixture) == target.source_commit,

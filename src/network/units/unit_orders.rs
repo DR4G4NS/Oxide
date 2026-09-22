@@ -694,7 +694,8 @@ pub(crate) fn builder_unit_hit_size(unit_type: i16) -> Option<f32> {
 pub(crate) fn unit_build_speed(unit_type: i16) -> Option<f32> {
     match unit_type {
         5 => Some(0.3),
-        6 | 21 => Some(0.5),
+        6 => Some(0.5),
+        21 => Some(0.4),
         7 => Some(1.1),
         8 => Some(3.0),
         22 => Some(2.6),

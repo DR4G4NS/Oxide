@@ -58,7 +58,7 @@ import mindustry.world.modules.ItemModule;
 import mindustry.world.modules.PowerModule;
 
 /**
- * 159.7 production smoke: enterPayload, finite-resource factory/reconstructor
+ * Current-target production smoke: enterPayload, finite-resource factory/reconstructor
  * chains, unit counts and plastanium withdrawal. Reads streamed Rules without
  * NetworkIO.readWorld and applies snapshots to the observed local buildings.
  */
@@ -82,7 +82,7 @@ public final class SmokeUnitPayload1597 {
 
     public static void main(String[] args) throws Exception {
         int port = args.length == 0 ? 6599 : Integer.parseInt(args[0]);
-        Version.build = Integer.getInteger("oxide.smoke.build", 159);
+        Version.build = Integer.getInteger("oxide.smoke.build", 160);
         Vars.headless = true;
         Core.settings = new arc.Settings();
         Vars.content = new ContentLoader();
@@ -448,7 +448,7 @@ public final class SmokeUnitPayload1597 {
                 || plain[1] != 0
                 || plain[2] != 0
                 || plain[3] != 2) {
-            throw new AssertionError("159.7 data-patch header missing after inflate");
+            throw new AssertionError("current-target data-patch header missing after inflate");
         }
         DataInputStream input = new DataInputStream(
             new ByteArrayInputStream(plain, 8, plain.length - 8));

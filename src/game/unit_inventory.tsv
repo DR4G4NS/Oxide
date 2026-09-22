@@ -1,4 +1,4 @@
-# P2-B1 server-authoritative unit AI/pathfinding inventory (Mindustry v158.1 baseline).
+# P2-B1 server-authoritative unit AI/pathfinding inventory (Mindustry v160.5 target).
 # Columns: id, name, spawnable, default_controller, movement, target_selection,
 # weapons, payload, mine_build, path_cost, rust_status
 # spawnable: YES | CHILD | NO | INTERNAL
@@ -11,8 +11,7 @@
 # path_cost: flow_field | flow_field_legs | direct | command_astar | none
 # rust_status: FULL | PARTIAL | REJECTED | INTERNAL
 #
-# Re-verify version-sensitive ids against desktop.jar 158.1 when the local
-# Mindustry tree is not exactly v158.1.
+# Generated and reviewed against the pinned desktop.jar v160.5.
 #
 0	dagger	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
 1	mace	YES	GroundAI	ground	core_buildings	FULL	NO	none	flow_field	FULL
@@ -78,8 +77,9 @@
 61	block	NO	NeoplasmAI	ground	none	NONE	NO	none	none	PARTIAL
 62	manifold	NO	CargoAI	flying	none	NONE	NO	none	direct	FULL
 63	assembly-drone	NO	AssemblerAI	flying	none	NONE	NO	none	direct	FULL
-64	scathe-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
-65	scathe-missile-phase	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
-66	scathe-missile-surge	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
-67	scathe-missile-surge-split	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
-68	turret-unit-build-tower	INTERNAL	InternalAI	ground	none	NONE	NO	none	none	INTERNAL
+64	dummy	INTERNAL	InternalAI	ground	none	NONE	NO	none	none	INTERNAL
+65	scathe-missile	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
+66	scathe-missile-phase	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
+67	scathe-missile-surge	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
+68	scathe-missile-surge-split	CHILD	MissileAI	missile	none	NONE	NO	none	none	PARTIAL
+69	turret-unit-build-tower	INTERNAL	InternalAI	ground	none	NONE	NO	none	none	INTERNAL

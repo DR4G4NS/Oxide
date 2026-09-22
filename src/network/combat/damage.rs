@@ -2060,19 +2060,56 @@ pub(crate) fn unit_immune_to_status(unit_type: i16, status_effect: i16) -> bool 
 
 pub(crate) fn enemy_armor(unit_type: i16) -> f32 {
     match unit_type {
-        1 => 4.0,  // Mace
-        2 => 9.0,  // Fortress
-        3 => 10.0, // Scepter
-        4 => 18.0, // Reign
-        5 => 1.0,  // Nova
-        6 => 4.0,  // Pulsar
-        7 => 9.0,  // Quasar
-        8 => 9.0,  // Vela
-        11 => 3.0, // Atrax
-        12 => 5.0, // Spiroct
-        16 => 3.0, // Horizon
-        17 => 5.0, // Zenith
-        18 => 9.0, // Antumbra
+        1 => 4.0,   // mace
+        2 => 9.0,   // fortress
+        3 => 20.0,  // scepter
+        4 => 30.0,  // reign
+        5 => 1.0,   // nova
+        6 => 4.0,   // pulsar
+        7 => 9.0,   // quasar
+        8 => 16.0,  // vela
+        9 => 14.0,  // corvus
+        11 => 3.0,  // atrax
+        12 => 9.0,  // spiroct
+        13 => 14.0, // arkyid
+        14 => 22.0, // toxopid
+        16 => 3.0,  // horizon
+        17 => 5.0,  // zenith
+        18 => 17.0, // antumbra
+        19 => 22.0, // eclipse
+        22 => 3.0,  // mega
+        23 => 10.0, // quad
+        24 => 20.0, // oct
+        25 => 2.0,  // risso
+        26 => 4.0,  // minke
+        27 => 7.0,  // bryde
+        28 => 12.0, // sei
+        29 => 16.0, // omura
+        30 => 3.0,  // retusa
+        31 => 4.0,  // oxynoe
+        32 => 6.0,  // cyerce
+        33 => 12.0, // aegires
+        34 => 20.0, // navanax
+        38 => 6.0,  // stell
+        39 => 8.0,  // locus
+        40 => 11.0, // precept
+        41 => 20.0, // vanquish
+        42 => 26.0, // conquer
+        43 => 4.0,  // merui
+        44 => 5.0,  // cleroi
+        45 => 7.0,  // anthicus
+        47 => 5.0,  // tecta
+        48 => 9.0,  // collaris
+        49 => 1.0,  // elude
+        50 => 3.0,  // avert
+        51 => 6.0,  // obviate
+        52 => 4.0,  // quell
+        54 => 9.0,  // disrupt
+        56 => 2.0,  // renale
+        57 => 12.0, // latum
+        58 => 1.0,  // evoke
+        59 => 2.0,  // incite
+        60 => 3.0,  // emanate
         _ => 0.0,
     }
 }
@@ -2126,7 +2163,7 @@ fn apply_incoming_unit_damage_scaled(
     }
 }
 
-/// Official scathe-family shootOnDeath death explosions (Blocks.java v159.7):
+/// Official scathe-family shootOnDeath death explosions (Blocks.java v160.5):
 /// every scathe MissileUnitType carries one weapon with `shootOnDeath = true`
 /// firing an ExplosionBulletType at the death point. The launcher bullets
 /// 186/189/192 deal NO damage themselves, so this table IS the scathe damage
@@ -2135,15 +2172,15 @@ fn apply_incoming_unit_damage_scaled(
 pub(crate) fn scathe_death_explosion(unit_type: i16) -> Option<(f32, f32, f32, u8, u8, f32)> {
     match unit_type {
         // scathe-missile -> ExplosionBulletType(1000f, 65f).
-        64 => Some((1_000.0, 65.0, 0.1, 0, 0, 0.0)),
+        65 => Some((1_000.0, 65.0, 0.1, 0, 0, 0.0)),
         // scathe-missile-phase -> ExplosionBulletType(320f, 120f).
-        65 => Some((320.0, 120.0, 0.1, 0, 0, 0.0)),
+        66 => Some((320.0, 120.0, 0.1, 0, 0, 0.0)),
         // scathe-missile-surge -> ExplosionBulletType(1800f, 40f), lightning
         // = 10, lightningDamage = 45, lightningLength = 12.
-        66 => Some((1_800.0, 40.0, 0.1, 10, 12, 45.0)),
+        67 => Some((1_800.0, 40.0, 0.1, 10, 12, 45.0)),
         // scathe-missile-surge-split -> ExplosionBulletType(180f, 35f),
         // lightning = 4, lightningDamage = 25, lightningLength = 6.
-        67 => Some((180.0, 35.0, 0.1, 4, 6, 25.0)),
+        68 => Some((180.0, 35.0, 0.1, 4, 6, 25.0)),
         _ => None,
     }
 }
@@ -2162,8 +2199,8 @@ fn spawn_scathe_artillery_frags(
     rotation: f32,
 ) {
     let (bullet_id, splash, radius) = match unit_type {
-        64 => (188_i16, 100.0, 40.0),
-        65 => (191_i16, 120.0, 56.0),
+        65 => (188_i16, 100.0, 40.0),
+        66 => (191_i16, 120.0, 56.0),
         _ => return,
     };
     const SPEED: f32 = 3.4;
@@ -2266,11 +2303,11 @@ pub(crate) fn kill_enemy(
             )
         })
     });
-    // Scathe-missile-surge (66): its shootOnDeath death-explosion (bullet 193)
+    // Scathe-missile-surge (67): its shootOnDeath death-explosion (bullet 193)
     // carries frag 194 whose spawnUnit inserts one scathe-missile-surge-split
-    // (67). The frag spawns at the dying unit's position with its rotation.
+    // (68). The frag spawns at the dying unit's position with its rotation.
     let surge_split = world.enemies.get(&target_id).and_then(|unit| {
-        (unit.unit_type == 66).then_some((unit.team, unit.x, unit.y, unit.rotation))
+        (unit.unit_type == 67).then_some((unit.team, unit.x, unit.y, unit.rotation))
     });
     world.game_state.game_stats.write().enemy_units_destroyed += 1;
     // Keep the final non-null stack invariant ordered before UnitDeath. This makes the
@@ -2326,7 +2363,7 @@ pub(crate) fn kill_enemy(
     // Scathe-missile-surge split: the death-explosion (bullet 193) fans out
     // five frags (createFrags: fragBullets=5, fragSpread=20, fragRandomSpread=0,
     // fragOffset range 1..7 from BulletType defaults), each carrying spawnUnit
-    // -> scathe-missile-surge-split (67). Frag i flies at
+    // -> scathe-missile-surge-split (68). Frag i flies at
     // deathRotation + {-40, -20, 0, +20, +40} degrees and the unit spawns at
     // death point + trns(angle, len) with its rotation set to that angle.
     if let Some((team, x, y, rotation)) = surge_split {
@@ -2339,7 +2376,7 @@ pub(crate) fn kill_enemy(
             let radians = angle.to_radians();
             let _ = spawn_unit_world(
                 world,
-                67,
+                68,
                 team,
                 x + radians.cos() * len,
                 y + radians.sin() * len,

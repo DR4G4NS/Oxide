@@ -734,10 +734,10 @@ pub fn write_msav_content_region() -> std::io::Result<Vec<u8>> {
     for id in 0..22 {
         write_utf8(&mut out, item_name_from_id(id).unwrap_or_default())?;
     }
-    // blocks (ContentType.block ordinal 1), 446 entries.
+    // blocks (ContentType.block ordinal 1), 447 entries.
     out.push(1);
-    out.extend_from_slice(&446u16.to_be_bytes());
-    for id in 0..446 {
+    out.extend_from_slice(&447u16.to_be_bytes());
+    for id in 0..447 {
         write_utf8(&mut out, block_name_from_id(id).unwrap_or_default())?;
     }
     // liquids (ContentType.liquid ordinal 4), 11 entries.
@@ -1284,8 +1284,8 @@ const OFFICIAL_ITEM_BLOCKS: &[i16] = &[
     281, 282, 308, 310, 311, 312, 315, 316, 324, 325, 326, 327, 328, 330, 331, 332, 333, 334, 335,
     336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 357, 358,
     361, 362, 363, 364, 365, 367, 368, 370, 371, 374, 375, 377, 378, 379, 380, 381, 382, 383, 386,
-    387, 388, 389, 390, 391, 392, 393, 394, 395, 404, 405, 406, 407, 408, 409, 412, 418, 421, 422,
-    423, 425, 426, 427, 428,
+    387, 388, 389, 390, 391, 392, 393, 394, 395, 404, 405, 406, 407, 408, 409, 412, 418, 422, 423,
+    424, 426, 427, 428, 429,
 ];
 const OFFICIAL_POWER_BLOCKS: &[i16] = &[
     182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200,
@@ -1294,7 +1294,7 @@ const OFFICIAL_POWER_BLOCKS: &[i16] = &[
     313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 327, 328, 329, 330, 331, 332, 333,
     334, 335, 336, 337, 338, 354, 355, 356, 359, 364, 366, 372, 373, 376, 377, 378, 379, 380, 381,
     382, 383, 384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 402, 403, 404,
-    405, 406, 407, 408, 409, 410, 411, 419, 420, 421, 422, 423, 425, 426, 428,
+    405, 406, 407, 408, 409, 410, 411, 420, 421, 422, 423, 424, 426, 427, 429,
 ];
 const OFFICIAL_LIQUID_BLOCKS: &[i16] = &[
     182, 186, 189, 192, 193, 194, 195, 197, 198, 200, 201, 202, 204, 209, 211, 212, 213, 214, 215,
@@ -1302,7 +1302,7 @@ const OFFICIAL_LIQUID_BLOCKS: &[i16] = &[
     297, 298, 299, 300, 301, 310, 311, 315, 316, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329,
     330, 331, 332, 334, 335, 336, 337, 338, 349, 350, 351, 352, 353, 354, 355, 357, 358, 360, 361,
     362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 373, 374, 375, 382, 383, 385, 389, 390, 391,
-    392, 393, 394, 395, 397, 408, 409, 414, 415, 426, 427, 433,
+    392, 393, 394, 395, 397, 408, 409, 414, 415, 427, 428, 434,
 ];
 
 fn has_official_module(block: i16, modules: &[i16]) -> bool {
@@ -1326,7 +1326,7 @@ fn building_version(block: i16) -> u8 {
         308..=323 => 1,
         377..=383 | 386..=392 => 3,
         5..=20 | 384 | 385 => 1,
-        431..=433 | 442 => 4,
+        432..=434 | 443 => 4,
         _ => 0,
     }
 }
@@ -1446,7 +1446,7 @@ fn write_building_tail(
             out.extend_from_slice(&0.0f32.to_be_bytes());
             out.extend_from_slice(&0.0f32.to_be_bytes());
         }
-        431..=433 | 442 => write_logic_build_tail(out, tile)?,
+        432..=434 | 443 => write_logic_build_tail(out, tile)?,
         398..=401 => write_payload_conveyor_tail(out, tile)?,
         228 | 229 | 239 => out.push(u8::from(tile.door_open)),
         5..=20 => write_construct_build_tail(out, tile)?,
@@ -1494,7 +1494,7 @@ fn write_logic_build_tail(
     out.extend_from_slice(&compressed);
     out.write_i(0)?; // no executor vars (recompiled from source on load)
     out.write_i(0)?; // memory unused
-    if tile.block == 442 {
+    if tile.block == 443 {
         out.write_s(8)?; // world-processor default ipt
     }
     out.write_typeio_string(None)?;
@@ -1706,7 +1706,7 @@ pub fn apply_msav_building_tail(
         return Ok(());
     }
     match tile.block {
-        431..=433 | 442 => apply_logic_build_tail(tile, extra),
+        432..=434 | 443 => apply_logic_build_tail(tile, extra),
         315 | 316 => {
             // GeneratorBuild writes productionEfficiency + generateTime, then
             // NuclearReactor/ImpactReactor append heat/warmup.
@@ -2471,12 +2471,12 @@ mod tests {
             crate::network::world::EnemyUnit {
                 id: 7002,
                 unit_type: 5,
-                entity_class: 4,
+                entity_class: 17,
                 team: 2,
                 x: 88.0,
                 y: 96.0,
                 rotation: -90.0,
-                health: 120.0,
+                health: 200.0,
                 shield: 0.0,
                 status_effect: -1,
                 status_duration: f32::MAX,
@@ -2494,7 +2494,7 @@ mod tests {
                 quaternary_attack_reload: 0.0,
                 move_speed: 0.55,
                 attack_damage: 13.0,
-                attack_reload_time: 24.0,
+                attack_reload_time: 30.0,
                 attack_range: 156.0,
                 authority: crate::network::world::UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
@@ -2741,7 +2741,7 @@ mod tests {
         assert_eq!(seen[0].1, 22);
         assert_eq!(seen[0].2[0], "copper");
         assert_eq!(seen[1].0, 1);
-        assert_eq!(seen[1].1, 446);
+        assert_eq!(seen[1].1, 447);
         assert_eq!(seen[1].2[0], "air");
         assert_eq!(seen[2].0, 4);
         assert_eq!(seen[2].1, 11);

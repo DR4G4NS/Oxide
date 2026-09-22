@@ -1048,7 +1048,7 @@ fn block_names_match_official_registry() {
     );
     assert_eq!(
         crate::game::block_names::block_id_from_name("micro-processor"),
-        Some(431)
+        Some(432)
     );
     assert_eq!(
         crate::game::block_names::block_id_from_name("router"),
@@ -1084,7 +1084,7 @@ fn unit_objects_work_in_sensor_without_world() {
 // P0-02 — ubind round-robin (official UnitBindI semantics)
 // ------------------------------------------------------------------
 
-/// A minimal world with one micro processor (431) of `team` at (10,10).
+/// A minimal world with one micro processor (432) of `team` at (10,10).
 fn ubind_world(team: u8) -> (std::sync::Arc<crate::network::world::DynamicWorld>, i32) {
     let world = logic_test_world("ubind-test");
     let pos = (10 << 16) | 10;
@@ -1093,7 +1093,7 @@ fn ubind_world(team: u8) -> (std::sync::Arc<crate::network::world::DynamicWorld>
         crate::network::world::DynamicTile {
             logic_control: None,
             position: pos,
-            block: 431,
+            block: 432,
             team,
             ..Default::default()
         },
@@ -1697,7 +1697,7 @@ fn ubind_sequence_is_deterministic_across_identical_runs() {
 use crate::network::world::{UnitAuthority, UnitOrder};
 use std::sync::Arc;
 
-/// One logic-controlled-candidate world: micro processor (431) of `team`
+/// One logic-controlled-candidate world: micro processor (432) of `team`
 /// at (10,10) plus one alive dagger with an (optional) order.
 fn ucontrol_world() -> (Arc<crate::network::world::DynamicWorld>, i32) {
     ubind_world(1)
@@ -2100,7 +2100,7 @@ fn p003_second_processor_takes_over_with_its_position() {
         crate::network::world::DynamicTile {
             logic_control: None,
             position: pos_b,
-            block: 431,
+            block: 432,
             team: 1,
             ..Default::default()
         },
@@ -2215,8 +2215,8 @@ fn p003_processor_position_reused_by_other_building_releases() {
     ));
 }
 
-/// Stamps a new micro-processor instance at `pos` (same block id 431).
-/// Distinct from merely writing `block = 431`: Java's setBlock creates
+/// Stamps a new micro-processor instance at `pos` (same block id 432).
+/// Distinct from merely writing `block = 432`: Java's setBlock creates
 /// a new Building, so generation must change.
 fn place_processor_instance(
     world: &crate::network::world::DynamicWorld,
@@ -2226,7 +2226,7 @@ fn place_processor_instance(
     let mut tile = crate::network::world::DynamicTile {
         logic_control: None,
         position: pos,
-        block: 431,
+        block: 432,
         team,
         ..Default::default()
     };
@@ -2316,7 +2316,7 @@ fn p0c1_same_tile_processor_replacement_releases_old_lease() {
     assert_eq!(logic_generation(&world, UNIT), Some(gen_a));
     let gen_b = place_processor_instance(&world, pos, 1);
     assert_ne!(gen_a, gen_b, "B must be a distinct instance");
-    assert_eq!(world.tiles.get(&pos).unwrap().block, 431);
+    assert_eq!(world.tiles.get(&pos).unwrap().block, 432);
     assert!(lease_tick(&world, 1.0));
     assert!(
         !matches!(authority_of(&world, UNIT), UnitAuthority::Logic { .. }),
@@ -2860,7 +2860,7 @@ fn spawnwave_setrule_explosion_setprop_mutate_world() {
         crate::network::world::DynamicTile {
             logic_control: None,
             position: pos,
-            block: 442,
+            block: 443,
             team: 1,
             health: 500.0,
             ..Default::default()

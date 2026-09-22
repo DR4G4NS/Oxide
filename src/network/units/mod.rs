@@ -1234,7 +1234,7 @@ mod command_timing_tests {
         let mut proc = crate::network::world::DynamicTile {
             logic_control: None,
             position: PROC,
-            block: 431,
+            block: 432,
             team: 1,
             ..Default::default()
         };
@@ -1355,7 +1355,7 @@ mod logic_move_timing_tests {
         let mut proc = crate::network::world::DynamicTile {
             logic_control: None,
             position: PROC,
-            block: 431,
+            block: 432,
             team: 1,
             ..Default::default()
         };

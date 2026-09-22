@@ -1,6 +1,6 @@
 # Agent instructions (Oxide)
 
-Oxide is an independently authored, authoritative Mindustry server. One binary targets **v8 159.7**, pinned in [compat/current.toml](compat/current.toml).
+Oxide is an independently authored, authoritative Mindustry server. One binary targets **v8 160.5**, pinned in [compat/current.toml](compat/current.toml).
 
 ## Read for the task
 
@@ -17,7 +17,7 @@ Read the relevant sections; a documentation or typo fix does not require a full 
 
 ## Constraints that change implementation decisions
 
-- Independently implement behaviour. Do not copy Mindustry/Arc Java into `src/`; use the target JAR as an external oracle. Do not infer 159.7 wire layouts from 158.1 source order.
+- Independently implement behaviour. Do not copy Mindustry/Arc Java into `src/`; use the target JAR as an external oracle. Do not infer 160.5 wire layouts from older source order.
 - Do not commit JARs, extra Mindustry assets, `.cache/mindustry/`, runtime saves (`world-*.json`, `admin-data.json`), or agent session directories. Existing official maps in `third_party/mindustry-maps/` remain **GPLv3 (Anuken)**; do not relicense or embed them in the production binary.
 - Packet IDs, field order, widths, and TypeIO references come from `compat/<build>/` and the target JAR. Config objects, Building tails, and sync codecs are separate formats.
 - Decode with limits, authenticate, release map guards, then delegate mutation and persist/broadcast. Do not mutate the world during decoding.

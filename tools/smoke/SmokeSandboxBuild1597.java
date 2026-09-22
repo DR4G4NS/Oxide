@@ -41,7 +41,7 @@ import mindustry.net.NetConnection;
 import mindustry.net.Packets;
 
 /**
- * 159.7 sandbox build/break smoke. Inflates the world stream and reads the
+ * Current-target sandbox build/break smoke. Inflates the world stream and reads the
  * Rules UTF-8 from the data-patch prefix (no NetworkIO.readWorld). Asserts
  * vanilla sandbox flags and that place/finish plus begin-break/finish arrive.
  */
@@ -52,7 +52,7 @@ public final class SmokeSandboxBuild1597 {
 
     public static void main(String[] args) throws Exception {
         int port = args.length == 0 ? 6598 : Integer.parseInt(args[0]);
-        Version.build = Integer.getInteger("oxide.smoke.build", 159);
+        Version.build = Integer.getInteger("oxide.smoke.build", 160);
         Vars.headless = true;
         Core.settings = new arc.Settings();
         Vars.content = new ContentLoader();
@@ -258,7 +258,7 @@ public final class SmokeSandboxBuild1597 {
                 || plain[1] != 0
                 || plain[2] != 0
                 || plain[3] != 2) {
-            throw new AssertionError("159.7 data-patch header missing after inflate");
+            throw new AssertionError("current-target data-patch header missing after inflate");
         }
         DataInputStream input = new DataInputStream(
             new ByteArrayInputStream(plain, 8, plain.length - 8));

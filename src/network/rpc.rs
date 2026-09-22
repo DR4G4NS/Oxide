@@ -3,18 +3,18 @@
 use crate::network::codec::{Reads, Writes};
 use std::io::{Cursor, Error, ErrorKind, Read, Write};
 
-/// Generated `TileTapCallPacket` id in Mindustry 8 / desktop build 159.7.
-pub const TILE_TAP_PACKET_ID: u8 = 140;
-/// Generated `ConstructFinishCallPacket` ID in desktop 159.7.
-pub const CONSTRUCT_FINISH_PACKET_ID: u8 = 34;
-/// Generated `DeconstructFinishCallPacket` ID in desktop 159.7.
-pub const DECONSTRUCT_FINISH_PACKET_ID: u8 = 41;
-/// Generated `SendChatMessageCallPacket` ID in desktop 159.7.
-pub const SEND_CHAT_MESSAGE_PACKET_ID: u8 = 97;
-/// Generated `SetRulesCallPacket` ID in desktop 159.7.
-pub const SET_RULES_PACKET_ID: u8 = 119;
-/// Generated `WorldDataBeginCallPacket` ID in desktop 159.7.
-pub const WORLD_DATA_BEGIN_PACKET_ID: u8 = 164;
+/// Generated `TileTapCallPacket` id in Mindustry 8 / desktop build 160.5.
+pub const TILE_TAP_PACKET_ID: u8 = 148;
+/// Generated `ConstructFinishCallPacket` ID in desktop 160.5.
+pub const CONSTRUCT_FINISH_PACKET_ID: u8 = 35;
+/// Generated `DeconstructFinishCallPacket` ID in desktop 160.5.
+pub const DECONSTRUCT_FINISH_PACKET_ID: u8 = 42;
+/// Generated `SendChatMessageCallPacket` ID in desktop 160.5.
+pub const SEND_CHAT_MESSAGE_PACKET_ID: u8 = 105;
+/// Generated `SetRulesCallPacket` ID in desktop 160.5.
+pub const SET_RULES_PACKET_ID: u8 = 127;
+/// Generated `WorldDataBeginCallPacket` ID in desktop 160.5.
+pub const WORLD_DATA_BEGIN_PACKET_ID: u8 = 172;
 /// Framework StreamChunk packet ID (not a generated Call packet).
 pub const STREAM_CHUNK_PACKET_ID: u8 = 1;
 

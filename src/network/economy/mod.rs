@@ -34,7 +34,7 @@ use tracing::{debug, info, warn};
 pub(crate) const CONVEYOR_ITEM_SPACE: f32 = 0.4;
 const CONVEYOR_CAPACITY: usize = 3;
 
-/// Memory cell (434) / memory bank (435) capacity, from Blocks.java
+/// Memory cell (435) / memory bank (436) capacity, from Blocks.java
 /// (memory-cell memoryCapacity=64, memory-bank memoryCapacity=512, size 2).
 pub(crate) mod inventory;
 pub(crate) use inventory::{has_requirements, items_for_team, items_for_team_mut, TeamItemsMut};

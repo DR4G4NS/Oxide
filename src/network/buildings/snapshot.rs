@@ -177,27 +177,27 @@ pub fn encode_dynamic_tile_sync(
         encode_payload_block_base_sync(output, tile, power)
     } else if tile.block == 397 {
         encode_power_liquid_base_sync(output, tile, power)
-    } else if tile.block == 419 {
+    } else if tile.block == 420 {
         encode_light_sync(output, tile, power)
-    } else if matches!(tile.block, 425 | 426) {
+    } else if matches!(tile.block, 426 | 427) {
         encode_launch_pad_sync(output, tile, power)
-    } else if tile.block == 427 {
-        encode_campaign_pad_sync(output, tile, power)
     } else if tile.block == 428 {
+        encode_campaign_pad_sync(output, tile, power)
+    } else if tile.block == 429 {
         encode_accelerator_sync(output, tile, power)
-    } else if matches!(tile.block, 429 | 441 | 444) {
+    } else if matches!(tile.block, 430 | 442 | 445) {
         encode_message_sync(output, tile)
-    } else if matches!(tile.block, 430 | 445) {
+    } else if matches!(tile.block, 431 | 446) {
         encode_switch_sync(output, tile)
     } else if matches!(tile.block, 255 | 256) {
         encode_shield_sync(output, tile, power)
-    } else if matches!(tile.block, 431..=433 | 442) {
+    } else if matches!(tile.block, 432..=434 | 443) {
         encode_logic_processor_sync(output, tile)
-    } else if matches!(tile.block, 434 | 435 | 443) {
+    } else if matches!(tile.block, 435 | 436 | 444) {
         encode_memory_sync(output, tile)
-    } else if matches!(tile.block, 436..=438) {
+    } else if matches!(tile.block, 437..=439) {
         encode_logic_display_sync(output, tile)
-    } else if matches!(tile.block, 439 | 440) {
+    } else if matches!(tile.block, 440 | 441) {
         encode_canvas_sync(output, tile)
     } else if tile.block == 252 {
         encode_build_tower_sync(output, tile, power)
@@ -275,7 +275,7 @@ pub fn is_block_snapshot_supported(block: i16) -> bool {
         || matches!(block, 408 | 409)
         || matches!(block, 206..=208 | 317..=319)
         || matches!(block, 325..=331 | 333..=338)
-        || matches!(block, 193 | 194 | 252 | 281 | 426 | 427 | 433 | 436 | 440)
+        || matches!(block, 193 | 194 | 252 | 281 | 427 | 428 | 434 | 437 | 441)
         || storage_capacity(block).is_some()
         || block == 271
         || matches!(block, 306 | 307)
@@ -297,7 +297,7 @@ pub fn is_block_snapshot_supported(block: i16) -> bool {
         // RequestBlockSnapshot reply still covers them (see the handler).
         || matches!(block, 356 | 359 | 384 | 385 | 393..=397)
         || matches!(block, 410..=415 | 418)
-        || matches!(block, 419 | 425 | 428..=432 | 434 | 435 | 437..=439 | 441..=445)
+        || matches!(block, 420 | 426 | 429..=433 | 435 | 436 | 438..=440 | 442..=446)
         // ConstructBlock.sync = true (build1..build16). writeSync carries
         // ConstructBuild.progress/previous/current so other clients and a
         // RequestBlockSnapshot keep BuilderComp.current == plan.block.
@@ -324,9 +324,9 @@ pub fn is_batch_snapshot_supported(block: i16) -> bool {
         || matches!(block, 408 | 409)
         || matches!(block, 193 | 194)
         || block == 271
-        || matches!(block, 252 | 281 | 426 | 427)
+        || matches!(block, 252 | 281 | 427 | 428)
         || matches!(block, 384 | 385 | 393..=395)
-        || matches!(block, 425 | 434 | 436 | 437 | 438)
+        || matches!(block, 426 | 435 | 437 | 438 | 439)
         || storage_capacity(block).is_some()
         || (5..=20).contains(&block))
         && !is_core_block(block)
@@ -1199,7 +1199,7 @@ pub fn encode_launch_pad_sync(
 ) -> std::io::Result<()> {
     use crate::network::codec::Writes;
     // LaunchPadBuild.write: f32 launchCounter.
-    encode_basic_modules_sync(output, tile, power, true, true, tile.block == 426)?;
+    encode_basic_modules_sync(output, tile, power, true, true, tile.block == 427)?;
     output.write_f(tile.production_progress.max(0.0))?;
     Ok(())
 }
@@ -1314,7 +1314,7 @@ pub fn encode_canvas_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::
 
 /// The packed pixel buffer of a configured canvas block, if any.
 pub(crate) fn canvas_data(tile: &DynamicTile) -> Option<&[u8]> {
-    if !matches!(tile.block, 439 | 440) {
+    if !matches!(tile.block, 440 | 441) {
         return None;
     }
     match tile.config.as_slice() {
@@ -1374,7 +1374,7 @@ pub fn is_pickup_payload_supported(block: i16) -> bool {
 
 pub fn build_payload_version(block: i16) -> u8 {
     match block {
-        433 => 4,
+        434 => 4,
         369 | 373 | 377..=383 | 386..=391 => 3,
         361..=365 | 367 | 368 | 370 | 371 | 374 => 2,
         193
@@ -1393,9 +1393,9 @@ pub fn build_payload_version(block: i16) -> u8 {
         | 401..=403
         | 408
         | 409
-        | 426
         | 427
-        | 436 => 1,
+        | 428
+        | 437 => 1,
         _ => 0,
     }
 }
@@ -1601,7 +1601,7 @@ pub fn encode_campaign_pad_sync(
     power: &std::collections::HashMap<i32, f32>,
 ) -> std::io::Result<()> {
     use crate::network::codec::Writes;
-    if tile.block == 426 {
+    if tile.block == 427 {
         encode_basic_modules_sync(output, tile, power, true, true, true)?;
         output.write_f(tile.production_progress.max(0.0))?;
     } else {
@@ -1641,7 +1641,7 @@ pub fn encode_logic_processor_sync(
         &std::collections::HashMap::new(),
         false,
         false,
-        tile.block == 433,
+        tile.block == 434,
     )?;
     // LogicBuild.write serializes `i compressed.length + b compressed`, where
     // compressed is the client's TileConfig container (zlib of
@@ -1662,12 +1662,12 @@ pub fn encode_logic_processor_sync(
                         // Official LogicBuild.write() (158.1): ONLY privileged
                         // processors serialize instructionsPerTick between the
                         // memory count and the tag string (`if(privileged)
-                        // write.s(ipt)`). Hyper (433) is not privileged in the
+                        // write.s(ipt)`). Hyper (434) is not privileged in the
                         // content, so it must NOT write the field — writing it
                         // left 2 trailing bytes that VerifyProtocol158 rejects.
-                        // World processor (442) is privileged and writes its
+                        // World processor (443) is privileged and writes its
                         // configured 8 instructions per tick.
-    if tile.block == 442 {
+    if tile.block == 443 {
         output.write_s(8)?; // world-processor instructionsPerTick (official)
     }
     output.write_b(0)?; // nullable tag string
@@ -1680,7 +1680,7 @@ pub fn encode_logic_processor_sync(
 pub fn encode_logic_display_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::Result<()> {
     use crate::network::codec::Writes;
     encode_simple_wall_sync(output, tile)?;
-    if matches!(tile.block, 436..=438) {
+    if matches!(tile.block, 437..=439) {
         output.write_bool(false)?; // no transform matrix
     } else {
         output.write_i(0)?; // empty canvas data; the client retains its zero-filled buffer

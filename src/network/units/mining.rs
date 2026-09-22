@@ -575,7 +575,7 @@ fn block_has_wave_flag(block: i16, flag: WaveBlockFlag) -> bool {
         WaveBlockFlag::Core => crate::network::buildings::snapshot::is_core_block(block),
         WaveBlockFlag::Storage => matches!(block, 345..=348),
         WaveBlockFlag::Generator => matches!(block, 308 | 311 | 313 | 314 | 315 | 316 | 320..=322),
-        WaveBlockFlag::LaunchPad => matches!(block, 425 | 426),
+        WaveBlockFlag::LaunchPad => matches!(block, 426 | 427),
         WaveBlockFlag::Factory => matches!(block, 182..=191 | 377..=392),
         WaveBlockFlag::Repair => matches!(block, 245..=249),
         WaveBlockFlag::Battery => matches!(block, 306 | 307 | 317 | 318),

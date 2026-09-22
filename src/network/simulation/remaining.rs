@@ -658,9 +658,9 @@ fn simulate_parallax_and_segment(
     changed
 }
 
-const LAUNCH_PAD: i16 = 425;
-const ADVANCED_LAUNCH_PAD: i16 = 426;
-const LANDING_PAD: i16 = 427;
+const LAUNCH_PAD: i16 = 426;
+const ADVANCED_LAUNCH_PAD: i16 = 427;
+const LANDING_PAD: i16 = 428;
 
 fn simulate_campaign_pads(
     world: &DynamicWorld,

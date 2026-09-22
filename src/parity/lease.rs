@@ -145,12 +145,12 @@ fn compare_lease_fixture(fixture: &Value) -> Result<(), String> {
     let processor_team = as_u64(fixture, &probe, "processor_team")? as u8;
     let destroy_at = as_u64(fixture, &probe, "destroy_at")?;
 
-    // Same scenario as the probe: a micro processor (431) of the executor
+    // Same scenario as the probe: a micro processor (432) of the executor
     // team and one dagger (the Java unit's default CommandAI maps to the
     // port's default authority for a player-commandable team).
     let world = parity_bare_world("parity-lease-600.json");
     let processor_pos = (1 << 16) | 1;
-    let mut processor_tile = tile_at_pos(processor_pos, 431);
+    let mut processor_tile = tile_at_pos(processor_pos, 432);
     processor_tile.team = processor_team;
     world.tiles.insert(processor_pos, processor_tile);
     let unit_id = 3_000_001;

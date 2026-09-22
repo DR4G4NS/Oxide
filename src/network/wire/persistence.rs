@@ -320,7 +320,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
         };
         if (0..map_width).contains(&x)
             && (0..map_height).contains(&y)
-            && (0..446).contains(&tile.block)
+            && (0..447).contains(&tile.block)
             && tile.rotation < 4
             && (-1..22).contains(&tile.stored_item)
             && (0..=1_000_000).contains(&tile.stored_amount)

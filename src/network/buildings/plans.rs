@@ -126,7 +126,7 @@ pub(crate) fn assist_visual_plan(world: &DynamicWorld, unit: &EnemyUnit) -> Opti
 
 pub(crate) fn rebuild_plan(tile: &DynamicTile) -> Option<(i16, u8, u8, Vec<u8>)> {
     let block = i16::try_from(tile.stored_amount.checked_sub(1)?).ok()?;
-    (tile.block == 0 && (1..446).contains(&block) && tile.team == 1)
+    (tile.block == 0 && (1..447).contains(&block) && tile.team == 1)
         .then(|| (block, tile.rotation, tile.team, tile.config.clone()))
 }
 
@@ -138,6 +138,6 @@ pub(crate) fn rebuild_plan(tile: &DynamicTile) -> Option<(i16, u8, u8, Vec<u8>)>
 /// team-1 gate above.
 pub(crate) fn ai_rebuild_plan(tile: &DynamicTile) -> Option<(i16, u8, u8, Vec<u8>)> {
     let block = i16::try_from(tile.stored_amount.checked_sub(1)?).ok()?;
-    (tile.block == 0 && (1..446).contains(&block))
+    (tile.block == 0 && (1..447).contains(&block))
         .then(|| (block, tile.rotation, tile.team, tile.config.clone()))
 }

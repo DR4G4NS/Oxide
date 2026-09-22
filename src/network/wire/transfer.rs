@@ -37,7 +37,7 @@ pub(crate) fn nearest_opposing_unit(
 // 1:1 auditable mirror of the desktop.jar probe dump.
 #[allow(clippy::manual_range_patterns)]
 pub(crate) fn enemy_weapon_mount_count(unit_type: i16) -> u8 {
-    // Authoritative v159.7 oracle (desktop.jar): full ContentLoader dump with
+    // Authoritative v160.5 oracle (desktop.jar): full ContentLoader dump with
     // per-type UnitType.init applied, so every mirror weapon is counted the
     // way UnitType.init appends flipped copies to `weapons` and WeaponsComp
     // sizes its mounts array. Weapon.mirror defaults TRUE.
@@ -84,12 +84,11 @@ pub(crate) fn enemy_weapon_mount_count(unit_type: i16) -> u8 {
         58 => 1,
         59 => 3,
         60 => 2,
-        61 | 62 | 63 => 0,
-        64 | 65 => 1,
-        66 => 2,
-        67 => 1,
-        // Port-internal generated turret-unit-build-tower (no JAR content id).
-        68 => 0,
+        61 | 62 | 63 | 64 => 0,
+        65 | 66 => 1,
+        67 => 2,
+        68 => 1,
+        69 => 0,
         _ => 1,
     }
 }

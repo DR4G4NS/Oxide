@@ -94,8 +94,8 @@ impl<'a> WorldView<'a> {
 
     /// Official `MemoryBuild.readable(executor)` (desktop 158.1): valid
     /// building AND (executor privileged OR (same team AND block not
-    /// privileged)). `worldCell` (443) is a privileged block; the port's
-    /// privileged executors are world processors (442).
+    /// privileged)). `worldCell` (444) is a privileged block; the port's
+    /// privileged executors are world processors (443).
     fn memory_readable(&self, pos: i32, privileged: bool) -> bool {
         let Some(tile) = self.world.tiles.get(&pos) else {
             return false;
@@ -103,7 +103,7 @@ impl<'a> WorldView<'a> {
         if privileged {
             return true;
         }
-        tile.team == self.processor_team() && tile.block != 443
+        tile.team == self.processor_team() && tile.block != 444
     }
 
     pub fn read_memory(&self, cell: &LVar, addr: i64, privileged: bool) -> Option<f64> {
@@ -160,9 +160,9 @@ impl<'a> WorldView<'a> {
         // the same map (get). Resolve the team before taking the guard.
         let processor_team = self.processor_team();
         if let Some(mut tile) = self.world.tiles.get_mut(&pos) {
-            let message_block = matches!(tile.block, 429 | 441 | 444);
+            let message_block = matches!(tile.block, 430 | 442 | 445);
             if message_block {
-                let owned = privileged || (tile.team == processor_team && tile.block != 444);
+                let owned = privileged || (tile.team == processor_team && tile.block != 445);
                 if owned {
                     // PrintFlushI appends min(textBuffer.length,
                     // maxTextLength) — a UTF-16 code-unit cap.
@@ -192,7 +192,7 @@ impl<'a> WorldView<'a> {
             return;
         };
         let owned =
-            matches!(tile.block, 436..=438) && (privileged || tile.team == self.processor_team());
+            matches!(tile.block, 437..=439) && (privileged || tile.team == self.processor_team());
         drop(tile);
         if !owned || commands.is_empty() {
             return;
@@ -253,9 +253,9 @@ impl<'a> WorldView<'a> {
         };
         let valid_link = privileged
             || (tile.team == self.processor_team()
-                && tile.block != 443
                 && tile.block != 444
                 && tile.block != 445
+                && tile.block != 446
                 && self.processor_range().is_some_and(|range| {
                     // validLink: `target.within(this, range + size*8/2)` in
                     // world units (tile distance * 8).
@@ -290,10 +290,10 @@ impl<'a> WorldView<'a> {
             .get(&self.processor_pos)
             .map(|tile| tile.block)?;
         Some(match block {
-            431 => 80.0,
-            432 => 176.0,
-            433 => 336.0,
-            442 => f32::MAX,
+            432 => 80.0,
+            433 => 176.0,
+            434 => 336.0,
+            443 => f32::MAX,
             _ => 80.0,
         })
     }
@@ -1623,6 +1623,9 @@ impl<'a> WorldView<'a> {
             | LogicRule::DropZoneRadius
             | LogicRule::Lighting
             | LogicRule::AmbientLight => {}
+            LogicRule::UnitLight => {
+                self.world.wave_rules.write().unit_light = value.bool();
+            }
             LogicRule::SolarMultiplier => {
                 self.world.wave_rules.write().solar_multiplier = (value.num() as f32).max(0.0);
             }

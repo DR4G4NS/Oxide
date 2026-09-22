@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 159.7 sandbox build/break smoke. Asserts streamed Rules (inflate + UTF-8,
+# Current-target sandbox build/break smoke. Asserts streamed Rules (inflate + UTF-8,
 # not NetworkIO.readWorld) and that BeginPlace/ConstructFinish plus
 # BeginBreak/DeconstructFinish all arrive. Skips when the JAR is absent.
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-desktop_jar="${MINDUSTRY_1597_JAR:-/home/dr4g4ns/Escritorio/mindustry-159.7/jre/159.7.jar}"
+desktop_jar="${MINDUSTRY_CURRENT_JAR:-$project_dir/.cache/mindustry/160.5.jar}"
 smoke_port="${1:-6598}"
-class_dir="$project_dir/target/protocol-1597-classes"
+class_dir="$project_dir/target/protocol-1605-classes"
 
 if [[ ! -f "$desktop_jar" ]]; then
-    echo "skip: 159.7 JAR not found at $desktop_jar (set MINDUSTRY_1597_JAR)"
+    echo "skip: current-target JAR not found at $desktop_jar (set MINDUSTRY_CURRENT_JAR)"
     exit 0
 fi
 
@@ -24,7 +24,7 @@ case "${OXIDE_SMOKE_PROFILE:-release}" in
 esac
 mkdir -p "$class_dir"
 javac -d "$class_dir" -cp "$desktop_jar" tools/smoke/SmokeSandboxBuild1597.java
-run_dir="$(mktemp -d "$project_dir/target/smoke-sandbox-build-1597.XXXXXX")"
+run_dir="$(mktemp -d "$project_dir/target/smoke-sandbox-build-1605.XXXXXX")"
 server_log="$run_dir/server.log"
 client_log="$run_dir/client.log"
 save_file="$run_dir/world.json"
@@ -57,4 +57,4 @@ if ! grep -q "SMOKE_OK sandbox-build" "$client_log"; then
     echo "Sandbox build smoke did not assert success. Artifacts: $run_dir" >&2
     exit 1
 fi
-echo "159.7 sandbox build smoke passed. Artifacts: $run_dir"
+echo "160.5 sandbox build smoke passed. Artifacts: $run_dir"

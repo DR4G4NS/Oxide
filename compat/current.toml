@@ -1,10 +1,10 @@
 [target]
-build = "159.7"
-source_tag = "v159.7"
-source_commit = "c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c"
-jar_filename = "159.7.jar"
-jar_size_bytes = 82540141
-jar_sha256 = "ce1db5b06fe7326b9d0c1d99b1eb1667cf6f0bf97093293f6674ae294981ff05"
+build = "160.5"
+source_tag = "v160.5"
+source_commit = "067c720a8817c1c9fb586c03898a7d948caaed56"
+jar_filename = "160.5.jar"
+jar_size_bytes = 88902250
+jar_sha256 = "c2fd5a5dcb8d306525bb47ff28121237d4d25f53868562946491f2ef261dc272"
 
 [historical.158_1]
 build = "158.1"

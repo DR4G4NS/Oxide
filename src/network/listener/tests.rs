@@ -660,16 +660,16 @@ fn parallel_block_snapshots_match_sequential_bytes_and_are_deterministic() {
         let position = (x << 16) | y;
         let mut tile = DynamicTile {
             position,
-            block: if index % 3 == 0 { 435 } else { 181 },
+            block: if index % 3 == 0 { 436 } else { 181 },
             rotation: (index % 4) as u8,
             team: 1,
             occupied: vec![position],
-            health: crate::game::content::block_health(if index % 3 == 0 { 435 } else { 181 }),
+            health: crate::game::content::block_health(if index % 3 == 0 { 436 } else { 181 }),
             production_progress: index as f32,
             inventory: vec![(0, index + 1)],
             ..DynamicTile::default()
         };
-        if tile.block == 435 {
+        if tile.block == 436 {
             tile.memory = (0..512).map(|cell| f64::from(index * 512 + cell)).collect();
         }
         power.insert(position, (index % 10) as f32 / 10.0);
@@ -793,7 +793,7 @@ fn generated_packet_ids_match_exact_desktop_159_registry() {
 #[test]
 fn rust_packet_ids_match_committed_159_7_packets_json() {
     let doc: serde_json::Value =
-        serde_json::from_str(include_str!("../../../compat/159.7/packets.json")).unwrap();
+        serde_json::from_str(include_str!("../../../compat/160.5/packets.json")).unwrap();
     assert_eq!(doc["schema_version"], 2);
     let packets = doc["packets"].as_array().unwrap();
     assert_eq!(packets.len(), 165);
@@ -1901,17 +1901,17 @@ fn export_desktop_158_post_join_fixtures() {
     recon_payload.extend_from_slice(&recon_data);
     std::fs::write(output.join("reconstructor-380.bin"), recon_payload).unwrap();
 
-    // Memory cell (434) fixture: full 64-cell array, values at 0 and 3.
+    // Memory cell (435) fixture: full 64-cell array, values at 0 and 3.
     let mem_position = (52 << 16) | 100;
     let mut mem = base_building_tombstone(&BaseBuildingState {
         position: mem_position,
-        block: 434,
+        block: 435,
         team: 1,
-        health: crate::game::content::block_health(434),
+        health: crate::game::content::block_health(435),
         occupied: vec![mem_position],
         inventory: Vec::new(),
     });
-    mem.block = 434;
+    mem.block = 435;
     mem.team = 1;
     let mut memory = vec![0.0f64; 64];
     memory[0] = 1.5;
@@ -1921,13 +1921,13 @@ fn export_desktop_158_post_join_fixtures() {
     mem_payload.write_s(1).unwrap();
     let mut mem_data = Vec::new();
     mem_data.write_i(mem_position).unwrap();
-    mem_data.write_s(434).unwrap();
+    mem_data.write_s(435).unwrap();
     encode_memory_sync(&mut mem_data, &mem).unwrap();
     mem_payload
         .write_s(i16::try_from(mem_data.len()).unwrap())
         .unwrap();
     mem_payload.extend_from_slice(&mem_data);
-    std::fs::write(output.join("memory-cell-434.bin"), mem_payload).unwrap();
+    std::fs::write(output.join("memory-cell-435.bin"), mem_payload).unwrap();
 
     // Chat SendMessageCallPacket2 (92) fixture: frame payload after the
     // packet id (u16 len + id + u16 payload len + compress byte stripped
@@ -10999,7 +10999,7 @@ fn missile_and_tether_unit_sync_layouts_match_v1597_classes() {
     // --- BlockUnitUnit (class 2): hidden `block` / build-tower ----------
     // Same shape as the base UnitEntity: no building ref, no lifetime/time,
     // no payload collection.
-    for unit_type in [61i16, 68] {
+    for unit_type in [61i16, 69] {
         let spec = enemy_spec(unit_type).unwrap();
         let unit = legacy_weapons_make_enemy(7_100 + i32::from(unit_type), spec, 0.0, 0.0, 1.0);
         let mut body = Vec::new();
@@ -11190,7 +11190,7 @@ fn crawl_tank_elevation_unit_sync_layouts_match_v1597_classes() {
 /// mirrored weapon copies are counted), because TypeIO.writeMounts emits
 /// one length byte plus 9 bytes per mount inside every unit snapshot.
 #[test]
-fn weapon_mount_counts_match_v1597_jar() {
+fn weapon_mount_counts_match_v1605_jar() {
     // Full post-init dump: id, expected mounts, unit name.
     let multi = [
         (0, 2, "dagger"),
@@ -11257,10 +11257,10 @@ fn weapon_mount_counts_match_v1597_jar() {
         (61, 0, "block"),
         (62, 0, "manifold"),
         (63, 0, "assembly-drone"),
-        (64, 1, "scathe-missile"),
-        (65, 1, "scathe-missile-phase"),
-        (66, 2, "scathe-missile-surge"),
-        (67, 1, "scathe-missile-surge-split"),
+        (65, 1, "scathe-missile"),
+        (66, 1, "scathe-missile-phase"),
+        (67, 2, "scathe-missile-surge"),
+        (68, 1, "scathe-missile-surge-split"),
     ];
     for (unit_type, count, name) in multi {
         assert_eq!(
@@ -11269,9 +11269,8 @@ fn weapon_mount_counts_match_v1597_jar() {
             "mounts of unit {name} ({unit_type})"
         );
     }
-    // The port-internal generated turret-unit-build-tower has no JAR
-    // content id and stays weaponless.
-    assert_eq!(enemy_weapon_mount_count(68), 0);
+    assert_eq!(enemy_weapon_mount_count(64), 0, "target dummy");
+    assert_eq!(enemy_weapon_mount_count(69), 0, "turret build tower");
 }
 
 #[test]
@@ -11577,7 +11576,7 @@ fn logic_cannot_take_items_from_enemy_buildings() {
     *world.game_state.mode.write() = GameMode::Pvp;
     let processor_pos = (40 << 16) | 40;
     let container_pos = (41 << 16) | 40;
-    let mut processor = erekir_like_tile(processor_pos, 431);
+    let mut processor = erekir_like_tile(processor_pos, 432);
     processor.team = 5;
     processor.config = vec![1]; // any non-empty config is fine here
     let mut container = erekir_like_tile(container_pos, 288);
@@ -11648,16 +11647,16 @@ fn canvas_config_stores_packed_pixels_and_rejects_wrong_lengths() {
         },
     );
     let pos = (45 << 16) | 100;
-    let occupied = block_footprint_in(300, 300, pos, 439).unwrap();
+    let occupied = block_footprint_in(300, 300, pos, 440).unwrap();
     world.tiles.insert(
         pos,
         DynamicTile {
             logic_control: None,
             payload_inventory: Vec::new(),
             position: pos,
-            block: 439,
+            block: 440,
             team: 1,
-            health: crate::game::content::block_health(439),
+            health: crate::game::content::block_health(440),
             occupied,
             enabled: true,
             config: Vec::new(),
@@ -12602,7 +12601,7 @@ fn controller_save_logic_tag3_only_persists_processor_pos() {
     let mut proc = crate::network::world::DynamicTile {
         logic_control: None,
         position: proc_pos,
-        block: 431,
+        block: 432,
         team: 1,
         ..Default::default()
     };
@@ -17643,8 +17642,8 @@ fn strict_mode_rejects_unsupported_logic_processors() {
     // unsupported statement is marked rejected and never executes.
     let (world, _connections, _, _) = legacy_weapons_test_world();
     let pos = (30 << 16) | 30;
-    // logic block 432 with a config carrying an unsupported statement.
-    let mut tile = erekir_like_tile(pos, 432);
+    // logic block 433 with a config carrying an unsupported statement.
+    let mut tile = erekir_like_tile(pos, 433);
     // Build a TypeIO byte[] config: tag 14 envelope around a zlib
     // stream whose content is the LogicBlock.compress layout:
     // [1][source_len i32][source][link_count i32][links].
@@ -20681,7 +20680,7 @@ fn scathe_launcher_expiry_inserts_missile_with_no_splash() {
     let missiles: Vec<_> = world
         .enemies
         .iter()
-        .filter(|entry| entry.unit_type == 64)
+        .filter(|entry| entry.unit_type == 65)
         .map(|entry| (entry.x, entry.y))
         .collect();
     assert_eq!(missiles.len(), 1);
@@ -20689,9 +20688,9 @@ fn scathe_launcher_expiry_inserts_missile_with_no_splash() {
     assert!((missiles[0].1 - impact_y).abs() < 0.01);
     // No insertion for non-scathe payloads: phase/surge/surge-split never
     // join through this expired shot.
-    assert!(!world.enemies.iter().any(|entry| entry.unit_type == 65));
     assert!(!world.enemies.iter().any(|entry| entry.unit_type == 66));
     assert!(!world.enemies.iter().any(|entry| entry.unit_type == 67));
+    assert!(!world.enemies.iter().any(|entry| entry.unit_type == 68));
 }
 
 #[test]

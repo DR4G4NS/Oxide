@@ -1,6 +1,6 @@
 # Gaps
 
-Concrete, located divergences from Mindustry v8 **159.7** that are still open in
+Concrete, located divergences from Mindustry v8 **160.5** that are still open in
 this tree. This is **not** the product-level gap list — that lives in
 [README.md](README.md) (§ Gaps — Serpulo / Gaps — Erekir) and summarizes *content coverage and
 product limitations*. This file describes *behaviour that is ported but wrong*,
@@ -69,7 +69,7 @@ encodes `breaking=1` for an in-progress construct the actor is demolishing.
 ## Remaining Serpulo behaviour and validation gaps
 
 These limitations do not imply that the corresponding implemented paths have
-full vanilla parity. The target oracle remains the pinned 159.7 JAR.
+full vanilla parity. The target oracle remains the pinned 160.5 JAR.
 
 | Area and owner | Remaining behaviour or required evidence |
 |---|---|

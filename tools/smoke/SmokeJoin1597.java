@@ -49,7 +49,7 @@ public final class SmokeJoin1597 {
         try (var input = new java.io.DataInputStream(new java.util.zip.InflaterInputStream(
                 new java.io.ByteArrayInputStream(compressed)))) {
             if (input.readInt() != 2 || input.readInt() != 0) {
-                throw new AssertionError("unexpected 159.7 data-patch header");
+                throw new AssertionError("unexpected current-target data-patch header");
             }
             // A generic JSON parser accepts a string loadout; the real client cannot.
             mindustry.game.Rules rules = mindustry.io.JsonIO.read(
@@ -149,7 +149,7 @@ public final class SmokeJoin1597 {
         int port = args.length == 0 ? 6567 : Integer.parseInt(args[0]);
         boolean joinOnly = args.length > 1 && args[1].equals("join-only");
         boolean consoleMode = args.length > 1 && args[1].equals("console");
-        Version.build = 159;
+        Version.build = 160;
         Vars.content = new ContentLoader();
         Vars.content.createBaseContent();
         Vars.world = new mindustry.core.World();
