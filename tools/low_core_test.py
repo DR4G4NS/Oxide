@@ -347,7 +347,7 @@ def run_suite(args):
     print(f"  elapsed : {elapsed:.1f}s")
     print(f"  exit     : {rc}")
     print(f"  log     : {log_path}")
-    if kind == CLASS_HANG:
+    if kind != CLASS_PASS:
         print("  last stdout/stderr (tail):")
         for line in tail_text(log_path).splitlines()[-80:]:
             print("   ", line)
