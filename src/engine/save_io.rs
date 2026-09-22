@@ -2538,7 +2538,9 @@ mod tests {
                 .unwrap();
         assert_eq!(i32::from_be_bytes(entities[6..10].try_into().unwrap()), 2);
         let mut entity_pos = 10;
-        for expected in [3u8, 4] {
+        // Nova's v160.5 entity class has an unmodeled generated tail, so the
+        // bounded save writer deliberately uses its UnitEntity fallback.
+        for expected in [3u8, 3] {
             let len = i32::from_be_bytes(entities[entity_pos..entity_pos + 4].try_into().unwrap())
                 as usize;
             entity_pos += 4;

@@ -8644,7 +8644,7 @@ fn game_over_broadcasts_official_info_message() {
     // read_packet consumes the first two bytes.
     let last = frames.last().unwrap().clone();
     let packet = crate::network::codec::read_packet(std::io::Cursor::new(&last[2..])).unwrap();
-    assert_eq!(packet[0], 54, "infoMessage must follow game over");
+    assert_eq!(packet[0], 59, "infoMessage must follow game over");
     // The survival header text is present in the payload.
     let text = b"Game over";
     assert!(

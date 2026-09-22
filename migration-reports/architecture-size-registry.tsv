@@ -1,5 +1,5 @@
 path	bytes	state	rationale	reviewer	evidence
-src/engine/save_io.rs	146923	OK	Fixture-gated official MSAV/JSON save codec; splitting would risk persistence-format drift. Cohesive persist/load of one format.	M12 certification	fixture-gated MSAV/JSON codec; M12 no-split decision
+src/engine/save_io.rs	147075	OK	Fixture-gated official MSAV/JSON save codec; splitting would risk persistence-format drift. Cohesive persist/load of one format.	M12 certification	fixture-gated MSAV/JSON codec; M12 no-split decision
 src/engine/world_stream.rs	106887	OK	WorldDataBegin/stream framing; fixture-gated encoder. Cohesive wire layout; split would risk stream-format drift.	M12 certification	fixture-gated world-stream encoder; M12 no-split decision
 src/logic/mod.rs	2572	SPLIT_COMPLETE	Production logic facade after mechanical test extraction to logic/tests.rs. Review unit is this file (~2 KB), not the test module.	M13.1 architecture audit	mechanical test extraction; assertions unchanged (m13.1-arch-audit.md)
 src/logic/tests.rs	142618	SPLIT_COMPLETE	Test-only module mechanically extracted from logic/mod.rs so the production facade stays reviewable. SpawnUnitI type-gate and Units.canCreate contract regressions remain test-only.	M13.1 architecture audit	mechanical test extraction; m13.1-arch-audit.md Goal 6; SpawnUnitI jitter/type-gate and canCreate contract tests

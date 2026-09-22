@@ -20767,26 +20767,26 @@ fn arkyid_sap_and_eclipse_flak_groups_spawn_from_their_own_muzzles() {
 
 /// Audit H14: UI notification frames match the javap-verified official
 /// generated-packet layouts:
-///   Announce (7):   TypeIO.writeString(message)
-///   InfoMessage(54):TypeIO.writeString(message)
-///   InfoToast (59): TypeIO.writeString(message) + f duration
+///   Announce (8):   TypeIO.writeString(message)
+///   InfoMessage(59):TypeIO.writeString(message)
+///   InfoToast (64): TypeIO.writeString(message) + f duration
 #[test]
 fn ui_notification_frames_match_official_layouts() {
     // read_packet keeps [id][compress byte][payload...].
     let announce = crate::network::wire::encode::encode_announce_frame("hi").unwrap();
     let packet = read_packet(std::io::Cursor::new(&announce[2..])).unwrap();
-    assert_eq!(packet[0], 7);
+    assert_eq!(packet[0], 8);
     // TypeIO.writeString("hi") = u16 len + MUTF-8 bytes.
     assert_eq!(&packet[2..], &[0, 2, b'h', b'i']);
 
     let info = crate::network::wire::encode::encode_info_message_frame("hi").unwrap();
     let packet = read_packet(std::io::Cursor::new(&info[2..])).unwrap();
-    assert_eq!(packet[0], 54);
+    assert_eq!(packet[0], 59);
     assert_eq!(&packet[2..], &[0, 2, b'h', b'i']);
 
     let toast = crate::network::wire::encode::encode_info_toast_frame("hi", 5.0).unwrap();
     let packet = read_packet(std::io::Cursor::new(&toast[2..])).unwrap();
-    assert_eq!(packet[0], 59);
+    assert_eq!(packet[0], 64);
     assert_eq!(&packet[2..], &[0, 2, b'h', b'i', 0x40, 0xA0, 0x00, 0x00]); // writeString("hi") + f32 5.0 = 0x40A00000
 }
 
