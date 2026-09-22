@@ -1358,7 +1358,8 @@ fn internal_unit_specs_are_never_spawnable() {
     assert!(enemy_spec(61).is_some());
     assert!(enemy_spec(64).is_some());
     assert!(enemy_spec(69).is_some());
-    let rules = r#"{"spawns":[{"type":"turret-unit-build-tower"},{"type":"dummy"},{"type":"block"}]}"#;
+    let rules =
+        r#"{"spawns":[{"type":"turret-unit-build-tower"},{"type":"dummy"},{"type":"block"}]}"#;
     let (parsed, diagnostics) = parse_wave_rules_report(rules);
     assert!(
         parsed.spawn_groups.iter().all(|group| group.unit_type == 0),

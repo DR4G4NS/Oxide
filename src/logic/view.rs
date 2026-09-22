@@ -1624,7 +1624,7 @@ impl<'a> WorldView<'a> {
             | LogicRule::Lighting
             | LogicRule::AmbientLight => {}
             LogicRule::UnitLight => {
-                self.world.wave_rules.write().unit_light = value.bool();
+                self.world.wave_rules.write().unit_light = lvar_bool(value);
             }
             LogicRule::SolarMultiplier => {
                 self.world.wave_rules.write().solar_multiplier = (value.num() as f32).max(0.0);

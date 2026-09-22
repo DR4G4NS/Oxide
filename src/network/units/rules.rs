@@ -1084,11 +1084,7 @@ pub(crate) fn serialize_live_rules_json(map_rules: &str, rules: &WaveRules) -> S
     insert_bool(&mut root, "placeRangeCheck", rules.place_range_check);
     insert_bool(&mut root, "lighting", rules.lighting);
     insert_bool(&mut root, "unitLight", rules.unit_light);
-    insert_bool(
-        &mut root,
-        "coreBuildAndConfig",
-        rules.core_build_and_config,
-    );
+    insert_bool(&mut root, "coreBuildAndConfig", rules.core_build_and_config);
     insert_bool(&mut root, "staticFog", rules.static_fog);
     insert_bool(&mut root, "ghostBlocks", rules.ghost_blocks);
     root.insert("loadout".into(), serialize_loadout(&rules.loadout));
