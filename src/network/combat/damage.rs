@@ -14,6 +14,216 @@ use dashmap::DashMap;
 
 use super::*;
 
+/// Entry into an axis-aligned hitbox expanded by the bullet's half-size.
+/// HitboxComp uses rectangles, including at the endpoints of a swept step.
+pub(crate) fn segment_hitbox_entry(
+    from: (f32, f32),
+    to: (f32, f32),
+    center: (f32, f32),
+    half_size: f32,
+) -> Option<f32> {
+    let mut enter = 0.0f32;
+    let mut leave = 1.0f32;
+    for (start, end, middle) in [(from.0, to.0, center.0), (from.1, to.1, center.1)] {
+        let delta = end - start;
+        if delta.abs() < 0.00001 {
+            if (start - middle).abs() > half_size {
+                return None;
+            }
+        } else {
+            let a = (middle - half_size - start) / delta;
+            let b = (middle + half_size - start) / delta;
+            enter = enter.max(a.min(b));
+            leave = leave.min(a.max(b));
+            if enter > leave {
+                return None;
+            }
+        }
+    }
+    Some(enter)
+}
+
+pub(crate) fn projectile_line_targets(
+    world: &DynamicWorld,
+    team: u8,
+    from: (f32, f32),
+    to: (f32, f32),
+    collision: crate::game::bullet_catalog::BulletCollision,
+) -> Vec<(f32, ProjectileHit)> {
+    let mut targets = Vec::new();
+    if collision.air {
+        let players: Vec<_> = world
+            .players
+            .iter()
+            .filter(|p| !p.dead && p.team != team)
+            .map(|p| (p.unit_id, p.x, p.y))
+            .collect();
+        for (id, x, y) in players {
+            if possessed_unit_id(world, id).is_some() {
+                continue;
+            }
+            if let Some(t) = segment_hitbox_entry(from, to, (x, y), 4.0 + collision.hit_size * 0.5)
+            {
+                targets.push((t, ProjectileHit::Player(id)));
+            }
+        }
+    }
+    for unit in world.enemies.iter() {
+        if unit.team == team || unit.health <= 0.0 {
+            continue;
+        }
+        let movement = crate::game::content::unit_movement(unit.unit_type);
+        let flying = movement.flying || unit.elevation >= 0.09;
+        if (flying && !collision.air) || (!flying && !collision.ground) {
+            continue;
+        }
+        if let Some(t) = segment_hitbox_entry(
+            from,
+            to,
+            (unit.x, unit.y),
+            (movement.hit_size + collision.hit_size) * 0.5,
+        ) {
+            targets.push((t, ProjectileHit::Unit(unit.id)));
+        }
+    }
+    if collision.ground && collision.tiles {
+        let mut seen = HashSet::new();
+        let mut core_teams = registered_core_teams(world);
+        if !core_teams.contains(&1) {
+            core_teams.push(1);
+        }
+        for core_team in core_teams {
+            if core_team == team {
+                continue;
+            }
+            let mut cores = team_core_snapshot(world, core_team);
+            if cores.is_empty() && core_team == 1 && *world.game_state.core_health.read() > 0.0 {
+                cores.push(TeamCore {
+                    position: world.core_position,
+                    block: 339,
+                    health: *world.game_state.core_health.read(),
+                    max_health: world.core_max_health,
+                });
+            }
+            for core in cores {
+                seen.insert(core.position);
+                if core.health <= 0.0 {
+                    continue;
+                }
+                if let Some(t) = building_line_entry(from, to, core.position, core.block) {
+                    targets.push((t, ProjectileHit::Core(core_team, core.position)));
+                }
+            }
+        }
+        for tile in world.tiles.iter() {
+            if !seen.insert(tile.position)
+                || tile.block == 0
+                || (tile.team == team && !collision.team)
+            {
+                continue;
+            }
+            if let Some(t) = building_line_entry(from, to, tile.position, tile.block) {
+                targets.push((t, ProjectileHit::Building(tile.position)));
+            }
+        }
+        for tile in world.base_buildings.iter() {
+            if (tile.team == team && !collision.team) || !seen.insert(tile.position) {
+                continue;
+            }
+            if let Some(t) = building_line_entry(from, to, tile.position, tile.block) {
+                targets.push((t, ProjectileHit::Building(tile.position)));
+            }
+        }
+    }
+    targets.sort_by(|a, b| a.0.total_cmp(&b.0));
+    targets
+}
+
+fn building_line_entry(from: (f32, f32), to: (f32, f32), position: i32, block: i16) -> Option<f32> {
+    let size = crate::game::content::block_size(block);
+    let offset = if size.is_multiple_of(2) { 4.0 } else { 0.0 };
+    segment_hitbox_entry(
+        from,
+        to,
+        (
+            (position >> 16) as i16 as f32 * 8.0 + offset,
+            position as i16 as f32 * 8.0 + offset,
+        ),
+        f32::from(size) * 4.0,
+    )
+}
+
+pub(crate) fn damage_projectile_target(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    target: ProjectileHit,
+    projectile: &Projectile,
+) -> bool {
+    let damage = projectile.damage;
+    match target {
+        ProjectileHit::Player(id) => damage_player(
+            world,
+            out,
+            id,
+            damage,
+            projectile.status_effect,
+            projectile.status_duration,
+        ),
+        ProjectileHit::Unit(id) => {
+            damage_allied_unit_combat(
+                world,
+                out,
+                id,
+                damage * projectile.armor_multiplier,
+                projectile.status_effect,
+                projectile.status_duration,
+            ) > 0.0
+        }
+        ProjectileHit::Building(position) => {
+            if effective_building_team(world, position) == projectile.team {
+                if let Some(percent) = projectile_direct_heal_percent(projectile.bullet_id) {
+                    if let Some(health) =
+                        heal_building_for_team(world, position, projectile.team, percent, 0.0)
+                    {
+                        if let Ok(frame) = encode_build_health_update_frame(&[(position, health)]) {
+                            out.broadcast(frame);
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if let Some((destroyed, health)) = damage_building(
+                world,
+                position,
+                damage * projectile_building_damage_multiplier(projectile.bullet_id),
+            ) {
+                let frame = if destroyed {
+                    encode_build_destroyed_frame(position)
+                } else {
+                    encode_build_health_update_frame(&[(position, health)])
+                };
+                if let Ok(frame) = frame {
+                    out.broadcast(frame);
+                }
+                true
+            } else {
+                false
+            }
+        }
+        ProjectileHit::Core(team, position) => {
+            damage_core_at(
+                world,
+                out,
+                team,
+                position,
+                damage * projectile_building_damage_multiplier(projectile.bullet_id),
+            );
+            true
+        }
+    }
+}
+
 pub(crate) fn damage_player(
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
@@ -22,6 +232,34 @@ pub(crate) fn damage_player(
     status_effect: i16,
     status_duration: f32,
 ) -> bool {
+    if let Some(unit_id) = possessed_unit_id(world, player_id) {
+        let Some(snapshot) = world.enemies.get(&unit_id).map(|unit| unit.clone()) else {
+            return false;
+        };
+        if snapshot.health <= 0.0 {
+            return false;
+        }
+        let dealt = apply_incoming_unit_damage_in_world(world, &snapshot, damage, 1.0);
+        let died = {
+            let Some(mut unit) = world.enemies.get_mut(&unit_id) else {
+                return false;
+            };
+            if status_effect >= 0 && status_duration > 0.0 {
+                crate::network::units::StatusContainer::apply_status(
+                    &mut *unit,
+                    status_effect,
+                    status_duration,
+                );
+            }
+            unit.health = (unit.health - dealt).max(0.0);
+            unit.health <= 0.0
+        };
+        if died {
+            kill_enemy(world, out, unit_id);
+        }
+        world.persistence_dirty.store(true, Ordering::Relaxed);
+        return true;
+    }
     let Some(mut player) = world.players.get_mut(&player_id) else {
         return false;
     };
@@ -99,30 +337,101 @@ pub(crate) fn apply_enemy_pierce_player_damage(
     cap: u8,
     status_effect: i16,
     status_duration: f32,
-) -> bool {
-    let mut targets: Vec<_> = world
+) -> f32 {
+    // Returns the total health removed from hit players, capped per target by
+    // its pre-hit health (official SapBulletType heals the owner by
+    // `min(target.health, damage)` per collided target).
+    let mut targets: Vec<(f32, EnemyPierceTarget)> = world
         .players
         .iter()
-        .filter(|player| !player.dead)
+        .filter(|player| !player.dead && possessed_unit_id(world, *player.key()).is_none())
         .filter_map(|player| {
             let (distance, progress) =
                 point_segment_distance(player.x, player.y, source_x, source_y, target_x, target_y);
-            (distance <= 8.0).then_some((progress, *player.key()))
+            (distance <= 8.0).then_some((progress, EnemyPierceTarget::Player(*player.key())))
         })
         .collect();
+    targets.extend(world.enemies.iter().filter_map(|unit| {
+        if unit.team != 1 || unit.health <= 0.0 {
+            return None;
+        }
+        let (distance, progress) =
+            point_segment_distance(unit.x, unit.y, source_x, source_y, target_x, target_y);
+        (distance <= 8.0).then_some((progress, EnemyPierceTarget::Unit(unit.id)))
+    }));
     targets.sort_unstable_by(|left, right| left.0.total_cmp(&right.0));
     targets
         .into_iter()
         .take(usize::from(cap))
-        .fold(false, |changed, (_, id)| {
-            damage_player(world, out, id, damage, status_effect, status_duration) || changed
+        .fold(0.0_f32, |dealt, (_, target)| match target {
+            EnemyPierceTarget::Player(id) => {
+                let health_before = world.players.get(&id).map(|p| p.health).unwrap_or(0.0);
+                damage_player(world, out, id, damage, status_effect, status_duration);
+                dealt + health_before.min(damage)
+            }
+            EnemyPierceTarget::Unit(id) => {
+                dealt
+                    + damage_allied_unit_combat(
+                        world,
+                        out,
+                        id,
+                        damage,
+                        status_effect,
+                        status_duration,
+                    )
+            }
+            EnemyPierceTarget::Building(_) => dealt,
         })
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum EnemyPierceTarget {
     Player(i32),
+    Unit(i32),
     Building(i32),
+}
+
+/// Damage a live allied `EnemyUnit` (including a possessed body). Returns the
+/// health removed, capped by pre-hit health, matching sap/beam accounting.
+fn damage_allied_unit_combat(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    unit_id: i32,
+    damage: f32,
+    status_effect: i16,
+    status_duration: f32,
+) -> f32 {
+    let Some(snapshot) = world.enemies.get(&unit_id).map(|unit| unit.clone()) else {
+        return 0.0;
+    };
+    if snapshot.health <= 0.0 {
+        return 0.0;
+    }
+    let health_before = snapshot.health;
+    let dealt = apply_incoming_unit_damage_in_world(world, &snapshot, damage, 1.0);
+    let died = {
+        let Some(mut unit) = world.enemies.get_mut(&unit_id) else {
+            return 0.0;
+        };
+        let absorbed = unit.shield.min(dealt);
+        unit.shield -= absorbed;
+        unit.health = (unit.health - (dealt - absorbed)).max(0.0);
+        if status_effect >= 0
+            && status_duration > 0.0
+            && !unit_immune_to_status(unit.unit_type, status_effect)
+        {
+            crate::network::units::StatusContainer::apply_status(
+                &mut *unit,
+                status_effect,
+                status_duration,
+            );
+        }
+        unit.health <= 0.0
+    };
+    if died {
+        kill_enemy(world, out, unit_id);
+    }
+    health_before.min(dealt)
 }
 
 pub(crate) fn point_hits_segment(
@@ -245,7 +554,7 @@ pub(crate) fn apply_allied_pierce_damage_for_team(
             AlliedPierceTarget::Unit(id) => {
                 let mut dead = false;
                 if let Some(mut unit) = world.enemies.get_mut(&id) {
-                    let dealt = apply_incoming_unit_damage(&unit, damage, 1.0);
+                    let dealt = apply_incoming_unit_damage_in_world(world, &unit, damage, 1.0);
                     let absorbed = unit.shield.min(dealt);
                     unit.shield -= absorbed;
                     unit.health = (unit.health - (dealt - absorbed)).max(0.0);
@@ -290,6 +599,7 @@ pub(crate) fn apply_allied_pierce_damage_for_team(
 #[derive(Clone, Copy)]
 pub(crate) enum EnemyRailTarget {
     Player(i32),
+    Unit(i32),
     Building(i32),
     Core,
 }
@@ -309,13 +619,21 @@ pub(crate) fn apply_enemy_rail_damage(
     let mut targets: Vec<(f32, EnemyRailTarget)> = world
         .players
         .iter()
-        .filter(|player| !player.dead)
+        .filter(|player| !player.dead && possessed_unit_id(world, *player.key()).is_none())
         .filter_map(|player| {
             let (distance, progress) =
                 point_segment_distance(player.x, player.y, source_x, source_y, target_x, target_y);
             (distance <= 8.0).then_some((progress, EnemyRailTarget::Player(*player.key())))
         })
         .collect();
+    targets.extend(world.enemies.iter().filter_map(|unit| {
+        if unit.team != 1 || unit.health <= 0.0 {
+            return None;
+        }
+        let (distance, progress) =
+            point_segment_distance(unit.x, unit.y, source_x, source_y, target_x, target_y);
+        (distance <= 8.0).then_some((progress, EnemyRailTarget::Unit(unit.id)))
+    }));
     let mut seen = HashSet::new();
     targets.extend(
         world
@@ -358,6 +676,9 @@ pub(crate) fn apply_enemy_rail_damage(
     for (_, target) in targets {
         changed |= match target {
             EnemyRailTarget::Player(id) => damage_player(world, out, id, damage, -1, 0.0),
+            EnemyRailTarget::Unit(id) => {
+                damage_allied_unit_combat(world, out, id, damage, -1, 0.0) > 0.0
+            }
             EnemyRailTarget::Building(position) => {
                 apply_enemy_direct_damage(world, out, Some(position), false, damage)
             }
@@ -384,13 +705,21 @@ pub(crate) fn apply_enemy_shared_pierce_damage(
     let mut targets: Vec<(f32, EnemyPierceTarget)> = world
         .players
         .iter()
-        .filter(|player| !player.dead)
+        .filter(|player| !player.dead && possessed_unit_id(world, *player.key()).is_none())
         .filter_map(|player| {
             let (distance, progress) =
                 point_segment_distance(player.x, player.y, source_x, source_y, target_x, target_y);
             (distance <= 8.0).then_some((progress, EnemyPierceTarget::Player(*player.key())))
         })
         .collect();
+    targets.extend(world.enemies.iter().filter_map(|unit| {
+        if unit.team != 1 || unit.health <= 0.0 {
+            return None;
+        }
+        let (distance, progress) =
+            point_segment_distance(unit.x, unit.y, source_x, source_y, target_x, target_y);
+        (distance <= 8.0).then_some((progress, EnemyPierceTarget::Unit(unit.id)))
+    }));
     let mut seen = HashSet::new();
     targets.extend(
         world
@@ -423,6 +752,16 @@ pub(crate) fn apply_enemy_shared_pierce_damage(
             let hit = match target {
                 EnemyPierceTarget::Player(id) => {
                     damage_player(world, out, id, damage, status_effect, status_duration)
+                }
+                EnemyPierceTarget::Unit(id) => {
+                    damage_allied_unit_combat(
+                        world,
+                        out,
+                        id,
+                        damage,
+                        status_effect,
+                        status_duration,
+                    ) > 0.0
                 }
                 EnemyPierceTarget::Building(position) => {
                     apply_enemy_direct_damage(world, out, Some(position), false, damage)
@@ -535,6 +874,11 @@ pub(crate) fn spawn_reign_fragments(
                 pierce_buildings: 3,
                 spawn_reign_frags: false,
                 homing_range: 0.0,
+                homing_power: 0.0,
+                homing_delay: -1.0,
+                collides_air: true,
+                collides_ground: true,
+                heals: false,
                 enemy_target_position: None,
                 enemy_target_core: false,
                 apply_direct_on_impact: false,
@@ -549,6 +893,7 @@ pub(crate) fn spawn_reign_fragments(
                 source_position: None,
                 damage_interval: None,
                 damage_timer: 0.0,
+                collided: Vec::new(),
             },
         );
         if let Ok(payload) = encode_create_bullet_payload(
@@ -608,6 +953,11 @@ pub(crate) fn spawn_cyerce_fragments(
                 pierce_buildings: 0,
                 spawn_reign_frags: false,
                 homing_range: 50.0,
+                homing_power: 0.2,
+                homing_delay: -1.0,
+                collides_air: true,
+                collides_ground: true,
+                heals: false,
                 enemy_target_position: None,
                 enemy_target_core: false,
                 apply_direct_on_impact: true,
@@ -622,6 +972,7 @@ pub(crate) fn spawn_cyerce_fragments(
                 source_position: None,
                 damage_interval: None,
                 damage_timer: 0.0,
+                collided: Vec::new(),
             },
         );
         if let Ok(payload) =
@@ -681,6 +1032,11 @@ pub(crate) fn spawn_toxopid_fragments(
                 pierce_buildings: 0,
                 spawn_reign_frags: false,
                 homing_range: 0.0,
+                homing_power: 0.0,
+                homing_delay: -1.0,
+                collides_air: true,
+                collides_ground: true,
+                heals: false,
                 enemy_target_position: None,
                 enemy_target_core: false,
                 apply_direct_on_impact: true,
@@ -695,6 +1051,7 @@ pub(crate) fn spawn_toxopid_fragments(
                 source_position: None,
                 damage_interval: None,
                 damage_timer: 0.0,
+                collided: Vec::new(),
             },
         );
         if let Ok(payload) = encode_create_bullet_payload(
@@ -775,70 +1132,126 @@ pub(crate) fn damage_team_core(
     team: u8,
     damage: f32,
 ) -> bool {
+    let team = if team != 1 && team_core_snapshot(world, team).is_empty() {
+        1
+    } else {
+        team
+    };
+    let position = team_core_snapshot(world, team)
+        .first()
+        .map(|core| core.position)
+        .unwrap_or(world.core_position);
+    damage_core_at(world, out, team, position, damage)
+}
+
+pub(crate) fn damage_core_at(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    team: u8,
+    target_position: i32,
+    damage: f32,
+) -> bool {
     if damage <= 0.0 {
         return false;
     }
-    let target = crate::network::world::team_core_snapshot(world, team)
+    let cores = team_core_snapshot(world, team);
+    let primary = cores
         .first()
-        .copied();
-    let target_position = target
         .map(|core| core.position)
         .unwrap_or(world.core_position);
-    let destroyed = if team == 1 {
-        let mut health = world.game_state.core_health.write();
-        let previous = *health;
-        *health = (*health - damage).max(0.0);
-        if let Some(mut cores) = world.team_core_lists.get_mut(&1) {
-            if let Some(core) = cores
-                .iter_mut()
-                .find(|core| core.position == target_position)
-            {
-                core.health = *health;
-            }
-        }
-        if let Some(mut legacy) = world.cores.get_mut(&1) {
-            legacy.health = *health;
-        } else {
-            crate::network::world::register_team_core(
-                world,
-                1,
-                TeamCore {
-                    position: target_position,
-                    block: 339,
-                    health: *health,
-                    max_health: world.core_max_health,
-                },
-            );
-        }
-        previous > 0.0 && *health <= 0.0
+    let target = cores
+        .iter()
+        .find(|core| core.position == target_position)
+        .copied();
+    if target.is_none()
+        && !(team == 1 && target_position == world.core_position && cores.is_empty())
+    {
+        return false;
+    }
+    let previous = if team == 1 && target_position == primary {
+        *world.game_state.core_health.read()
     } else {
-        let position = target_position;
-        let previous = target
-            .map(|core| core.health)
-            .unwrap_or_else(|| *world.game_state.core_health.read());
-        if let Some(mut cores) = world.team_core_lists.get_mut(&team) {
-            if let Some(core) = cores.iter_mut().find(|core| core.position == position) {
-                core.health = (core.health - damage).max(0.0);
-            }
-        } else if let Some(mut core) = world.cores.get_mut(&team) {
-            core.health = (core.health - damage).max(0.0);
-        } else {
-            crate::network::world::register_team_core(
-                world,
-                team,
-                TeamCore {
-                    position,
-                    block: 339,
-                    health: (previous - damage).max(0.0),
-                    max_health: world.core_max_health,
-                },
-            );
-        }
-        previous > 0.0
-            && crate::network::world::team_core_snapshot(world, team)
-                .first()
-                .is_some_and(|core| core.health <= 0.0)
+        target.map(|core| core.health).unwrap_or(0.0)
     };
+    if previous <= 0.0 {
+        return false;
+    }
+    let block = target.map(|core| core.block).unwrap_or(339);
+    let health_multiplier = {
+        let rules = world.wave_rules.read();
+        rules.block_health_multiplier * rules.team_rule(team).block_health_multiplier
+    };
+    let effective = if health_multiplier.abs() <= 0.0001 {
+        previous + 1.0
+    } else {
+        apply_unit_armor(
+            damage / health_multiplier,
+            crate::game::content::block_armor(block),
+        )
+    };
+    let health = (previous - effective).max(0.0);
+    if let Some(mut list) = world.team_core_lists.get_mut(&team) {
+        if let Some(core) = list
+            .iter_mut()
+            .find(|core| core.position == target_position)
+        {
+            core.health = health;
+        }
+    }
+    let legacy_exists = {
+        if let Some(mut core) = world.cores.get_mut(&team) {
+            if core.position == target_position {
+                core.health = health;
+            }
+            true
+        } else {
+            false
+        }
+    };
+    if !legacy_exists {
+        register_team_core(
+            world,
+            team,
+            TeamCore {
+                position: target_position,
+                block,
+                health,
+                max_health: world.core_max_health,
+            },
+        );
+    }
+    if team == 1 && target_position == primary {
+        *world.game_state.core_health.write() = health;
+    }
+    if let Some(mut tile) = world.tiles.get_mut(&target_position) {
+        tile.health = health;
+    }
+    if let Some(mut tile) = world.base_buildings.get_mut(&target_position) {
+        tile.health = health;
+    }
+    let destroyed = health <= 0.0;
+    if destroyed {
+        let tile = world.tiles.get(&target_position).map(|tile| tile.clone());
+        if let Some(tile) = tile {
+            crate::network::buildings::placement::teardown_building_in_place(
+                world,
+                target_position,
+            );
+            world
+                .tiles
+                .insert(target_position, dynamic_building_tombstone(&tile));
+        }
+        world.base_buildings.remove(&target_position);
+    }
+    let frame = if destroyed {
+        encode_build_destroyed_frame(target_position)
+    } else {
+        encode_build_health_update_frame(&[(target_position, health)])
+    };
+    if let Ok(frame) = frame {
+        out.broadcast(frame);
+    }
+    world.persistence_dirty.store(true, Ordering::Relaxed);
     // A destroyed core is removed from the ordered topology. Remaining cores
     // keep the team active and retain the shared team inventory.
     if destroyed {
@@ -852,6 +1265,7 @@ pub(crate) fn damage_team_core(
                         .unwrap_or(0.0);
             }
         }
+        apply_core_destroy_clear(world, team, target_position);
     }
     if !destroyed {
         return false;
@@ -933,6 +1347,55 @@ pub(crate) fn heal_team_core(world: &DynamicWorld, team: u8, amount: f32) -> boo
 /// surviving team; when no player team survives (shared-core fallback) the
 /// wave team (2) is reported so every client shows the defeat dialog.
 /// Returns `None` while two or more player teams remain alive.
+fn core_world_xy(position: i32) -> (f32, f32) {
+    let tx = (position >> 16) as i16 as f32;
+    let ty = position as i16 as f32;
+    (tx * 8.0, ty * 8.0)
+}
+
+/// Official `Teams.timeDestroy` (Teams.java:362): when an AI core dies with
+/// `Rules.coreDestroyClear`, same-team buildings inside `enemyCoreBuildRadius`
+/// become derelict unless another remaining core still covers them.
+pub(crate) fn apply_core_destroy_clear(world: &DynamicWorld, team: u8, core_position: i32) {
+    let (range, ai) = {
+        let rules = world.wave_rules.read();
+        (rules.enemy_core_build_radius, rules.is_ai_team(team))
+    };
+    if !world.wave_rules.read().core_destroy_clear || !ai || range <= 0.0 {
+        return;
+    }
+    let remaining = crate::network::world::team_core_snapshot(world, team);
+    let (cx, cy) = core_world_xy(core_position);
+    let keys: Vec<i32> = world
+        .tiles
+        .iter()
+        .filter(|tile| {
+            tile.team == team && !crate::network::buildings::snapshot::is_core_block(tile.block)
+        })
+        .map(|tile| *tile.key())
+        .collect();
+    for key in keys {
+        let Some(tile) = world.tiles.get(&key) else {
+            continue;
+        };
+        let (x, y) = core_world_xy(tile.position);
+        if (x - cx).hypot(y - cy) > range {
+            continue;
+        }
+        let covered = remaining.iter().any(|core| {
+            let (ox, oy) = core_world_xy(core.position);
+            (ox - x).hypot(oy - y) <= range
+        });
+        drop(tile);
+        if covered {
+            continue;
+        }
+        if let Some(mut live) = world.tiles.get_mut(&key) {
+            live.team = 0;
+        }
+    }
+}
+
 pub(crate) fn pvp_elimination_winner(world: &DynamicWorld) -> Option<u8> {
     let mut teams: HashSet<u8> = world
         .players
@@ -1013,6 +1476,7 @@ pub(crate) fn apply_allied_splash_damage(
         unit_damage_scale,
         status_effect,
         status_duration,
+        1.0,
     )
 }
 
@@ -1028,19 +1492,63 @@ pub(crate) fn apply_allied_splash_damage_for_team(
     unit_damage_scale: f32,
     status_effect: i16,
     status_duration: f32,
+    building_damage_multiplier: f32,
+) -> bool {
+    apply_splash_damage_filtered(
+        world,
+        out,
+        team,
+        x,
+        y,
+        damage,
+        radius,
+        unit_damage_scale,
+        status_effect,
+        status_duration,
+        building_damage_multiplier,
+        true,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_splash_damage_filtered(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    team: u8,
+    x: f32,
+    y: f32,
+    damage: f32,
+    radius: f32,
+    unit_damage_scale: f32,
+    status_effect: i16,
+    status_duration: f32,
+    building_damage_multiplier: f32,
+    air: bool,
+    ground: bool,
 ) -> bool {
     let ids: Vec<_> = world
         .enemies
         .iter()
-        .filter(|unit| unit.team != team && (unit.x - x).hypot(unit.y - y) <= radius)
+        .filter(|unit| {
+            let flying = unit.elevation >= 0.09
+                || crate::game::content::unit_movement(unit.unit_type).flying;
+            unit.team != team
+                && (unit.x - x).hypot(unit.y - y) <= radius
+                && if flying { air } else { ground }
+        })
         .map(|unit| unit.id)
         .collect();
+    if crate::network::simulation::remaining::force_projector_absorbs_explosion(world, x, y, damage)
+    {
+        return true;
+    }
     let mut dead = Vec::new();
     let mut changed = false;
     for id in ids {
         if let Some(mut unit) = world.enemies.get_mut(&id) {
             let scaled = damage * unit_damage_scale;
-            let dealt = apply_incoming_unit_damage(&unit, scaled, 1.0);
+            let dealt = apply_incoming_unit_damage_in_world(world, &unit, scaled, 1.0);
             let absorbed = unit.shield.min(dealt);
             unit.shield -= absorbed;
             unit.health = (unit.health - (dealt - absorbed)).max(0.0);
@@ -1064,7 +1572,62 @@ pub(crate) fn apply_allied_splash_damage_for_team(
     for id in dead {
         kill_enemy(world, out, id);
     }
+    if air {
+        let players: Vec<_> = world
+            .players
+            .iter()
+            .filter(|p| !p.dead && p.team != team && (p.x - x).hypot(p.y - y) <= radius)
+            .map(|p| p.unit_id)
+            .collect();
+        for id in players {
+            if possessed_unit_id(world, id).is_none() {
+                changed |= damage_player(
+                    world,
+                    out,
+                    id,
+                    damage * unit_damage_scale,
+                    status_effect,
+                    status_duration,
+                );
+            }
+        }
+    }
+    if !ground {
+        return changed;
+    }
     let mut seen = HashSet::new();
+    let mut core_teams = registered_core_teams(world);
+    if !core_teams.contains(&1) {
+        core_teams.push(1);
+    }
+    for core_team in core_teams {
+        if core_team == team {
+            continue;
+        }
+        let mut cores = team_core_snapshot(world, core_team);
+        if cores.is_empty() && core_team == 1 && *world.game_state.core_health.read() > 0.0 {
+            cores.push(TeamCore {
+                position: world.core_position,
+                block: 339,
+                health: *world.game_state.core_health.read(),
+                max_health: world.core_max_health,
+            });
+        }
+        for core in cores {
+            seen.insert(core.position);
+            let (cx, cy) = core_world_xy(core.position);
+            if (cx - x).hypot(cy - y) <= radius {
+                damage_core_at(
+                    world,
+                    out,
+                    core_team,
+                    core.position,
+                    damage * building_damage_multiplier,
+                );
+                changed = true;
+            }
+        }
+    }
     let mut positions: Vec<_> = world
         .tiles
         .iter()
@@ -1084,7 +1647,9 @@ pub(crate) fn apply_allied_splash_damage_for_team(
         ((building_x - x).hypot(building_y - y) <= radius).then_some(building.position)
     }));
     for position in positions {
-        if let Some((destroyed, health)) = damage_building(world, position, damage) {
+        if let Some((destroyed, health)) =
+            damage_building(world, position, damage * building_damage_multiplier)
+        {
             if destroyed {
                 if let Ok(frame) = encode_build_destroyed_frame(position) {
                     out.broadcast(frame);
@@ -1174,6 +1739,7 @@ pub(crate) fn apply_enemy_splash_damage(
     unit_damage_scale: f32,
     status_effect: i16,
     status_duration: f32,
+    building_damage_multiplier: f32,
 ) -> bool {
     let mut targets: HashSet<i32> = world
         .tiles
@@ -1190,10 +1756,13 @@ pub(crate) fn apply_enemy_splash_damage(
         let target_y = building.position as i16 as f32 * 8.0;
         ((target_x - x).hypot(target_y - y) <= radius).then_some(building.position)
     }));
+    // Official BulletType.buildingDamageMultiplier: buildings (and the
+    // core) take damage * multiplier; units and players take full splash.
+    let building_damage = damage * building_damage_multiplier;
     let mut destroyed = Vec::new();
     let mut health_updates = Vec::new();
     for position in targets {
-        if let Some((is_destroyed, health)) = damage_building(world, position, damage) {
+        if let Some((is_destroyed, health)) = damage_building(world, position, building_damage) {
             if is_destroyed {
                 destroyed.push(position);
             } else {
@@ -1216,13 +1785,17 @@ pub(crate) fn apply_enemy_splash_damage(
     if core_hit {
         // The wave enemy's splash reaches the sharded core (team 1);
         // per-team damage + game over live in damage_team_core.
-        damage_team_core(world, out, 1, damage);
+        damage_team_core(world, out, 1, building_damage);
     }
     let mut player_hit = false;
     let player_ids: Vec<_> = world
         .players
         .iter()
-        .filter(|player| !player.dead && (player.x - x).hypot(player.y - y) <= radius)
+        .filter(|player| {
+            !player.dead
+                && possessed_unit_id(world, *player.key()).is_none()
+                && (player.x - x).hypot(player.y - y) <= radius
+        })
         .map(|player| *player.key())
         .collect();
     for player_id in player_ids {
@@ -1235,7 +1808,26 @@ pub(crate) fn apply_enemy_splash_damage(
             status_duration,
         );
     }
-    core_hit || player_hit || !destroyed.is_empty() || !health_updates.is_empty()
+    let unit_ids: Vec<_> = world
+        .enemies
+        .iter()
+        .filter(|unit| {
+            unit.team == 1 && unit.health > 0.0 && (unit.x - x).hypot(unit.y - y) <= radius
+        })
+        .map(|unit| unit.id)
+        .collect();
+    let mut unit_hit = false;
+    for unit_id in unit_ids {
+        unit_hit |= damage_allied_unit_combat(
+            world,
+            out,
+            unit_id,
+            damage * unit_damage_scale,
+            status_effect,
+            status_duration,
+        ) > 0.0;
+    }
+    core_hit || player_hit || unit_hit || !destroyed.is_empty() || !health_updates.is_empty()
 }
 
 // Navanax EmpBulletType (158.1): radius = 100, healPercent = 20,
@@ -1439,46 +2031,85 @@ pub(crate) fn simulate_player_combat(
 }
 
 /// Unit status immunities (UnitTypes.java `immunities`), verified against
-/// the desktop.jar 158.1 bytecode. Guarded at every EnemyUnit status
-/// application site so immune units never carry the status or take its
-/// damage-over-time.
+/// the 159.7 Java source. Guarded at every EnemyUnit status application
+/// site so immune units never carry the status or take its damage-over-time.
 pub(crate) fn unit_immune_to_status(unit_type: i16, status_effect: i16) -> bool {
-    // JAR 158.1 immunities (unit id = anonymous class index - 1):
-    // - mace (1) burning: UnitTypes$2 offsets 30-39 (`immunities.add(burning)`);
-    // - vela (8) burning: UnitTypes$9 offsets 108-122
-    //   (`immunities = ObjectSet.with(burning)`);
-    // - atrax (11) burning+melting: UnitTypes$12 offsets 47-60;
+    // Immunities (unit id = anonymous class index - 1):
+    // - mace (1) burning: UnitTypes.java `immunities.add(burning)`;
+    // - vela (8) burning: `immunities = ObjectSet.with(burning)`;
+    // - atrax (11) burning+melting;
+    // - navanax (34) burning: `immunities.add(StatusEffects.burning)`
+    //   (UnitTypes.java navanax block);
     // - precept (40) / vanquish (41) / conquer (42) burning+melting:
-    //   UnitTypes$41/42/43 offsets 33-77 / 30-72
-    //   (`immunities.addAll(burning, melting)`).
-    // NOT immune (round-73 A5 corrections): navanax (34) — UnitTypes$35 has
-    // no immunities field writes; naval 25-29 — UnitTypes$26..$30 have no
-    // immunities (naval units only get wet; burning/melting resistance comes
-    // from the liquid conversion, they CAN burn).
+    //   TankUnitType blocks (`immunities.addAll(burning, melting)`);
+    // - renale (56) / latum (57) burning+melting: every NeoplasmUnitType
+    //   adds both in its constructor (NeoplasmUnitType.java).
+    // NOT immune: naval 25-29 — no immunities writes (naval units only get
+    // wet; burning/melting resistance comes from the liquid conversion,
+    // they CAN burn).
     match (unit_type, status_effect) {
         (1, 1) => true,           // mace: burning
         (8, 1) => true,           // vela: burning
         (11, 1 | 8) => true,      // atrax: burning + melting
+        (34, 1) => true,          // navanax: burning
         (40..=42, 1 | 8) => true, // precept/vanquish/conquer: burning + melting
+        (56 | 57, 1 | 8) => true, // renale/latum (Neoplasm): burning + melting
         _ => false,
     }
 }
 
 pub(crate) fn enemy_armor(unit_type: i16) -> f32 {
     match unit_type {
-        1 => 4.0,  // Mace
-        2 => 9.0,  // Fortress
-        3 => 10.0, // Scepter
-        4 => 18.0, // Reign
-        5 => 1.0,  // Nova
-        6 => 4.0,  // Pulsar
-        7 => 9.0,  // Quasar
-        8 => 9.0,  // Vela
-        11 => 3.0, // Atrax
-        12 => 5.0, // Spiroct
-        16 => 3.0, // Horizon
-        17 => 5.0, // Zenith
-        18 => 9.0, // Antumbra
+        1 => 4.0,   // mace
+        2 => 9.0,   // fortress
+        3 => 20.0,  // scepter
+        4 => 30.0,  // reign
+        5 => 1.0,   // nova
+        6 => 4.0,   // pulsar
+        7 => 9.0,   // quasar
+        8 => 16.0,  // vela
+        9 => 14.0,  // corvus
+        11 => 3.0,  // atrax
+        12 => 9.0,  // spiroct
+        13 => 14.0, // arkyid
+        14 => 22.0, // toxopid
+        16 => 3.0,  // horizon
+        17 => 5.0,  // zenith
+        18 => 17.0, // antumbra
+        19 => 22.0, // eclipse
+        22 => 3.0,  // mega
+        23 => 10.0, // quad
+        24 => 20.0, // oct
+        25 => 2.0,  // risso
+        26 => 4.0,  // minke
+        27 => 7.0,  // bryde
+        28 => 12.0, // sei
+        29 => 16.0, // omura
+        30 => 3.0,  // retusa
+        31 => 4.0,  // oxynoe
+        32 => 6.0,  // cyerce
+        33 => 12.0, // aegires
+        34 => 20.0, // navanax
+        38 => 6.0,  // stell
+        39 => 8.0,  // locus
+        40 => 11.0, // precept
+        41 => 20.0, // vanquish
+        42 => 26.0, // conquer
+        43 => 4.0,  // merui
+        44 => 5.0,  // cleroi
+        45 => 7.0,  // anthicus
+        47 => 5.0,  // tecta
+        48 => 9.0,  // collaris
+        49 => 1.0,  // elude
+        50 => 3.0,  // avert
+        51 => 6.0,  // obviate
+        52 => 4.0,  // quell
+        54 => 9.0,  // disrupt
+        56 => 2.0,  // renale
+        57 => 12.0, // latum
+        58 => 1.0,  // evoke
+        59 => 2.0,  // incite
+        60 => 3.0,  // emanate
         _ => 0.0,
     }
 }
@@ -1494,16 +2125,142 @@ pub(crate) fn unit_effective_armor(unit: &EnemyUnit) -> f32 {
         .unwrap_or_else(|| enemy_armor(unit.unit_type))
 }
 
-/// Official `ShieldComp.damage`: armor, then divide by `healthMultiplier`.
+/// Official `ShieldComp.damage`: armor, then divide by status healthMultiplier
+/// and `Rules.unitHealth(team)` (ASTRA R03). Raw HP stays `type.health`.
 pub(crate) fn apply_incoming_unit_damage(unit: &EnemyUnit, damage: f32, armor_mult: f32) -> f32 {
+    apply_incoming_unit_damage_scaled(unit, damage, armor_mult, 1.0)
+}
+
+pub(crate) fn unit_health_rule(world: &DynamicWorld, team: u8) -> f32 {
+    let rules = world.wave_rules.read();
+    rules.unit_health_multiplier * rules.team_rule(team).unit_health_multiplier
+}
+
+pub(crate) fn apply_incoming_unit_damage_in_world(
+    world: &DynamicWorld,
+    unit: &EnemyUnit,
+    damage: f32,
+    armor_mult: f32,
+) -> f32 {
+    apply_incoming_unit_damage_scaled(unit, damage, armor_mult, unit_health_rule(world, unit.team))
+}
+
+fn apply_incoming_unit_damage_scaled(
+    unit: &EnemyUnit,
+    damage: f32,
+    armor_mult: f32,
+    health_rule: f32,
+) -> f32 {
     let armored = apply_unit_armor(damage, unit_effective_armor(unit) * armor_mult);
-    let health = crate::network::units::StatusContainer::status_aggregate(unit).health;
+    let status_health = crate::network::units::StatusContainer::status_aggregate(unit).health;
+    let health = status_health * health_rule;
     if !health.is_finite() {
         0.0
     } else if health.abs() < 1e-12 {
         armored
     } else {
         armored / health
+    }
+}
+
+/// Official scathe-family shootOnDeath death explosions (Blocks.java v160.5):
+/// every scathe MissileUnitType carries one weapon with `shootOnDeath = true`
+/// firing an ExplosionBulletType at the death point. The launcher bullets
+/// 186/189/192 deal NO damage themselves, so this table IS the scathe damage
+/// model. Returns (splash damage, splash radius, buildingDamageMultiplier,
+/// lightning roots, lightningLength, lightningDamage).
+pub(crate) fn scathe_death_explosion(unit_type: i16) -> Option<(f32, f32, f32, u8, u8, f32)> {
+    match unit_type {
+        // scathe-missile -> ExplosionBulletType(1000f, 65f).
+        65 => Some((1_000.0, 65.0, 0.1, 0, 0, 0.0)),
+        // scathe-missile-phase -> ExplosionBulletType(320f, 120f).
+        66 => Some((320.0, 120.0, 0.1, 0, 0, 0.0)),
+        // scathe-missile-surge -> ExplosionBulletType(1800f, 40f), lightning
+        // = 10, lightningDamage = 45, lightningLength = 12.
+        67 => Some((1_800.0, 40.0, 0.1, 10, 12, 45.0)),
+        // scathe-missile-surge-split -> ExplosionBulletType(180f, 35f),
+        // lightning = 4, lightningDamage = 25, lightningLength = 6.
+        68 => Some((180.0, 35.0, 0.1, 4, 6, 25.0)),
+        _ => None,
+    }
+}
+
+/// Artillery frags of scathe death explosions 187/190 (Blocks.java 159.7):
+/// 7 shells, fragSpread 30°, collides = false, splash-only.
+#[allow(clippy::too_many_arguments)]
+fn spawn_scathe_artillery_frags(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    dying_id: i32,
+    unit_type: i16,
+    team: u8,
+    x: f32,
+    y: f32,
+    rotation: f32,
+) {
+    let (bullet_id, splash, radius) = match unit_type {
+        65 => (188_i16, 100.0, 40.0),
+        66 => (191_i16, 120.0, 56.0),
+        _ => return,
+    };
+    const SPEED: f32 = 3.4;
+    const LIFETIME: f32 = 20.0;
+    let distance = SPEED * LIFETIME;
+    for index in 0..7u32 {
+        let angle = rotation + (index as f32 - 3.0) * 30.0;
+        let mut rng = DetRand::new((dying_id as u64) << 8 | u64::from(index.wrapping_add(1)));
+        let offset = 1.0 + rng.unit_f32() * 6.0;
+        let radians = angle.to_radians();
+        let spawn_x = x + radians.cos() * offset;
+        let spawn_y = y + radians.sin() * offset;
+        let target_x = spawn_x + radians.cos() * distance;
+        let target_y = spawn_y + radians.sin() * distance;
+        let id = world.next_projectile_id.fetch_add(1, Ordering::Relaxed);
+        world.projectiles.insert(
+            id,
+            Projectile {
+                target_id: dying_id,
+                shooter_id: dying_id,
+                team,
+                bullet_id,
+                damage: 0.0,
+                splash_damage: splash,
+                splash_radius: radius,
+                status_effect: -1,
+                status_duration: 0.0,
+                pierce_units: 0,
+                pierce_buildings: 0,
+                spawn_reign_frags: false,
+                homing_range: 0.0,
+                homing_power: 0.0,
+                homing_delay: -1.0,
+                collides_air: false,
+                collides_ground: false,
+                heals: false,
+                enemy_target_position: None,
+                enemy_target_core: false,
+                apply_direct_on_impact: false,
+                armor_multiplier: 1.0,
+                remaining_ticks: LIFETIME,
+                total_ticks: LIFETIME,
+                source_x: spawn_x,
+                source_y: spawn_y,
+                target_x,
+                target_y,
+                lifetime_scale: 1.0,
+                source_position: None,
+                damage_interval: None,
+                damage_timer: 0.0,
+                collided: Vec::new(),
+            },
+        );
+        if let Ok(payload) =
+            encode_create_bullet_payload(bullet_id, team, spawn_x, spawn_y, angle, splash, 1.0, 1.0)
+        {
+            if let Ok(frame) = frame_generated_packet(CREATE_BULLET_PACKET_ID, &payload, false) {
+                out.broadcast(frame);
+            }
+        }
     }
 }
 
@@ -1515,20 +2272,57 @@ pub(crate) fn kill_enemy(
     if !world.enemies.contains_key(&target_id) {
         return;
     }
-    // Snapshot SpawnDeathAbility owners before the unit is removed.
+    let loot = world
+        .enemies
+        .get(&target_id)
+        .map(|unit| (unit.team, unit.x, unit.y, unit.items.clone()));
+    let crash = world.enemies.get(&target_id).and_then(|unit| {
+        let movement = crate::game::content::unit_movement(unit.unit_type);
+        if !movement.flying
+            || unit.entity_class == 39
+            || matches!(unit.unit_type, 35..=37 | 58..=60)
+        {
+            return None;
+        }
+        Some((unit.team, unit.x, unit.y, movement.hit_size))
+    });
     let spawn_death = world
         .enemies
         .get(&target_id)
         .and_then(|unit| (unit.unit_type == 57).then_some((unit.team, unit.x, unit.y)));
+    // Snapshot shootOnDeath death-explosion owners (scathe missile family).
+    let death_explosion = world.enemies.get(&target_id).and_then(|unit| {
+        scathe_death_explosion(unit.unit_type).map(|spec| {
+            (
+                unit.unit_type,
+                unit.team,
+                unit.x,
+                unit.y,
+                unit.rotation,
+                spec,
+            )
+        })
+    });
+    // Scathe-missile-surge (67): its shootOnDeath death-explosion (bullet 193)
+    // carries frag 194 whose spawnUnit inserts one scathe-missile-surge-split
+    // (68). The frag spawns at the dying unit's position with its rotation.
+    let surge_split = world.enemies.get(&target_id).and_then(|unit| {
+        (unit.unit_type == 67).then_some((unit.team, unit.x, unit.y, unit.rotation))
+    });
     world.game_state.game_stats.write().enemy_units_destroyed += 1;
     // Keep the final non-null stack invariant ordered before UnitDeath. This makes the
     // client safe even if its most recent periodic state came from an older or
     // partially decoded snapshot: generated destroy() dereferences item() when
-    // amount is positive.
-    if let Ok(snapshots) = encode_enemy_entity_snapshots(world) {
-        for snapshot in snapshots {
-            if let Ok(frame) = frame_generated_packet(ENTITY_SNAPSHOT_PACKET_ID, &snapshot, true) {
-                out.broadcast(frame);
+    // amount is positive. Fog of war: skip the unfiltered all-unit snapshot
+    // (periodic 50ms path is already per-viewer).
+    if !world.wave_rules.read().fog {
+        if let Ok(snapshots) = encode_enemy_entity_snapshots(world) {
+            for snapshot in snapshots {
+                if let Ok(frame) =
+                    frame_generated_packet(ENTITY_SNAPSHOT_PACKET_ID, &snapshot, true)
+                {
+                    out.broadcast(frame);
+                }
             }
         }
     }
@@ -1564,6 +2358,144 @@ pub(crate) fn kill_enemy(
                 y + 11.0 * rad.sin(),
                 angle,
             );
+        }
+    }
+    // Scathe-missile-surge split: the death-explosion (bullet 193) fans out
+    // five frags (createFrags: fragBullets=5, fragSpread=20, fragRandomSpread=0,
+    // fragOffset range 1..7 from BulletType defaults), each carrying spawnUnit
+    // -> scathe-missile-surge-split (68). Frag i flies at
+    // deathRotation + {-40, -20, 0, +20, +40} degrees and the unit spawns at
+    // death point + trns(angle, len) with its rotation set to that angle.
+    if let Some((team, x, y, rotation)) = surge_split {
+        for index in 0..5u32 {
+            let angle = rotation - 40.0 + 20.0 * index as f32;
+            // Deterministic per (dying unit, frag index): identical inputs
+            // reproduce identical offsets across ticks and restarts.
+            let mut rng = DetRand::new((target_id as u64) << 8 | u64::from(index.wrapping_add(1)));
+            let len = 1.0 + rng.unit_f32() * (7.0 - 1.0);
+            let radians = angle.to_radians();
+            let _ = spawn_unit_world(
+                world,
+                68,
+                team,
+                x + radians.cos() * len,
+                y + radians.sin() * len,
+                angle,
+            );
+        }
+    }
+    // Official Weapon.shootOnDeath (scathe missiles): after the UnitDeath
+    // frame the death explosion fires at the death point -- splash with
+    // buildingDamageMultiplier plus the lightning chain of bullet 193/195.
+    if let Some((unit_type, team, x, y, rotation, spec)) = death_explosion {
+        let (splash, radius, building_multiplier, roots, length, lightning_damage) = spec;
+        // Direction follows the missile's owner: hostile missiles (wave /
+        // enemy-held turrets) hit sharded assets, sharded-owned missiles
+        // (player scathe turrets, team 1) hit the opposing side.
+        if team == 1 {
+            apply_allied_splash_damage_for_team(
+                world,
+                out,
+                1,
+                x,
+                y,
+                splash,
+                radius,
+                1.0,
+                -1,
+                0.0,
+                building_multiplier,
+            );
+        } else {
+            apply_enemy_splash_damage(
+                world,
+                out,
+                x,
+                y,
+                splash,
+                radius,
+                1.0,
+                -1,
+                0.0,
+                building_multiplier,
+            );
+        }
+        if roots > 0 {
+            // Vanilla creates the chains from the weapon shot direction; the
+            // port derives it from the dying unit's rotation. Deterministic:
+            // the seed is a pure function of the dying unit id (mixed so the
+            // lightning streams never share seeds with the frag generator).
+            let seed = (target_id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) as u32 as i32;
+            spawn_impact_lightning(
+                world,
+                out,
+                team,
+                LightningSpec {
+                    roots,
+                    length,
+                    length_rand: 0,
+                    damage: lightning_damage,
+                    target: LightningTarget::All,
+                },
+                seed,
+                x - rotation.to_radians().cos(),
+                y - rotation.to_radians().sin(),
+                x,
+                y,
+            );
+        }
+        spawn_scathe_artillery_frags(world, out, target_id, unit_type, team, x, y, rotation);
+    }
+    if let Some((team, x, y, hit_size)) = crash {
+        let rules = world.wave_rules.read();
+        let crash_mult = rules.unit_crash_damage_multiplier
+            * rules.team_rule(team).unit_crash_damage_multiplier
+            * rules.unit_damage_multiplier
+            * rules.team_rule(team).unit_damage_multiplier;
+        drop(rules);
+        if crash_mult > 0.0 {
+            let damage = hit_size.powf(0.75) * 2.5 * crash_mult;
+            let radius = hit_size.powf(0.94) * 1.25;
+            apply_allied_splash_damage_for_team(
+                world, out, team, x, y, damage, radius, 1.0, -1, 0.0, 1.0,
+            );
+        }
+    }
+    if let Some((team, x, y, items)) = loot {
+        let rules = world.wave_rules.read();
+        let explode = rules.damage_explosions;
+        drop(rules);
+        let mut explosiveness = 0.0;
+        let mut flammability = 0.0;
+        for (item, amount) in items {
+            if amount <= 0 {
+                continue;
+            }
+            explosiveness += crate::network::economy::item_explosiveness(item) * amount as f32;
+            flammability += crate::network::economy::item_flammability(item) * amount as f32;
+        }
+        // ASTRA E07: UnitComp.destroy feeds stack explosiveness into
+        // Damage.dynamicExplosion. It does not spawn recoverable ground items.
+        if explode && explosiveness > 0.0 {
+            let damage = 14.0 + explosiveness * 5.0;
+            let radius = 8.0 + explosiveness * 3.5;
+            apply_allied_splash_damage_for_team(
+                world, out, team, x, y, damage, radius, 1.0, -1, 0.0, 1.0,
+            );
+        }
+        if explode && flammability > 0.0 {
+            let radius = 8.0 + flammability * 2.5;
+            let burned: Vec<i32> = world
+                .enemies
+                .iter()
+                .filter(|enemy| (enemy.x - x).hypot(enemy.y - y) <= radius)
+                .map(|enemy| enemy.id)
+                .collect();
+            for id in burned {
+                if let Some(mut live) = world.enemies.get_mut(&id) {
+                    crate::network::units::StatusContainer::apply_status(&mut *live, 1, 240.0);
+                }
+            }
         }
     }
 }

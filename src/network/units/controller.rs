@@ -10,7 +10,7 @@ use crate::network::wire::transfer::enemy_weapon_mount_count;
 use crate::state::game_state::GameMode;
 
 pub(crate) fn unit_player_controllable(unit_type: i16) -> bool {
-    !matches!(unit_type, 46 | 53 | 55 | 62..=67)
+    !matches!(unit_type, 46 | 53 | 55 | 62..=68)
 }
 
 /// Whether vanilla `UnitType.controller` creates CommandAI for this unit.
@@ -28,14 +28,12 @@ pub(crate) fn unit_uses_command_ai(world: Option<&DynamicWorld>, unit: &EnemyUni
             return true;
         }
         let rules = world.wave_rules.read();
-        if unit.team == rules.default_team {
-            return true;
-        }
-        // Official UnitType.controller: AI teams use wave AI unless rtsAi.
-        if rules.team_is_ai(unit.team, mode, false) {
+        let pvp = mode == GameMode::Pvp;
+        // Official Team.isAI: waves/attack/campaign, not defaultTeam, not PvP.
+        if rules.team_is_ai(unit.team, mode, pvp) {
             return rules.team_rule(unit.team).rts_ai;
         }
-        false
+        true
     })
 }
 

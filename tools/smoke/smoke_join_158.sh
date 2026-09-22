@@ -5,6 +5,9 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 desktop_jar="${MINDUSTRY_DESKTOP_JAR:-/home/ubuntu/Mindustry/desktop.jar}"
 smoke_port="${1:-6578}"
 class_dir="$project_dir/target/protocol-158-classes"
+# Optional server-generation override: SMOKE_BUILD=159 recompiles the
+# client against the same jar announcing Version.build = 159.
+[[ "${SMOKE_BUILD:-}" =~ ^[0-9]+$ ]] && class_dir="$project_dir/target/protocol-smoke-$SMOKE_BUILD-classes"
 
 cd "$project_dir"
 cargo build --release
@@ -30,7 +33,7 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 0.5
-java -cp "$desktop_jar:$class_dir" SmokeJoin158 "$smoke_port"
+java ${SMOKE_BUILD:+-Doxide.smoke.build=$SMOKE_BUILD} -cp "$desktop_jar:$class_dir" SmokeJoin158 "$smoke_port"
 
 if ! grep -q "finished loading the world" "$server_log"; then
     echo "Server did not confirm the joined state. Log: $server_log" >&2
@@ -59,7 +62,7 @@ if ! grep -q '"unit_id": 2500000' "$save_file" \
     exit 1
 fi
 
-java -cp "$desktop_jar:$class_dir" SmokeJoin158 "$smoke_port" join-only
+java ${SMOKE_BUILD:+-Doxide.smoke.build=$SMOKE_BUILD} -cp "$desktop_jar:$class_dir" SmokeJoin158 "$smoke_port" join-only
 joined_count="$(grep -c "finished loading the world" "$server_log")"
 if (( joined_count < 2 )); then
     echo "Server did not complete the persisted reconnection. Log: $server_log" >&2

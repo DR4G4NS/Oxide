@@ -196,7 +196,9 @@ fn compare_logic_move_timing_fixture(fixture: &Value) -> Result<(), String> {
             authority: UnitAuthority::Command,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         }
     }
 

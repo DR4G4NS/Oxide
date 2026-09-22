@@ -1,10 +1,11 @@
 //! Logic executor: variables, instructions, and the per-tick loop.
 
-use super::compiler::{Expr, Program};
+use super::compiler::{Expr, Program, RuntimeGlobal};
 use super::ops::{
     item_name_from_id, liquid_name_from_id, unit_name_from_id, Cond, LAccess, LookupKind, Op,
 };
 use super::view::{SensorValue, WorldView};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// Official LExecutor graphics/text bounds (v158.1).
@@ -160,6 +161,9 @@ pub struct DrawSpec {
 #[derive(Clone, Debug)]
 pub enum Instr {
     Set(usize, Expr),
+    /// select result op comp0 comp1 a b — official SelectI: full var copy of
+    /// `a` when `op.test(comp0, comp1)` holds, otherwise `b`.
+    Select(usize, Cond, Expr, Expr, Expr, Expr),
     Op(usize, Op, Expr, Option<Expr>),
     Read(usize, Expr, Expr),
     Write(Expr, Expr, Expr),
@@ -182,7 +186,18 @@ pub enum Instr {
     PackColor(usize, Expr, Expr, Expr, Expr),
     /// unpackcolor r g b a value — Color.fromDouble (low 32 bits, /255f).
     UnpackColor(usize, usize, usize, usize, Expr),
+    /// message <type> <duration> [outSuccess] — official FlushMessageI on a
+    /// HEADLESS host: outSuccess = 1, clear the text buffer, done. The
+    /// dedicated server never emits announce/toast packets from logic
+    /// (LExecutor.java:1932-1936).
+    FlushMessage(crate::logic::MessageType, Expr, Option<usize>),
     ControlEnabled(Expr, Expr),
+    /// control shoot x y shoot — official ControlI with LAccess.shoot:
+    /// aims the building at (x, y), firing while `shoot` is non-zero.
+    ControlShoot(Expr, Expr, Expr, Expr),
+    /// control shootp unit shoot — official ControlI with LAccess.shootp:
+    /// aims at the unit object, firing while `shoot` is non-zero.
+    ControlShootp(Expr, Expr, Expr),
     SetRate(Expr),
     /// bind the executor to a unit of the given type (compile-time `@type`).
     Ubind(i16),
@@ -217,6 +232,10 @@ pub enum Instr {
     SetFlag(Expr, Expr),
     /// getflag result flag.
     GetFlag(usize, Expr),
+    /// weathersense result weather — official SenseWeatherI (privileged).
+    WeatherSense(usize, Expr),
+    /// weatherset weather state — official SetWeatherI (privileged).
+    WeatherSet(Expr, Expr),
     /// spawn unit x y rotation result (hyper processors only).
     Spawn(SpawnSpec),
     /// status apply/clear — official ApplyEffectI, privileged.
@@ -257,7 +276,7 @@ pub struct ApplyStatusSpec {
     pub duration: Expr,
 }
 
-/// Official `LogicRule` (desktop 158.1).
+/// Official `LogicRule` (desktop 160.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogicRule {
     CurrentWaveTime,
@@ -274,6 +293,7 @@ pub enum LogicRule {
     Lighting,
     CanGameOver,
     AmbientLight,
+    UnitLight,
     SolarMultiplier,
     DragMultiplier,
     Ban,
@@ -309,6 +329,7 @@ impl LogicRule {
             "lighting" => Self::Lighting,
             "canGameOver" => Self::CanGameOver,
             "ambientLight" => Self::AmbientLight,
+            "unitLight" => Self::UnitLight,
             "solarMultiplier" => Self::SolarMultiplier,
             "dragMultiplier" => Self::DragMultiplier,
             "ban" => Self::Ban,
@@ -411,10 +432,34 @@ pub enum UcOp {
     Shoot(Expr, Expr, Expr),
     /// target x y shoot — aim at a point (fires when shoot is non-zero).
     Target(Expr, Expr, Expr),
-    /// build x y block rotation — construct a block (progress-based).
-    Build(Expr, Expr, i16, Expr),
+    /// build x y block rotation [config] — construct a block (progress-based).
+    Build(Expr, Expr, i16, Expr, Expr),
+    /// deconstruct x y — break the building at (x, y).
+    Deconstruct(Expr, Expr),
     /// pathfind x y — ControlPathfinder PathfindResult (v159.7 LogicAI).
     Pathfind(Expr, Expr),
+    /// idle — `ai.control = idle`: the unit holds position (no movement
+    /// acceleration); mining/building state is NOT cleared (only `stop`
+    /// does that in Java).
+    Idle,
+    /// approach x y radius — move toward (x, y) but halt once inside
+    /// `radius` (LogicAI `moveTo(target, moveRad - 7f, 7, ...)`).
+    Approach(Expr, Expr, Expr),
+    /// autoPathfind — hunt the closest enemy core; flying units move
+    /// directly, ground units use the ControlPathfinder.
+    AutoPathfind,
+    /// targetp unit shoot — aim at a unit/building object and fire when
+    /// `shoot` is set (`ai.mainTarget`, `ai.aimControl = targetp`).
+    Targetp(Expr, Expr),
+    /// payDrop — drop the last carried payload under the unit
+    /// (`Call.payloadDropped`), gated by the executor transfer timeout.
+    PayDrop,
+    /// payTake takeUnits — pick up a grounded same-team unit (true) or the
+    /// building under the unit (false) into the payload hold.
+    PayTake(Expr),
+    /// payEnter — enter the payload block/conveyor the unit stands on
+    /// (`build.onControlSelect(unit)`: the unit becomes the block payload).
+    PayEnter,
     /// unbind — reset the unit's controller (`unit.resetController()`); the
     /// executor's `@unit` binding itself is NOT cleared (P0-03).
     Unbind,
@@ -547,8 +592,14 @@ pub struct ExecutorState {
     pub yield_flag: bool,
     /// Resolved link building positions (from the config link list).
     pub links: Vec<i32>,
-    /// Desired instructions/second (setrate), 0 = block default.
+    /// Desired instructions/tick (official `LogicBuild.ipt`, set by
+    /// `setrate`), 0 = block default.
     pub rate: f64,
+    /// Clamp ceiling for `setrate` (official `SetRateI`:
+    /// `clamp(amount.numi(), 1, privileged ? maxInstructionsPerTick :
+    /// instructionsPerTick)`): privileged processors may rise to 40,
+    /// ordinary ones are capped at their own per-block ipt.
+    pub ipt_cap: u32,
     /// print/printflush text buffer.
     pub text_buffer: String,
     /// Packed `DisplayCmd` values waiting for `drawflush`.
@@ -563,13 +614,20 @@ pub struct ExecutorState {
     /// resets the cursors, matching the fresh LExecutor Java installs on
     /// code change.
     pub bind_cursors: Vec<usize>,
-    /// World processors (block 442) execute privileged LExecutor code;
+    /// World processors (block 443) execute privileged LExecutor code;
     /// ordinary micro/logic/hyper processors remain unprivileged.
     pub privileged: bool,
     /// P0-7: set when strict mode rejected this program (unsupported or
     /// malformed statements). A rejected executor never runs, so the server
     /// fails loudly instead of executing a silently-degraded program.
     pub rejected: bool,
+    /// Official `LExecutor.unitTimeouts` (payDrop/payTake transfer delay),
+    /// keyed by unit id: last transfer time in executor ticks. A fresh
+    /// LExecutor starts with an empty map; recompiling a processor resets it.
+    pub unit_timeouts: std::collections::HashMap<i32, f64>,
+    /// Monotonic clock backing [`ExecutorState::unit_timeouts`]
+    /// (`Time.time`): +1 per `run_tick` call, which is one game tick.
+    pub exec_time: f64,
 }
 
 impl ExecutorState {
@@ -583,6 +641,7 @@ impl ExecutorState {
             yield_flag: false,
             links,
             rate: 0.0,
+            ipt_cap: 8,
             text_buffer: String::new(),
             graphics_buffer: Vec::new(),
             config_hash: 0,
@@ -590,6 +649,8 @@ impl ExecutorState {
             bind_cursors: Vec::new(),
             privileged: false,
             rejected: false,
+            unit_timeouts: std::collections::HashMap::new(),
+            exec_time: 0.0,
         }
     }
 
@@ -783,6 +844,26 @@ pub fn run_instruction(
     match instr {
         Instr::Set(dest, expr) => {
             let value = state.eval(expr);
+            if let Some(v) = state.vars.get_mut(*dest) {
+                if !v.constant {
+                    v.isobj = value.isobj;
+                    v.numval = value.numval;
+                    v.objval = value.objval;
+                }
+            }
+        }
+        Instr::Select(dest, cond, a, b, then_value, else_value) => {
+            // Official SelectI.run: `result.set(op.test(comp0, comp1) ? a : b)`.
+            // The comparison uses the raw var values (strictEqual keeps the
+            // object/number distinction); the chosen operand is copied whole.
+            let av = state.eval(a);
+            let bv = state.eval(b);
+            let chosen = if cond.test(&av, &bv) {
+                then_value
+            } else {
+                else_value
+            };
+            let value = state.eval(chosen);
             if let Some(v) = state.vars.get_mut(*dest) {
                 if !v.constant {
                     v.isobj = value.isobj;
@@ -1051,8 +1132,54 @@ pub fn run_instruction(
                 w.set_enabled(&target, value, state.privileged);
             }
         }
+        Instr::FlushMessage(kind, _duration, out_success) => {
+            // Headless semantics (LExecutor.java:1929-1936): success flag,
+            // drop the buffered text. `mission` differs client-side only.
+            let _ = kind;
+            if let Some(idx) = out_success {
+                if let Some(v) = state.vars.get_mut(*idx) {
+                    if !v.constant {
+                        v.isobj = false;
+                        v.numval = 1.0;
+                    }
+                }
+            }
+            state.text_buffer.clear();
+        }
+        Instr::ControlShoot(target, x, y, shoot) => {
+            if let Some(w) = world {
+                let target = state.eval(target);
+                let xv = state.eval(x).num() as f32;
+                let yv = state.eval(y).num() as f32;
+                let shooting = state.eval(shoot).num() != 0.0;
+                w.set_logic_shoot(&target, Some((xv, yv)), shooting, -1, state.privileged);
+            }
+        }
+        Instr::ControlShootp(target, unit_expr, shoot) => {
+            if let Some(w) = world {
+                let target = state.eval(target);
+                let unit_value = state.eval(unit_expr);
+                let unit_id = match unit_value.objval {
+                    LObject::Unit(id) => id,
+                    _ => -1,
+                };
+                let shooting = state.eval(shoot).num() != 0.0 && unit_id >= 0;
+                w.set_logic_shoot(&target, None, shooting, unit_id, state.privileged);
+            }
+        }
         Instr::SetRate(value) => {
-            state.rate = state.eval(value).num();
+            // Official SetRateI (LExecutor.java:1218-1227): the RAW amount
+            // is clamped to [1, block cap] with no /60 and no rounding;
+            // privileged processors may rise to maxInstructionsPerTick(40),
+            // ordinary ones to their own instructionsPerTick. The @ipt
+            // constant reflects the new value immediately.
+            let raw = state.eval(value).num() as i32;
+            state.rate = f64::from(raw.clamp(1, state.ipt_cap as i32));
+            let ipt_idx = state.program.ipt_var;
+            if let Some(v) = state.vars.get_mut(ipt_idx) {
+                v.isobj = false;
+                v.numval = state.rate;
+            }
         }
         Instr::Ubind(unit_type) => {
             // Official UnitBindI (desktop 158.1 offsets 177-206): the
@@ -1178,17 +1305,50 @@ pub fn run_instruction(
                                 state.eval(shoot).num() != 0.0,
                             );
                         }
-                        UcOp::Build(x, y, block, rotation) => {
+                        UcOp::Build(x, y, block, rotation, config) => {
                             w.ucontrol_build(
                                 state,
                                 state.eval(x).num(),
                                 state.eval(y).num(),
                                 *block,
                                 state.eval(rotation).num(),
+                                state.eval(config).num(),
                             );
+                        }
+                        UcOp::Deconstruct(x, y) => {
+                            w.ucontrol_deconstruct(state, state.eval(x).num(), state.eval(y).num());
                         }
                         UcOp::Pathfind(x, y) => {
                             w.ucontrol_pathfind(state, state.eval(x).num(), state.eval(y).num());
+                        }
+                        UcOp::Idle => {
+                            w.ucontrol_idle(state);
+                        }
+                        UcOp::Approach(x, y, radius) => {
+                            w.ucontrol_approach(
+                                state,
+                                state.eval(x).num(),
+                                state.eval(y).num(),
+                                state.eval(radius).num(),
+                            );
+                        }
+                        UcOp::AutoPathfind => {
+                            w.ucontrol_auto_pathfind(state);
+                        }
+                        UcOp::Targetp(unit, shoot) => {
+                            let target = state.eval(unit);
+                            let target = target.objval.clone();
+                            w.ucontrol_targetp(state, &target, state.eval(shoot).num() != 0.0);
+                        }
+                        UcOp::PayDrop => {
+                            w.ucontrol_paydrop(state);
+                        }
+                        UcOp::PayTake(take_units) => {
+                            let take_units = state.eval(take_units).num() != 0.0;
+                            w.ucontrol_paytake(state, take_units);
+                        }
+                        UcOp::PayEnter => {
+                            w.ucontrol_payenter(state);
                         }
                         // Handled by the unbind branch above; a gate-passing
                         // execution never reaches this arm.
@@ -1504,8 +1664,30 @@ pub fn run_instruction(
                     let pos = (tile_x << 16) | tile_y;
                     let tile = w.world.tiles.get(&pos);
                     match layer {
-                        crate::logic::ops::TileLayer::Floor => LObject::Null,
-                        crate::logic::ops::TileLayer::Ore => LObject::Null,
+                        crate::logic::ops::TileLayer::Floor => {
+                            let floor =
+                                crate::network::combat::floor_at_tile(w.world, tile_x, tile_y);
+                            if let Some(v) = state.vars.get_mut(*result) {
+                                if !v.constant {
+                                    v.isobj = false;
+                                    v.numval = f64::from(floor);
+                                    v.objval = LObject::Null;
+                                }
+                            }
+                            return !state.yield_flag;
+                        }
+                        crate::logic::ops::TileLayer::Ore => {
+                            let overlay =
+                                crate::network::combat::overlay_at_tile(w.world, tile_x, tile_y);
+                            if let Some(v) = state.vars.get_mut(*result) {
+                                if !v.constant {
+                                    v.isobj = false;
+                                    v.numval = f64::from(overlay);
+                                    v.objval = LObject::Null;
+                                }
+                            }
+                            return !state.yield_flag;
+                        }
                         crate::logic::ops::TileLayer::Block => match tile {
                             Some(tile) if tile.block != 0 => LObject::Building(pos),
                             _ => LObject::Null,
@@ -1578,6 +1760,39 @@ pub fn run_instruction(
                     v.numval = value;
                     v.objval = LObject::Null;
                 }
+            }
+        }
+        Instr::WeatherSense(dest, weather) => {
+            if !state.privileged {
+                return !state.yield_flag;
+            }
+            let value = match world {
+                Some(w) => {
+                    let id = weather_id_from_lvar(&state.eval(weather));
+                    if w.weather_active(id) {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
+                None => 0.0,
+            };
+            if let Some(v) = state.vars.get_mut(*dest) {
+                if !v.constant {
+                    v.isobj = false;
+                    v.numval = value;
+                    v.objval = LObject::Null;
+                }
+            }
+        }
+        Instr::WeatherSet(weather, enabled) => {
+            if !state.privileged {
+                return !state.yield_flag;
+            }
+            if let Some(w) = world {
+                let id = weather_id_from_lvar(&state.eval(weather));
+                let on = state.eval(enabled).num() != 0.0;
+                w.set_weather(id, on);
             }
         }
         Instr::Spawn(spec) => {
@@ -1813,6 +2028,34 @@ pub fn lvar_bool(value: &LVar) -> bool {
     }
 }
 
+/// Resolve a weather content id from a logic operand (`@rain`, numeric id).
+fn weather_id_from_lvar(value: &LVar) -> i16 {
+    if value.isobj {
+        if let LObject::Str(name) = &value.objval {
+            return weather_id_from_name(name);
+        }
+    }
+    let named = weather_id_from_name(&value.name);
+    if named >= 0 {
+        named
+    } else {
+        value.numval as i16
+    }
+}
+
+fn weather_id_from_name(name: &str) -> i16 {
+    let key = name.trim().trim_start_matches('@').to_ascii_lowercase();
+    match key.as_str() {
+        "snow" | "snowing" => 0,
+        "rain" => 1,
+        "sandstorm" => 2,
+        "sporestorm" | "spores" => 3,
+        "fog" => 4,
+        "suspendparticles" | "suspend-particles" => 5,
+        _ => key.parse().unwrap_or(-1),
+    }
+}
+
 /// Official `LVar.team()` (v159.7): Team object -> id; numeric ->
 /// `Team.all[(int)numval]` when `0 <= t < 256`; String and other objects are
 /// null (never reparsed by name at runtime).
@@ -1925,6 +2168,9 @@ impl ExecutorState {
         if self.rejected {
             return;
         }
+        // One run_tick == one game tick of `Time.time` for the executor's
+        // payDrop/payTake transfer timeouts (LogicAI.transferDelay).
+        self.exec_time += 1.0;
         self.yield_flag = false;
         // Runtime constants.
         if let Some(v) = self.vars.get_mut(self.program.links_var) {
@@ -1932,14 +2178,11 @@ impl ExecutorState {
             v.numval = self.links.len() as f64;
             v.objval = LObject::Null;
         }
-        let ipt = self
-            .program
-            .vars
-            .get(self.program.ipt_var)
-            .map(LVar::num)
-            .unwrap_or(8.0);
+        // Official LogicBuild.updateTile runs `executor.ipt = build.ipt`
+        // per game tick: a setrate value persists until changed; without one
+        // the budget is the block default.
         let effective_budget = if self.rate > 0.0 {
-            (self.rate / 60.0).round().max(1.0).min(ipt) as usize
+            self.rate.min(self.ipt_cap as f64) as usize
         } else {
             budget
         };
@@ -1954,6 +2197,36 @@ impl ExecutorState {
         if let Some(v) = self.vars.get_mut(self.program.unit_var) {
             v.isobj = self.bound_unit.is_some();
             v.objval = self.bound_unit.map(LObject::Unit).unwrap_or(LObject::Null);
+        }
+        // Official GlobalVars.update() state constants (GlobalVars.java:184-211):
+        // @time derives from @tick, waves come from game state, and the
+        // server flag is always 1 on a dedicated host.
+        if !self.program.runtime_globals.is_empty() {
+            let tick = view
+                .map(|w| w.world.game_state.world_ticks.load(Ordering::Relaxed))
+                .unwrap_or(0) as f64;
+            for (idx, kind) in &self.program.runtime_globals {
+                let Some(v) = self.vars.get_mut(*idx) else {
+                    continue;
+                };
+                v.isobj = false;
+                v.numval = match kind {
+                    RuntimeGlobal::Time => tick / 60.0 * 1000.0,
+                    RuntimeGlobal::Tick => tick,
+                    RuntimeGlobal::Second => tick / 60.0,
+                    RuntimeGlobal::Minute => tick / 3600.0,
+                    RuntimeGlobal::WaveNumber => view
+                        .map(|w| w.world.game_state.wave.load(Ordering::Relaxed))
+                        .unwrap_or(0) as f64,
+                    RuntimeGlobal::WaveTime => view
+                        .map(|w| *w.world.game_state.wave_time.read() as f64 / 60.0)
+                        .unwrap_or(0.0),
+                    RuntimeGlobal::MapW => view.map(|w| w.world.width as f64).unwrap_or(0.0),
+                    RuntimeGlobal::MapH => view.map(|w| w.world.height as f64).unwrap_or(0.0),
+                    RuntimeGlobal::Server => 1.0,
+                    RuntimeGlobal::Client => 0.0,
+                };
+            }
         }
         let mut ran = 0;
         while ran < effective_budget && !self.yield_flag {

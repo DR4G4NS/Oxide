@@ -25,6 +25,7 @@ use crate::network::wire::{
     broadcast_placement_power_configs, encode_block_snapshot, nearest_opposing_unit,
 };
 
+#[derive(Debug)]
 pub(crate) struct PathfindResult {
     pub should_move: bool,
     pub dest_x: f32,
@@ -52,7 +53,8 @@ pub(crate) fn ordered_unit_path(
 ) -> PathfindResult {
     const IMPASSABLE: u32 = u32::MAX / 4;
     let flying = unit.elevation >= 0.09;
-    let naval = matches!(unit.unit_type, 25..=29);
+    let naval = crate::game::content::unit_movement(unit.unit_type).naval
+        || matches!(unit.unit_type, 25..=34);
     if flying {
         return PathfindResult {
             should_move: true,
@@ -63,10 +65,10 @@ pub(crate) fn ordered_unit_path(
         };
     }
     let legs = matches!(unit.unit_type, 11..=14);
-    let start_x = (unit.x / 8.0).floor() as i32;
-    let start_y = (unit.y / 8.0).floor() as i32;
-    let goal_x = (target_x / 8.0).floor() as i32;
-    let goal_y = (target_y / 8.0).floor() as i32;
+    let start_x = crate::network::combat::enemy::world_to_tile_in_map(unit.x, world.width);
+    let start_y = crate::network::combat::enemy::world_to_tile_in_map(unit.y, world.height);
+    let goal_x = crate::network::combat::enemy::world_to_tile_in_map(target_x, world.width);
+    let goal_y = crate::network::combat::enemy::world_to_tile_in_map(target_y, world.height);
     let Some(start) = navigation_index(world, start_x, start_y) else {
         return PathfindResult {
             should_move: false,
@@ -94,6 +96,19 @@ pub(crate) fn ordered_unit_path(
             unreachable: false,
         };
     }
+    // Entering a payload block must reach its footprint, not an isolated
+    // center surrounded by the block's own solid tiles. Only the destination
+    // reconstructor is traversable for this command; other obstacles remain.
+    let payload_destination = world
+        .unit_orders
+        .get(&unit.id)
+        .is_some_and(|order| order.command == 5)
+        .then(|| dynamic_at(world, (goal_x << 16) | (goal_y as u16 as i32)))
+        .flatten()
+        .filter(|tile| {
+            tile.team == unit.team && reconstructor_upgrade(tile.block, unit.unit_type).is_some()
+        })
+        .map(|tile| tile.position);
     let passable_cost = |x: i32, y: i32, goal_cell: bool| {
         let Some(index) = navigation_index(world, x, y) else {
             return IMPASSABLE;
@@ -101,10 +116,16 @@ pub(crate) fn ordered_unit_path(
         if goal_cell {
             return 1;
         }
-        let floor_id = world.floors[index];
+        let floor_id = crate::network::combat::floor_at_tile(world, x, y);
         let floor = crate::game::content::block_navigation(floor_id);
         let position = (x << 16) | (y as u16 as i32);
         let dynamic = dynamic_at(world, position);
+        if dynamic
+            .as_ref()
+            .is_some_and(|tile| Some(tile.position) == payload_destination)
+        {
+            return 1;
+        }
         let base = base_building_at(world, position);
         let (block, team) = dynamic
             .as_ref()
@@ -124,7 +145,11 @@ pub(crate) fn ordered_unit_path(
             return IMPASSABLE;
         }
         let navigation = crate::game::content::block_navigation(block);
-        if !legs && navigation.solid && !(team == unit.team && navigation.team_passable) {
+        let check_solid = dynamic.as_ref().map_or_else(
+            || crate::game::content::building_check_solid(block, false),
+            |tile| crate::game::content::building_check_solid(tile.block, tile.door_open),
+        );
+        if !legs && check_solid && !(team == unit.team && navigation.team_passable) {
             return IMPASSABLE;
         }
         1 + u32::from(floor.deep) * 6000 + u32::from(floor.damages) * 30
@@ -183,8 +208,8 @@ pub(crate) fn ordered_unit_path(
     };
     let next_x = next as i32 % world.width;
     let next_y = next as i32 / world.width;
-    let dest_x = (next_x as f32 + 0.5) * 8.0;
-    let dest_y = (next_y as f32 + 0.5) * 8.0;
+    let dest_x = next_x as f32 * 8.0;
+    let dest_y = next_y as f32 * 8.0;
     let mut should_move = true;
     if naval {
         let can_pass_next = passable_cost(next_x, next_y, next == goal) < IMPASSABLE;
@@ -231,8 +256,17 @@ pub(crate) fn route_unit_movement(
             break;
         }
         let step = remaining.min(distance).min(target_distance - stop_distance);
-        velocity_x = dx / distance * speed;
-        velocity_y = dy / distance * speed;
+        // Official UnitComp integrates accel/drag onto velocity; the path step
+        // still consumes `speed * delta` so concave-wall A* (H12/H13) stays
+        // on the PositionTarget route.
+        let (_, accel, drag_coeff, _, _) = unit_move_physics(snapshot.unit_type);
+        let desired_x = dx / distance * speed;
+        let desired_y = dy / distance * speed;
+        velocity_x += (desired_x - velocity_x) * (accel * delta_ticks.max(0.0)).min(1.0);
+        velocity_y += (desired_y - velocity_y) * (accel * delta_ticks.max(0.0)).min(1.0);
+        let drag = (1.0 - drag_coeff * delta_ticks.max(0.0)).max(0.0);
+        velocity_x *= drag;
+        velocity_y *= drag;
         routed.x += dx / distance * step;
         routed.y += dy / distance * step;
         rotation = dy.atan2(dx).to_degrees();
@@ -268,7 +302,7 @@ pub(crate) fn unit_logic_building(world: &DynamicWorld, id: i32) -> bool {
     world
         .unit_orders
         .get(&id)
-        .map(|order| order.target_kind == 9)
+        .map(|order| matches!(order.target_kind, 9 | 10))
         .unwrap_or(false)
 }
 
@@ -292,16 +326,27 @@ pub(crate) fn place_logic_building(
     block: i16,
     rotation: u8,
     occupied: Vec<i32>,
+    config: f32,
 ) {
+    let config_bytes = if config.is_finite() && config.abs() >= 1e-6 {
+        let mut bytes = Vec::with_capacity(5);
+        bytes.push(3);
+        bytes.extend_from_slice(&(config as i32).to_be_bytes());
+        bytes
+    } else {
+        vec![0]
+    };
     let generation = crate::network::world::assign_new_building_generation(world, position);
     world.tiles.insert(
         position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position,
             block,
             rotation,
             team: 1,
-            config: vec![0],
+            config: config_bytes.clone(),
             enabled: true,
             message: None,
             occupied,
@@ -340,7 +385,7 @@ pub(crate) fn place_logic_building(
             generation,
         },
     );
-    let placement_changes = building_placement::after_placement(world, position, &[0]);
+    let placement_changes = building_placement::after_placement(world, position, &config_bytes);
     invalidate_navigation_for_block(world, block);
     if let Some(tile) = world.tiles.get(&position) {
         let power = std::collections::HashMap::new();
@@ -374,7 +419,13 @@ pub(crate) fn apply_ordered_unit_movement(
     else {
         return false;
     };
-    if order.command != 0 {
+    // Move (0) and enterPayload (5) both path to a destination. Other
+    // commands do not consume this mover (ASTRA C01).
+    if order.command != 0 && order.command != 5 {
+        return false;
+    }
+    // ASTRA C03: holdPosition is a movement gate, not a weapon gate.
+    if unit_has_stance(world, snapshot.id, 6) {
         return false;
     }
     let (mut target_x, mut target_y) = match (order.target_x, order.target_y) {
@@ -428,6 +479,10 @@ pub(crate) fn apply_ordered_unit_movement(
     }
     let stop_distance = if unit_has_stance(world, snapshot.id, 4) {
         1.0
+    } else if order.command == 5 {
+        // Official CommandAI.java:290: enterPayload stops within 4 world
+        // units of the exact target so the unit can stand on the building.
+        4.0
     } else {
         10.0
     };
@@ -454,15 +509,23 @@ pub(crate) fn apply_ordered_unit_movement(
     if distance <= stop_distance {
         unit.velocity_x = 0.0;
         unit.velocity_y = 0.0;
+        drop(unit);
     } else if let Some((x, y, velocity_x, velocity_y, rotation)) = routed {
         unit.x = x;
         unit.y = y;
         unit.velocity_x = velocity_x;
         unit.velocity_y = velocity_y;
         unit.rotation = rotation;
+        drop(unit);
+        if order.command != 5 {
+            crate::network::units::clamp_ground_unit_to_solids(
+                world, snapshot, snapshot.x, snapshot.y, x, y,
+            );
+        }
     } else {
         unit.velocity_x = 0.0;
         unit.velocity_y = 0.0;
+        drop(unit);
     }
     true
 }
@@ -631,7 +694,8 @@ pub(crate) fn builder_unit_hit_size(unit_type: i16) -> Option<f32> {
 pub(crate) fn unit_build_speed(unit_type: i16) -> Option<f32> {
     match unit_type {
         5 => Some(0.3),
-        6 | 21 => Some(0.5),
+        6 => Some(0.5),
+        21 => Some(0.4),
         7 => Some(1.1),
         8 => Some(3.0),
         22 => Some(2.6),

@@ -346,15 +346,17 @@ pub fn simulate_reactors_with_network(
                 1.0,
                 -1,
                 0.0,
+                1.0,
             );
         }
     }
     changed
 }
 
-/// ImpactReactor remains isolated here until its warmup curve is promoted to
-/// a dedicated domain adapter; unlike NuclearReactor it has no heat/overheat
-/// state and therefore cannot emit the event above.
+/// ImpactReactor simulation: consumes blast compound (item 14, 140 ticks duration)
+/// and cryofluid (liquid 3, 0.25/tick = 15/s). Warmup approaches 1.0 at 0.001/tick
+/// (matching official ImpactReactor.warmupSpeed) and stores the warmup float in
+/// `output_liquid_amount` so `encode_power_generator_sync` broadcasts the exact state.
 pub fn simulate_impact_reactors(world: &DynamicWorld, delta_ticks: f32) -> bool {
     let keys: Vec<_> = world
         .tiles
@@ -363,24 +365,88 @@ pub fn simulate_impact_reactors(world: &DynamicWorld, delta_ticks: f32) -> bool 
         .map(|tile| *tile.key())
         .collect();
     let mut changed = false;
+    let power = crate::network::economy::compute_power_efficiency(world);
     for key in keys {
+        // Snapshot power.status and overdrive scale before mutating the
+        // reactor tile (DM004).
+        let status = power.get(&key).copied().unwrap_or(0.0);
+        let time_scale = building_time_scale(world, key);
         let Some(mut reactor) = world.tiles.get_mut(&key) else {
             continue;
         };
-        let (fuel_item, duration) = (14, 140.0);
+        let fuel_item = 14;
+        let duration = 140.0;
+        let scaled_delta = delta_ticks * time_scale;
+
+        let cryo_amount = crate::network::economy::stored_liquid_amount(&reactor, 3);
+        let cryo_rate = (0.25 * scaled_delta).min(cryo_amount);
+        // ConsumeLiquid.efficiency needs enough cryo for one edelta of
+        // consumePower's companion consumeLiquid(0.25). Warmup only climbs
+        // when efficiency >= 0.9999, i.e. ~0.25 units buffered.
+        let has_cryo = cryo_amount >= 0.25 * scaled_delta.max(0.000_001);
+
         if reactor.production_progress <= 0.0
             && inventory_remove(&mut reactor.inventory, fuel_item, 1)
         {
             reactor.stored_item = fuel_item;
-            reactor.production_progress = duration;
+            reactor.production_progress += duration;
             changed = true;
         }
-        if reactor.production_progress > 0.0 {
-            reactor.production_progress = (reactor.production_progress
-                - delta_ticks * building_time_scale(world, key))
-            .max(0.0);
-            if reactor.production_progress == 0.0 {
-                reactor.stored_item = -1;
+        let operating = (reactor.production_progress > 0.0
+            || inventory_count(&reactor.inventory, fuel_item) > 0)
+            && has_cryo
+            && reactor.enabled
+            && status >= 0.99;
+        let old_warmup = reactor.output_liquid_amount;
+        // Mindustry: warmup = Mathf.lerpDelta(warmup, 1f, 0.001f * timeScale).
+        // Cooldown uses a smooth decay so transient conveyor delays do not wipe warmup.
+        let new_warmup = if operating {
+            let lerped = old_warmup + (1.0 - old_warmup) * (0.001 * scaled_delta).clamp(0.0, 1.0);
+            if (1.0 - lerped).abs() <= 0.001 {
+                1.0
+            } else {
+                lerped
+            }
+        } else {
+            let lerped = old_warmup + (0.0 - old_warmup) * (0.01 * scaled_delta).clamp(0.0, 1.0);
+            if lerped <= 0.0001 {
+                0.0
+            } else {
+                lerped
+            }
+        };
+
+        if (new_warmup - old_warmup).abs() > f32::EPSILON {
+            reactor.output_liquid_amount = new_warmup;
+            changed = true;
+        }
+
+        if operating {
+            if let Some((_, amount)) = reactor
+                .liquid_inventory
+                .iter_mut()
+                .find(|(liquid, _)| *liquid == 3)
+            {
+                *amount = (*amount - cryo_rate).max(0.0);
+            } else {
+                reactor.liquid_amount = (reactor.liquid_amount - cryo_rate).max(0.0);
+                if reactor.liquid_amount <= 0.0001 {
+                    reactor.liquid_amount = 0.0;
+                    if reactor.stored_liquid == 3 {
+                        reactor.stored_liquid = -1;
+                    }
+                }
+            }
+            if reactor.production_progress > 0.0 {
+                reactor.production_progress = (reactor.production_progress - scaled_delta).max(0.0);
+            }
+            if reactor.production_progress <= 0.0 {
+                if inventory_remove(&mut reactor.inventory, fuel_item, 1) {
+                    reactor.stored_item = fuel_item;
+                    reactor.production_progress += duration;
+                } else {
+                    reactor.stored_item = -1;
+                }
             }
             changed = true;
         }

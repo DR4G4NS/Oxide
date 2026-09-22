@@ -8,13 +8,7 @@
 
 ## Tests
 
-```text
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets -- --test-threads=1
-```
-
-<!-- If you ran something else (JAR smoke, architecture_guard, a named fixture), list it. -->
+<!-- Use CONTRIBUTING.md#validation for the changed surface. List commands actually run and their results; include not-run checks with the reason. For wire/save work, name the target-JAR fixture or smoke. A skipped smoke is not a pass. -->
 
 ## Notes
 

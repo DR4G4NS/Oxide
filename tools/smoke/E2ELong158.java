@@ -203,7 +203,10 @@ public final class E2ELong158 {
         String mode = args.length < 2 ? "build" : args[1];
         int savedWave = args.length > 2 ? Integer.parseInt(args[2]) : 0;
         int savedCopper = args.length > 3 ? Integer.parseInt(args[3]) : 0;
-        Version.build = 158;
+        // Server rejects mismatched builds (NetClient/KickReason); the
+        // scenario runs against any server generation by overriding
+        // -Doxide.smoke.build (159.7 evaluation).
+        Version.build = Integer.getInteger("oxide.smoke.build", 158);
         Vars.content = new ContentLoader();
         Vars.content.createBaseContent();
         Vars.net = clientNet();

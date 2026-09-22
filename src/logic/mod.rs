@@ -33,7 +33,8 @@ mod view;
 // `#[cfg(test)]` or internally, so silence the unused-import lint on the wall.
 #[allow(unused_imports)]
 pub use compiler::{
-    compile, compile_report, parse_links, source_from_config, Assembler, Expr, Program,
+    compile, compile_report, parse_links, source_from_config, Assembler, Expr, MessageType,
+    Program, RuntimeGlobal,
 };
 #[allow(unused_imports)]
 pub use container::{
@@ -47,6 +48,7 @@ pub use executor::{
     LogicRule, RadarSort, RadarSpec, RadarTarget, SetPropKey, SetPropSpec, SetRuleSpec, SpawnSpec,
     UcOp, UlocGroup, UlocKind, UlocSpec,
 };
+pub(crate) use ops::simplex_raw2d_seeded;
 #[allow(unused_imports)]
 pub use ops::{
     item_id_from_name, item_name_from_id, liquid_name_from_id, ore_item_id, unit_name_from_id,

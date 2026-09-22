@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 static BLOCK_REQUIREMENTS: OnceLock<HashMap<i16, Vec<(usize, i32)>>> = OnceLock::new();
 static BLOCK_SIZES: OnceLock<HashMap<i16, u8>> = OnceLock::new();
 static BLOCK_BUILD_TIMES: OnceLock<HashMap<i16, f32>> = OnceLock::new();
+static BLOCK_BEAM_RANGES: OnceLock<HashMap<i16, i32>> = OnceLock::new();
 static BLOCK_COMBAT: OnceLock<HashMap<i16, (f32, f32)>> = OnceLock::new();
 static BLOCK_NAVIGATION: OnceLock<HashMap<i16, BlockNavigation>> = OnceLock::new();
 static BLOCK_PATHING: OnceLock<HashMap<i16, BlockPathing>> = OnceLock::new();
@@ -173,6 +174,12 @@ pub struct UnitWeapon {
     pub pierce_buildings: bool,
     pub status_effect: i16,
     pub status_duration: f32,
+    /// Vanilla `Weapon.mirror` (JAR default TRUE): UnitType.init appends a
+    /// flipped copy (local x negated) and both mounts fire on the reload.
+    pub mirror: bool,
+    /// Vanilla `Weapon.x` of the primary mount in world units; the flipped
+    /// mount fires from `-mount_x`.
+    pub mount_x: f32,
 }
 
 fn autonomous_unit_weapon(bullet_id: i16) -> bool {
@@ -218,6 +225,8 @@ pub fn unit_weapons(unit: i16) -> &'static [UnitWeapon] {
                 let pierce_buildings = fields.next().unwrap().parse().unwrap();
                 let raw_status: i16 = fields.next().unwrap().parse().unwrap();
                 let status_duration = fields.next().unwrap().parse().unwrap();
+                let mirror: bool = fields.next().unwrap().parse().unwrap();
+                let mount_x: f32 = fields.next().unwrap().parse().unwrap();
                 if autonomous_unit_weapon(bullet_id) {
                     continue;
                 }
@@ -239,6 +248,8 @@ pub fn unit_weapons(unit: i16) -> &'static [UnitWeapon] {
                     } else {
                         status_duration
                     },
+                    mirror,
+                    mount_x,
                 });
             }
             by_unit
@@ -345,7 +356,7 @@ impl UnitInventoryEntry {
     }
 }
 
-/// Inventory row for a vanilla unit id, if registered (0..=68).
+/// Inventory row for a vanilla unit id, if registered (0..=69).
 pub fn unit_inventory(unit: i16) -> Option<&'static UnitInventoryEntry> {
     UNIT_INVENTORY
         .get_or_init(|| {
@@ -439,6 +450,24 @@ pub fn block_build_time(block: i16) -> f32 {
         .unwrap_or(&20.0)
 }
 
+/// Official `BeamNode.range` in blocks (BeamNode.java field + Blocks.java
+/// overrides). Only BeamNode subclasses appear; other blocks have none.
+pub fn block_beam_range(block: i16) -> Option<i32> {
+    BLOCK_BEAM_RANGES
+        .get_or_init(|| {
+            include_str!("block_beam_ranges.tsv")
+                .lines()
+                .filter(|line| !line.starts_with('#') && !line.is_empty())
+                .map(|line| {
+                    let (block, range) = line.split_once('\t').unwrap();
+                    (block.parse().unwrap(), range.parse().unwrap())
+                })
+                .collect()
+        })
+        .get(&block)
+        .copied()
+}
+
 pub fn unit_requirements(unit: i16) -> Option<(f32, &'static [(i16, i32)])> {
     UNIT_REQUIREMENTS
         .get_or_init(|| {
@@ -492,6 +521,119 @@ pub fn block_armor(block: i16) -> f32 {
     block_combat(block).1
 }
 
+/// Floor speed multipliers differing from 1.0, probed from the official
+/// 159.7 desktop.jar (`Floor.speedMultiplier`, probe ParFloors159). Applied
+/// to unit movement on that floor (`Floor.speedMultiplier` in official
+/// movement; audit H13/H4).
+pub fn floor_speed_multiplier(floor: i16) -> f32 {
+    match floor {
+        21 => 0.2,  // deep-water
+        22 => 0.5,  // shallow-water
+        23 => 0.5,  // tainted-water
+        24 => 0.18, // deep-tainted-water
+        25 => 0.75, // darksand-tainted-water
+        26 => 0.8,  // sand-water
+        27 => 0.8,  // darksand-water
+        28 => 0.19, // tar
+        29 => 0.5,  // pooled-cryofluid
+        30 => 0.19, // molten-slag
+        42 => 0.6,  // mud
+        58 => 0.9,  // red-ice
+        59 => 0.3,  // arkycite-floor
+        74 => 0.9,  // ice
+        _ => 1.0,
+    }
+}
+
+/// Official `Floor.dragMultiplier` (Blocks.java 159.7). Applied to grounded
+/// unit drag together with `Rules.dragMultiplier` (UnitComp.java:789).
+pub fn floor_drag_multiplier(floor: i16) -> f32 {
+    match floor {
+        58 => 0.4,  // red-ice
+        74 => 0.35, // ice
+        75 => 0.6,  // ice-snow
+        _ => 1.0,
+    }
+}
+
+/// Official `Floor.drownTime` (ticks to drown). 0 disables drowning.
+pub fn floor_drown_time(floor: i16) -> f32 {
+    match floor {
+        21 | 24 => 200.0, // deep-water / deep-tainted-water
+        28 | 30 => 230.0, // tar / molten-slag
+        29 => 150.0,      // pooled-cryofluid
+        59 => 200.0,      // arkycite-floor
+        _ => 0.0,
+    }
+}
+
+/// Official `UnitType.drownTimeMultiplier`. Higher values drown more slowly.
+pub fn drown_time_multiplier(unit: i16) -> f32 {
+    match unit {
+        3 => 1.5,       // scepter
+        4 => 1.6,       // reign
+        8 => 1.3,       // vela
+        9 => 1.6,       // corvus
+        40 => 1.2,      // precept
+        41 => 1.25,     // vanquish
+        47 | 48 => 0.5, // tecta / collaris
+        56 => 1.75,     // renale
+        _ => 1.0,
+    }
+}
+
+/// Floor attributes used by AttributeCrafter / SolidPump (heat / water / spores).
+pub fn floor_attribute(floor: i16, attribute: FloorAttribute) -> f32 {
+    match (attribute, floor) {
+        (FloorAttribute::Water, 21..=27 | 59) => 1.0,
+        (FloorAttribute::Heat, 37) => 0.5,  // hotrock
+        (FloorAttribute::Heat, 38) => 0.75, // magmarock
+        (FloorAttribute::Heat, 30) => 1.0,  // molten-slag
+        (FloorAttribute::Spores, 23..=25) => 0.15,
+        (FloorAttribute::Spores, 43) => 1.0, // spore-moss
+        _ => 0.0,
+    }
+}
+
+/// Sum of `Floor.attributes` over a `size × size` footprint (Building.sumAttribute).
+pub fn attribute_sum(
+    floors: &[i16],
+    width: i32,
+    height: i32,
+    tile_x: i32,
+    tile_y: i32,
+    size: i32,
+    attribute: FloorAttribute,
+) -> f32 {
+    let mut sum = 0.0;
+    for dy in 0..size.max(1) {
+        for dx in 0..size.max(1) {
+            let fx = tile_x + dx;
+            let fy = tile_y + dy;
+            if fx >= 0 && fy >= 0 && fx < width && fy < height {
+                let index = (fy * width + fx) as usize;
+                if let Some(floor) = floors.get(index) {
+                    sum += floor_attribute(*floor, attribute);
+                }
+            }
+        }
+    }
+    sum
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FloorAttribute {
+    Water,
+    Heat,
+    Spores,
+}
+
+/// Liquid floors per official 159.7 desktop.jar (`Floor.isLiquid`). Shallow
+/// water is a high-cost ground tile, not a wall (`Pathfinder.costGround`).
+pub fn floor_is_liquid(floor: i16) -> bool {
+    matches!(floor, 21..=30 | 59)
+}
+
 pub fn block_navigation(block: i16) -> BlockNavigation {
     *BLOCK_NAVIGATION
         .get_or_init(|| {
@@ -517,6 +659,16 @@ pub fn block_navigation(block: i16) -> BlockNavigation {
         })
         .get(&block)
         .unwrap_or(&BlockNavigation::default())
+}
+
+/// Official `Building.checkSolid()` for doors (`Door`/`AutoDoor`: `!open`)
+/// and `Block.solid` for every other block. Closed doors are path-solid even
+/// though `block_navigation.tsv` records `solid=false` (`solidifes=true`).
+pub fn building_check_solid(block: i16, door_open: bool) -> bool {
+    match block {
+        228 | 229 | 239 => !door_open,
+        _ => block_navigation(block).solid,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -675,6 +827,8 @@ mod unit_weapon_tests {
                 let pierce_buildings = fields.next().unwrap().parse().unwrap();
                 let raw_status: i16 = fields.next().unwrap().parse().unwrap();
                 let raw_status_duration = fields.next().unwrap().parse().unwrap();
+                let mirror: bool = fields.next().unwrap().parse().unwrap();
+                let mount_x: f32 = fields.next().unwrap().parse().unwrap();
                 assert!(fields.next().is_none(), "unexpected TSV field in {line}");
                 RawWeapon {
                     unit,
@@ -697,6 +851,8 @@ mod unit_weapon_tests {
                         } else {
                             raw_status_duration
                         },
+                        mirror,
+                        mount_x,
                     },
                 }
             })
@@ -705,14 +861,14 @@ mod unit_weapon_tests {
 
     fn player_controllable(unit: i16) -> bool {
         // MissileUnitType plus manifold/assembly-drone/scathe missiles have
-        // `playerControllable=false` in the official v158.1 registry.
-        !matches!(unit, 46 | 53 | 55 | 62..=67)
+        // `playerControllable=false` in the official v160.5 registry.
+        !matches!(unit, 46 | 53 | 55 | 62..=68)
     }
 
     #[test]
     fn unit_weapon_registry_matches_every_offensive_tsv_field_and_order() {
         let raw = raw_weapons();
-        assert_eq!(raw.len(), 91, "the v158.1 export has 91 mount rows");
+        assert_eq!(raw.len(), 91, "the v160.5 export has 91 mount rows");
 
         let mut expected: HashMap<i16, Vec<UnitWeapon>> = HashMap::new();
         for row in &raw {
@@ -736,7 +892,7 @@ mod unit_weapon_tests {
         }
 
         assert_eq!(expected.values().map(Vec::len).sum::<usize>(), 76);
-        for unit in 0..=68 {
+        for unit in 0..=69 {
             assert_eq!(
                 unit_weapons(unit),
                 expected.get(&unit).map_or(&[][..], Vec::as_slice),
@@ -744,7 +900,7 @@ mod unit_weapon_tests {
             );
         }
         assert!(unit_weapons(-1).is_empty());
-        assert!(unit_weapons(69).is_empty());
+        assert!(unit_weapons(70).is_empty());
     }
 
     #[test]
@@ -864,7 +1020,7 @@ mod unit_weapon_tests {
             (54, 1),
         ];
 
-        let actual: Vec<_> = (0..=68)
+        let actual: Vec<_> = (0..=69)
             .filter(|unit| player_controllable(*unit))
             .filter_map(|unit| {
                 let count = unit_weapons(unit).len();
@@ -876,7 +1032,7 @@ mod unit_weapon_tests {
 
     #[test]
     fn independently_reloading_mount_groups_fit_runtime_slots_except_navanax() {
-        let multiple: Vec<_> = (0..=68)
+        let multiple: Vec<_> = (0..=69)
             .filter_map(|unit| {
                 let count = unit_weapons(unit).len();
                 (count > 1).then_some((unit, count))
@@ -900,7 +1056,7 @@ mod unit_weapon_tests {
                 (41, 3),
             ]
         );
-        let oversized: Vec<_> = (0..=68)
+        let oversized: Vec<_> = (0..=69)
             .filter_map(|unit| {
                 let count = unit_weapons(unit).len();
                 (count > 4).then_some((unit, count))
@@ -933,6 +1089,8 @@ mod unit_weapon_tests {
                 pierce_buildings: false,
                 status_effect: -1,
                 status_duration: 0.0,
+                mirror: true,
+                mount_x: 16.0,
             }
         );
         assert_eq!(
@@ -950,6 +1108,8 @@ mod unit_weapon_tests {
                 pierce_buildings: false,
                 status_effect: 8,
                 status_duration: 120.0,
+                mirror: true,
+                mount_x: 7.0,
             }
         );
         assert_eq!(
@@ -967,6 +1127,8 @@ mod unit_weapon_tests {
                 pierce_buildings: true,
                 status_effect: -1,
                 status_duration: 0.0,
+                mirror: false,
+                mount_x: 0.0,
             }
         );
     }

@@ -301,7 +301,7 @@ impl ConsoleHandler {
                         info!("Game mode switched to {:?}", game_mode);
                         println!("Game mode switched to {:?}.", game_mode);
                         println!(
-                            "Note: mode only gates wave simulation; sandbox/pvp skip enemy waves."
+                            "Sandbox/PvP/Attack apply the Gamemode preset via SetRules (no world reload)."
                         );
                     }
                     None => {

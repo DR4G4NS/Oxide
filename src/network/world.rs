@@ -65,12 +65,19 @@ pub struct SessionPlayer {
     pub mouse_x: f32,
     pub mouse_y: f32,
     pub rotation: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
     pub boosting: bool,
     pub shooting: bool,
+    pub building: bool,
     /// Command followed by the last incoming CommandAI unit this player
     /// possessed. Mirrors PlayerComp.lastCommand (`@NoSync`): runtime-only,
     /// player-owned state that is reset on reconnect.
     pub last_command: Option<u8>,
+    /// Transient `Unit.dockedType` carried while this session possesses a
+    /// unit. Not TypeIO. Set when leaving a spawned-by-core ship; UnitClear
+    /// uses it when `coreUnitDock` (ASTRA C07).
+    pub docked_type: Option<i16>,
     pub active_plans: HashSet<(bool, i32, i16)>,
     pub mining_position: Option<i32>,
     pub mining_progress: f32,
@@ -118,6 +125,15 @@ impl ControlledUnit {
     }
 }
 
+/// Combat body for a joined player. When they possess a Standard unit the
+/// avatar in `players` is identity only (ASTRA C06).
+pub(crate) fn possessed_unit_id(world: &DynamicWorld, player_combat_id: i32) -> Option<i32> {
+    world
+        .player_sessions
+        .get(&player_combat_id)
+        .and_then(|session| session.controlled_unit.standard_id())
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct DynamicTile {
     pub position: i32,
@@ -146,6 +162,10 @@ pub struct DynamicTile {
     pub ammo_units: f32,
     #[serde(default)]
     pub inventory: Vec<(i16, i32)>,
+    /// Loaded assembler payloads (content id, amount) for UnitAssembler
+    /// blocks (official BuildingComp.getPayloads / PayloadStack store).
+    #[serde(default)]
+    pub payload_inventory: Vec<(i16, i32)>,
     #[serde(default)]
     pub power_stored: f32,
     /// Linked power-node positions loaded from BuildingComp.PowerModule.
@@ -189,6 +209,12 @@ pub struct DynamicTile {
     pub memory: Vec<f64>,
     #[serde(default)]
     pub duct_rec_dir: u8,
+    /// Logic turret control (`control shoot x y shoot` / `shootp`):
+    /// `(aim_x, aim_y, shooting, target_unit_id)` in world units;
+    /// `target_unit_id` is -1 for point aims. `None` = automatic targeting
+    /// (official ControlI state on TurretBuild; audit H18).
+    #[serde(default)]
+    pub logic_control: Option<(f32, f32, f32, i32)>,
     #[serde(default)]
     pub unloader_offset: i16,
     /// Per-item transport positions for conveyors (257/258/260) and stack
@@ -201,7 +227,8 @@ pub struct DynamicTile {
     /// stutters). Empty for non-transport blocks and old saves.
     #[serde(default)]
     pub conveyor_items: Vec<(i16, f32)>,
-    /// P0-10: typed private metadata for unit factories (blocks 377-379).
+    /// P0-10: typed private metadata for unit factories (Serpulo 377-379
+    /// and Erekir fabricators 386-388).
     /// The official `UnitFactoryBuild` keeps its selected command in a
     /// dedicated building field; the legacy checkpoint format smuggled it
     /// into `config` as a `[254, command]` suffix. Loads migrate that suffix
@@ -239,6 +266,7 @@ impl DynamicTile {
 impl Default for DynamicTile {
     fn default() -> Self {
         DynamicTile {
+            logic_control: None,
             position: 0,
             block: 0,
             rotation: 0,
@@ -253,6 +281,7 @@ impl Default for DynamicTile {
             transport_progress: 0.0,
             ammo_units: 0.0,
             inventory: Vec::new(),
+            payload_inventory: Vec::new(),
             power_stored: 0.0,
             power_links: Vec::new(),
             liquid_inventory: Vec::new(),
@@ -362,6 +391,11 @@ pub struct PersistedWorld {
     /// puddles the client is drawing. Absent in earlier revisions.
     #[serde(default)]
     pub(crate) puddles: Vec<PersistedPuddle>,
+    /// Live Rules JSON (ASTRA R02, revision 15). Map + Gamemode + setrule /
+    /// operator overrides as the client would see them. Empty in older saves:
+    /// those keep the map-derived `WaveRules`.
+    #[serde(default)]
+    pub(crate) rules_json: String,
 }
 
 /// One puddle in the JSON checkpoint (round 73, revision 14).
@@ -464,6 +498,15 @@ pub(crate) mod logic_control {
     pub(crate) const STOP: u8 = 1;
     pub(crate) const MOVE: u8 = 2;
     pub(crate) const PATHFIND: u8 = 3;
+    /// `ucontrol approach`: like MOVE but the unit halts once inside the
+    /// approach radius (LogicAI `moveTo(target, moveRad - 7f, 7, ...)`).
+    /// The radius itself travels in [`UnitOrder::target_id`] as raw
+    /// `f32::to_bits` (movement orders otherwise keep it at -1).
+    pub(crate) const APPROACH: u8 = 4;
+    /// `ucontrol autoPathfind`: LogicAI hunts the closest enemy core
+    /// (`unit.closestEnemyCore()`); flying units move directly, ground units
+    /// use the ControlPathfinder.
+    pub(crate) const AUTO_PATHFIND: u8 = 5;
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -555,6 +598,8 @@ pub struct LoadedWorld {
     pub(crate) game_stats: crate::state::game_state::GameStats,
     /// Persisted puddles (revision 14; empty for v<=13).
     pub(crate) puddles: Vec<PersistedPuddle>,
+    /// Live Rules JSON (revision 15; empty for v<=14).
+    pub(crate) rules_json: String,
 }
 
 /// Static spatial index of mineable base-map ore tiles (round 74 fix).
@@ -566,6 +611,50 @@ pub struct OreIndex {
     pub per_item: Vec<u32>,
     /// Total indexed ore tiles (any item).
     pub total: usize,
+}
+
+/// One cached rebuild-plan site from the periodic team BuildAI broken-block
+/// scan (`BuilderAI.rebuildPeriod`; x/y derive from `position`).
+#[derive(Clone, Debug)]
+pub(crate) struct AiRebuildSite {
+    pub(crate) position: i32,
+    pub(crate) block: i16,
+    pub(crate) rotation: u8,
+    pub(crate) team: u8,
+    pub(crate) config: Vec<u8>,
+}
+
+/// Team BuildAI plan-pursuit bookkeeping for unreachable-site abandonment:
+/// best approach distance achieved toward `position` so far and ticks
+/// accumulated without improving it (vanilla BuildAI discards plans it
+/// cannot reach).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AiPlanPursuit {
+    pub(crate) position: i32,
+    pub(crate) best_distance: f32,
+    pub(crate) stall_ticks: f32,
+}
+
+/// Transient team BuildAI state, never persisted: the periodic tombstone
+/// site scan, plans abandoned as unreachable until the next fresh scan, and
+/// per-builder pursuit of the plan they are walking toward.
+#[derive(Debug)]
+pub(crate) struct AiRebuildState {
+    pub(crate) last_scan_time: f32,
+    pub(crate) sites: Vec<AiRebuildSite>,
+    pub(crate) abandoned: Vec<(i32, i32)>,
+    pub(crate) pursuit: std::collections::HashMap<i32, AiPlanPursuit>,
+}
+
+impl Default for AiRebuildState {
+    fn default() -> Self {
+        Self {
+            last_scan_time: f32::NEG_INFINITY,
+            sites: Vec::new(),
+            abandoned: Vec::new(),
+            pursuit: std::collections::HashMap::new(),
+        }
+    }
 }
 
 pub struct DynamicWorld {
@@ -589,13 +678,19 @@ pub struct DynamicWorld {
     pub(crate) base_buildings: DashMap<i32, BaseBuildingState>,
     pub(crate) floors: Vec<i16>,
     pub(crate) overlays: Vec<i16>,
-    pub(crate) enemy_spawns: Vec<(i16, i16)>,
+    /// Wave spawn points for the CURRENT mode. Runtime mode switches
+    /// rewrite this (Attack adds wave-team cores, leaving Attack drops
+    /// them), so it lives behind a lock instead of being fixed at host time.
+    pub(crate) enemy_spawns: parking_lot::RwLock<Vec<(i16, i16)>>,
     pub(crate) enemies: DashMap<i32, EnemyUnit>,
     /// Insertion order of live units, mirroring `Groups.unit` (desktop 158.1
     /// `EntityGroup` backing `Seq(ordered=false)`): add appends, remove is
     /// swap-remove. `ubind @UnitType` rebuilds `TeamData.unitCache` by
     /// iterating this sequence — not by unit id.
     pub(crate) unit_group_order: parking_lot::Mutex<Vec<i32>>,
+    /// RtsAI.damagedSet rolling window: buildings damaged since the last
+    /// squad retarget, as (position, tick). Runtime-only (never persisted).
+    pub(crate) damaged_window: parking_lot::Mutex<Vec<(i32, u64)>>,
     pub(crate) players: DashMap<i32, PlayerCombatState>,
     pub(crate) player_sessions: DashMap<i32, SessionPlayer>,
     pub(crate) player_profiles: DashMap<String, PlayerCombatState>,
@@ -607,6 +702,13 @@ pub struct DynamicWorld {
     pub(crate) next_projectile_id: AtomicI32,
     pub(crate) overdrive_boosts: DashMap<i32, TimedBoost>,
     pub(crate) heal_suppression: DashMap<i32, f32>,
+    /// Official `BuildingComp.lastDamageTime` stand-in for standing dynamic
+    /// and base buildings (position -> simulation tick of last damage). Feeds
+    /// the RepairBeamWeapon `wasRecentlyDamaged` window.
+    pub(crate) building_last_damage: DashMap<i32, f32>,
+    /// Per-unit Erekir RepairBeamWeapon strength ramp (unit id -> 0..1),
+    /// official `HealBeamMount.strength` lerpDelta ramp.
+    pub(crate) repair_beam_strengths: DashMap<i32, f32>,
     /// Oct ForceFieldAbility area shields, keyed by oct unit id.
     pub(crate) force_fields: DashMap<i32, ForceFieldState>,
     pub(crate) tiles: DashMap<i32, DynamicTile>,
@@ -628,9 +730,14 @@ pub struct DynamicWorld {
     /// cooldown means the last search found nothing and the next scan is
     /// deferred; 0 without cooldown forces a fresh scan.
     pub(crate) mono_mining_targets: DashMap<i32, (i32, f32)>,
+    /// Round 4: transient team BuildAI lifecycle state (rebuildPeriod site
+    /// cache + unreachable-plan abandonment). Runtime-only, never persisted.
+    pub(crate) ai_rebuild_state: parking_lot::Mutex<AiRebuildState>,
     pub(crate) navigation_revision: AtomicU64,
     pub(crate) ground_navigation: parking_lot::Mutex<Option<NavigationField>>,
     pub(crate) leg_navigation: parking_lot::Mutex<Option<NavigationField>>,
+    /// Naval flowfield (audit H13): water-only passability for naval units.
+    pub(crate) naval_navigation: parking_lot::Mutex<Option<NavigationField>>,
     pub(crate) save_path: PathBuf,
     pub(crate) team_build_plans: parking_lot::RwLock<crate::engine::typeio::TeamBlocks>,
     /// Global logic flags (setflag/getflag), keyed by name.
@@ -645,7 +752,7 @@ pub struct DynamicWorld {
     pub(crate) base_turret_progress: DashMap<i32, f32>,
     /// Reload progress (ticks) for prebuilt map menders.
     pub(crate) base_mender_progress: DashMap<i32, f32>,
-    /// Live logic executors for processor tiles (431-433), keyed by position.
+    /// Live logic executors for processor tiles (432-434), keyed by position.
     pub(crate) logic_executors: DashMap<i32, crate::logic::ExecutorState>,
     /// Pending packed DisplayCmd values for logic displays. This mirrors
     /// LogicDisplayBuild.commands; it is transient rendering state and is not
@@ -758,6 +865,17 @@ impl DynamicWorld {
         if !order.contains(&id) {
             order.push(id);
         }
+    }
+
+    /// Assembly-drone ids currently tethered to a UnitAssembler tile.
+    pub(crate) fn assembler_drone_ids(&self, position: i32) -> Vec<i32> {
+        self.game_state
+            .extras
+            .assembler_drones
+            .lock()
+            .get(&position)
+            .map(|bind| bind.unit_ids.clone())
+            .unwrap_or_default()
     }
 
     /// Swap-remove `id` from `Groups.unit` order (unordered Seq).
@@ -1156,6 +1274,13 @@ pub struct EnemyUnit {
     /// ClientSnapshot overwrites it for possessed units; disconnect clears it.
     #[serde(default = "default_update_building")]
     pub update_building: bool,
+    /// TimedKillUnit self-destruct countdown (`TimedKillUnit.time`, seconds).
+    /// Only aged for `entity_class == 39`; the wire mirrors `lifetime`.
+    #[serde(default)]
+    pub missile_time: f32,
+    /// Official `Unit.drownTime` 0..1. Reaches 1 in deep liquid floors.
+    #[serde(default)]
+    pub drown_progress: f32,
 }
 
 pub(crate) const fn default_update_building() -> bool {
@@ -1193,6 +1318,14 @@ pub(crate) fn enemy_team() -> u8 {
     2
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectileHit {
+    Player(i32),
+    Unit(i32),
+    Building(i32),
+    Core(u8, i32),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Projectile {
     pub(crate) target_id: i32,
@@ -1210,6 +1343,16 @@ pub(crate) struct Projectile {
     pub(crate) pierce_buildings: u8,
     pub(crate) spawn_reign_frags: bool,
     pub(crate) homing_range: f32,
+    /// BulletType.homingPower for updateHoming steering: vanilla turns the
+    /// bullet heading at most `homingPower * Time.delta * 50` degrees/tick.
+    pub(crate) homing_power: f32,
+    /// BulletType.homingDelay (JAR default -1f): updateHoming does nothing
+    /// before the bullet has flown this many ticks (bullet.time gate).
+    pub(crate) homing_delay: f32,
+    /// BulletType.collidesAir / collidesGround / heals() for updateHoming.
+    pub(crate) collides_air: bool,
+    pub(crate) collides_ground: bool,
+    pub(crate) heals: bool,
     pub(crate) enemy_target_position: Option<i32>,
     pub(crate) enemy_target_core: bool,
     pub(crate) apply_direct_on_impact: bool,
@@ -1224,12 +1367,15 @@ pub(crate) struct Projectile {
     pub(crate) source_position: Option<i32>,
     pub(crate) damage_interval: Option<f32>,
     pub(crate) damage_timer: f32,
+    /// BulletComp.collided: a piercing projectile hits each body once.
+    pub(crate) collided: Vec<ProjectileHit>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PendingBuild {
     pub(crate) position: i32,
     pub(crate) block: i16,
+    pub(crate) previous_block: i16,
     pub(crate) rotation: u8,
     pub(crate) config: Vec<u8>,
     pub(crate) occupied: Vec<i32>,

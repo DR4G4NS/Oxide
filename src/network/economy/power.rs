@@ -107,9 +107,9 @@ pub(crate) fn power_role(block: i16) -> Option<PowerRole> {
         406 => (0.0, 2.5, 0.0, 0.0),
         407 => (0.0, 3.0, 0.0, 0.0),
         408 | 409 => (0.0, 2.0, 0.0, 0.0),
-        426 => (0.0, 8.0, 0.0, 0.0),
-        425 => (0.0, 4.0, 0.0, 0.0),
-        428 => (0.0, 10.0, 0.0, 0.0),
+        427 => (0.0, 8.0, 0.0, 0.0),
+        426 => (0.0, 4.0, 0.0, 0.0),
+        429 => (0.0, 10.0, 0.0, 0.0),
         309 => (1.8, 0.0, 0.0, 0.0),
         310 => (5.5, 0.0, 0.0, 0.0),
         312 => (4.5, 0.0, 0.0, 0.0),
@@ -134,7 +134,7 @@ pub(crate) fn power_role(block: i16) -> Option<PowerRole> {
         395 => (0.0, 3.0, 0.0, 0.0),
         396 => (0.0, 3.5, 0.0, 0.0),
         397 => (0.0, 1.0, 0.0, 0.0),
-        419 => (0.0, 0.05, 0.0, 0.0),
+        420 => (0.0, 0.05, 0.0, 0.0),
         // Round 74f: every official hasPower block (JAR 158.1 probe) must
         // have a role — the relink sweep and link_valid_for_node reject
         // and PRUNE links to buildings missing here, which made manual
@@ -148,10 +148,10 @@ pub(crate) fn power_role(block: i16) -> Option<PowerRole> {
         376 => (0.0, 3.0, 0.0, 0.0),  // malign
         402 => (0.0, 1.75, 0.0, 0.0), // payload-mass-driver
         403 => (0.0, 2.5, 0.0, 0.0),  // large-payload-mass-driver
-        420 => (0.0, 1.0, 0.0, 0.0),  // legacy-mech-pad
-        421 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory
-        422 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-air
-        423 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-ground
+        421 => (0.0, 1.0, 0.0, 0.0),  // legacy-mech-pad
+        422 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory
+        423 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-air
+        424 => (0.0, 1.0, 0.0, 0.0),  // legacy-unit-factory-ground
         _ => return None,
     };
     Some(PowerRole {
@@ -182,6 +182,15 @@ pub(crate) fn continuous_liquid_efficiency(
     }
     (stored_liquid_amount(tile, liquid) / (amount_per_tick * scaled_delta.max(0.000_001)))
         .clamp(0.0, 1.0)
+}
+
+pub(crate) fn item_explosiveness(item: i16) -> f32 {
+    match item {
+        14 => 1.2,  // blast-compound
+        15 => 0.4,  // pyratite
+        12 => 0.24, // surge-alloy
+        _ => 0.0,
+    }
 }
 
 pub(crate) fn item_flammability(item: i16) -> f32 {
@@ -224,7 +233,7 @@ pub(crate) fn floor_power_attribute(world: &DynamicWorld, tile: &DynamicTile, st
             let x = (position >> 16) as i16 as i32;
             let y = position as i16 as i32;
             (x >= 0 && y >= 0 && x < world.width && y < world.height)
-                .then(|| world.floors[(y * world.width + x) as usize])
+                .then(|| crate::network::combat::floor_at_tile(world, x, y))
         })
         .map(|floor| {
             if steam {
@@ -268,13 +277,34 @@ pub(crate) fn generator_efficiency(
         312 => active_cycle_item(tile, |item| item_radioactivity(item) >= 0.2)
             .map(item_radioactivity)
             .unwrap_or(0.0),
-        313 | 314 => 1.0,
+        313 | 314 => {
+            let solar = world.wave_rules.read().solar_multiplier.max(0.0);
+            let light_env: f32 = world
+                .game_state
+                .extras
+                .weather
+                .read()
+                .iter()
+                .map(|entry| {
+                    let attr = match entry.weather_id {
+                        0 => -0.15, // snow
+                        1 => -0.2,  // rain
+                        2 => -0.1,  // sandstorm
+                        3 => -0.25, // sporestorm
+                        _ => 0.0,
+                    };
+                    attr * entry.intensity.clamp(0.0, 1.0)
+                })
+                .sum();
+            solar * (1.0 + light_env).max(0.0)
+        }
         315 => (inventory_count(&tile.inventory, 7).max(0) as f32
             / crate::network::buildings::reactor::ITEM_CAPACITY as f32)
             .clamp(0.0, 1.0),
         316 => {
             let fuel = active_cycle_item(tile, |item| item == 14).is_some() as u8 as f32;
             fuel * continuous_liquid_efficiency(tile, 3, 0.25, scaled_delta)
+                * tile.output_liquid_amount.clamp(0.0, 1.0).powi(5)
         }
         320 => floor_power_attribute(world, tile, true),
         321 => continuous_liquid_efficiency(tile, 7, 2.0 / 60.0, scaled_delta).min(
@@ -379,26 +409,11 @@ pub(crate) fn should_consume_power(world: &DynamicWorld, tile: &DynamicTile) -> 
                 && inventory_total(&tile.inventory) - 5 + 4 <= 30
         }
         200 => stored_liquid_amount(tile, 0) > 0.000_001,
-        377..=379 | 386..=388 => {
-            unit_factory_recipe(tile.block, &tile.config).is_some_and(|plan| {
-                plan.requirements
-                    .iter()
-                    .all(|(item, amount)| inventory_count(&tile.inventory, *item) >= *amount)
-                    && can_create_unit(world, tile.team, plan.unit_type)
-            })
-        }
-        380..=383 | 389..=392 => {
-            if tile.stored_amount <= 0 {
-                return false;
-            }
-            reconstructor_recipe(tile.block).is_some_and(|recipe| {
-                recipe
-                    .items
-                    .iter()
-                    .all(|(item, amount)| inventory_count(&tile.inventory, *item) >= *amount)
-                    && (recipe.liquid_rate <= 0.0 || stored_liquid_amount(tile, 3) > 0.000_001)
-            })
-        }
+        377..=383 | 386..=392 => unit_block_consumption_ready(
+            tile,
+            &world.wave_rules.read(),
+            *world.game_state.simulation_time.read(),
+        ),
         _ => true,
     }
 }
@@ -746,12 +761,11 @@ pub(crate) fn calculate_power_network(
             }
         }
         for index in component {
-            // PowerModule.status is graph-wide and remains meaningful for an
-            // inactive consumer. Its *nominal* ConsumePower marks it for
-            // snapshots even when shouldConsumePower excluded its demand.
-            if power_role(vertices[index].0.block).is_some_and(|role| role.demand > 0.0) {
-                efficiency.insert(vertices[index].0.position, status);
-            }
+            // PowerModule.status is graph-wide. Publish it for every member
+            // so writeSync (impact reactor, factories, generators) does not
+            // default a live tile to 0/1 just because it is missing from
+            // the map. ConsumePower on the client reads this field.
+            efficiency.insert(vertices[index].0.position, status);
         }
     }
     efficiency
@@ -769,12 +783,12 @@ pub(crate) fn economy_is_power_node(block: i16) -> bool {
     crate::network::buildings::power::is_power_node(block)
 }
 
+/// `(BeamNode.range, block.size)` for BeamNode subclasses. The range comes
+/// from `src/game/block_beam_ranges.tsv` (v159.7 Blocks.java oracle); the
+/// footprint from `block_sizes.tsv`.
 pub(crate) fn beam_node_spec(block: i16) -> Option<(i32, i32)> {
-    match block {
-        317 => Some((10, 1)),
-        318 => Some((23, 3)),
-        _ => None,
-    }
+    let range = crate::game::content::block_beam_range(block)?;
+    Some((range, i32::from(crate::game::content::block_size(block))))
 }
 
 /// `BeamNodeBuild.updateDirections`: scan each cardinal ray from just beyond
@@ -840,9 +854,39 @@ pub(crate) fn beam_east_target(world: &DynamicWorld, source: &DynamicTile) -> Op
     beam_target(world, source, 0)
 }
 
+/// Drop materialized links whose target building no longer exists. Java's
+/// real cleanup is `powerGraphRemoved` (BuildingComp.java:1172-1183), run
+/// from `onProximityRemoved` on EVERY destruction - including `crushFragile`
+/// paths that bypass the placement lifecycle - so a vanilla server would not
+/// stream dead entries either; `getPowerConnections` only filters reads
+/// (BuildingComp.java:1206-1207). The port materializes `power_links` as a
+/// plain list, so it prunes eagerly to keep the world stream and graph hints
+/// free of phantom lasers with the same net result.
+fn prune_dead_power_links(world: &DynamicWorld) {
+    let holders: Vec<(i32, Vec<i32>)> = world
+        .tiles
+        .iter()
+        .filter(|tile| !tile.power_links.is_empty())
+        .map(|tile| (tile.position, tile.power_links.clone()))
+        .collect();
+    for (holder, links) in holders {
+        let dead: Vec<i32> = links
+            .into_iter()
+            .filter(|target| !world.tiles.contains_key(target))
+            .collect();
+        if dead.is_empty() {
+            continue;
+        }
+        if let Some(mut live) = world.tiles.get_mut(&holder) {
+            live.power_links.retain(|link| !dead.contains(link));
+        }
+    }
+}
+
 /// Rescan every BeamNode and write bidirectional `power_links`, matching
 /// `BeamNodeBuild.updateDirections` after the power-graph pass.
 pub(crate) fn refresh_beam_power_links(world: &DynamicWorld) {
+    prune_dead_power_links(world);
     let beams: Vec<(DynamicTile, Vec<i32>)> = world
         .tiles
         .iter()
@@ -934,42 +978,20 @@ pub(crate) fn power_connected(
     let right_explicit = right.0.power_links.contains(&left.0.position);
     // Beam PowerModule links are derived and can be stale after an obstacle
     // or rotation/topology change; re-evaluate their four Java rays instead
-    // of trusting the persisted list. Configured PowerNode links pass through
-    // `linkValid` (range/team/capacity). Autolink LOS is a separate gate.
-    if beam_node_spec(left.0.block).is_none() && beam_node_spec(right.0.block).is_none() {
-        let explicit_valid = (left_explicit
-            && if economy_is_power_node(left.0.block) {
-                crate::network::buildings::power::link_valid_for_node(
-                    world,
-                    &left.0,
-                    right.0.position,
-                )
-            } else {
-                !economy_is_power_node(right.0.block)
-                    || crate::network::buildings::power::link_valid_for_node(
-                        world,
-                        &right.0,
-                        left.0.position,
-                    )
-            })
-            || (right_explicit
-                && if economy_is_power_node(right.0.block) {
-                    crate::network::buildings::power::link_valid_for_node(
-                        world,
-                        &right.0,
-                        left.0.position,
-                    )
-                } else {
-                    !economy_is_power_node(left.0.block)
-                        || crate::network::buildings::power::link_valid_for_node(
-                            world,
-                            &left.0,
-                            right.0.position,
-                        )
-                });
-        if explicit_valid {
-            return true;
-        }
+    // of trusting the persisted list.
+    //
+    // Already-materialized PowerModule.links are live edges, matching
+    // BuildingComp.getPowerConnections (it walks `power.links` without
+    // re-running PowerNode.linkValid / maxNodes). Re-validating capacity
+    // here dropped reverse-only consumer→node lasers: the factory still
+    // listed the node, the node was at maxNodes, the graph split, and the
+    // 6 s BlockSnapshot wrote status=0 / progress=0 over the client's
+    // prediction.
+    if beam_node_spec(left.0.block).is_none()
+        && beam_node_spec(right.0.block).is_none()
+        && (left_explicit || right_explicit)
+    {
+        return true;
     }
     if beam_nodes_connected(world, &left.0, &right.0) {
         return true;

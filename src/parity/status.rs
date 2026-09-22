@@ -90,7 +90,9 @@ pub(super) fn compare_status_fixture(fixture: &Value) -> Result<(), String> {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         }
     }
 

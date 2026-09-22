@@ -30,9 +30,10 @@ pub(crate) fn sync_unit_build_plans(
     plans: &[BuildPlan],
     update_building: bool,
 ) {
-    let ControlledUnit::Standard(unit_id) = player.controlled_unit else {
-        return;
-    };
+    let unit_id = player
+        .controlled_unit
+        .standard_id()
+        .unwrap_or(player.unit_id);
     let Some(mut unit) = world.enemies.get_mut(&unit_id) else {
         return;
     };
@@ -125,6 +126,18 @@ pub(crate) fn assist_visual_plan(world: &DynamicWorld, unit: &EnemyUnit) -> Opti
 
 pub(crate) fn rebuild_plan(tile: &DynamicTile) -> Option<(i16, u8, u8, Vec<u8>)> {
     let block = i16::try_from(tile.stored_amount.checked_sub(1)?).ok()?;
-    (tile.block == 0 && (1..446).contains(&block) && tile.team == 1)
+    (tile.block == 0 && (1..447).contains(&block) && tile.team == 1)
+        .then(|| (block, tile.rotation, tile.team, tile.config.clone()))
+}
+
+/// Team-agnostic tombstone read for the autonomous team BuildAI
+/// (`mindustry.ai.types.BuilderAI` / `PrebuildAI` rebuild loop). Unlike
+/// [`rebuild_plan`] this keeps the owning team so each AI team only
+/// rebuilds its own destroyed blocks (`Teams.TeamData.blocks` in the
+/// official server). The command-driven player rebuild path keeps the
+/// team-1 gate above.
+pub(crate) fn ai_rebuild_plan(tile: &DynamicTile) -> Option<(i16, u8, u8, Vec<u8>)> {
+    let block = i16::try_from(tile.stored_amount.checked_sub(1)?).ok()?;
+    (tile.block == 0 && (1..447).contains(&block))
         .then(|| (block, tile.rotation, tile.team, tile.config.clone()))
 }

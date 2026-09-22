@@ -217,6 +217,13 @@ pub(crate) fn normalized_conveyor_items(tile: &DynamicTile) -> Vec<(i16, f32)> {
         return sanitize_conveyor_queue(&tile.conveyor_items);
     }
     if tile.stored_item < 0 || tile.stored_amount <= 0 {
+        if let Some(&(item, amount)) = tile.inventory.first() {
+            let amount = (amount as usize).min(CONVEYOR_CAPACITY);
+            let legacy: Vec<_> = (0..amount)
+                .map(|index| (item, (1.0 - index as f32 * CONVEYOR_ITEM_SPACE).max(0.0)))
+                .collect();
+            return sanitize_conveyor_queue(&legacy);
+        }
         return Vec::new();
     }
 
@@ -403,6 +410,8 @@ pub(crate) fn simulate_base_drills(world: &DynamicWorld, delta_ticks: f32) -> bo
             continue;
         };
         let synthetic = DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: building.position,
             block: building.block,
             rotation: 0,
@@ -491,6 +500,17 @@ pub(crate) fn simulate_logistics(
 ) -> bool {
     let keys: Vec<_> = world.tiles.iter().map(|tile| *tile.key()).collect();
     let mut changed = false;
+    // Official Block.dumpTime = 5 (DrillBuild.updateTile:
+    // `timer(timerDump, dumpTime / timeScale)`): a drill attempts to dump ONE
+    // buffered item every five ticks, not every tick. Dumping ungated pushed
+    // items onto belts up to 5x faster than the client predicts, so the two
+    // states diverged between block snapshots and every authoritative 6 s
+    // correction looked like belts and drills "resetting" (r9-reset-bug).
+    let dump_tick_ready = world
+        .game_state
+        .world_ticks
+        .load(Ordering::Relaxed)
+        .is_multiple_of(5);
     for key in &keys {
         let Some(tile) = world.tiles.get(key).map(|tile| tile.clone()) else {
             continue;
@@ -555,7 +575,9 @@ pub(crate) fn simulate_logistics(
                 changed = true;
             }
         }
-        changed |= dump_drill_item(world, *key);
+        if dump_tick_ready {
+            changed |= dump_drill_item(world, *key);
+        }
     }
 
     changed |= simulate_junctions(world, delta_ticks);

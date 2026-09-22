@@ -17,6 +17,12 @@ use crate::network::world::PendingConnection;
 /// connection registry; tests use [`NOOP`].
 pub trait FrameEmit {
     fn broadcast(&self, frame: Vec<u8>);
+    /// Place/break RPCs that create or destroy a client `ConstructBlock`.
+    /// Dropping them from a full TCP queue leaves the beam on a ghost with
+    /// no fade-in; the default falls back to [`Self::broadcast`].
+    fn broadcast_critical(&self, frame: Vec<u8>) {
+        self.broadcast(frame);
+    }
     fn enqueue_to(&self, connection_id: i32, frame: Vec<u8>, critical: bool) -> bool;
     fn for_each_connection(&self, visit: &mut dyn FnMut(i32));
     fn connection_ip(&self, connection_id: i32) -> String {
@@ -42,6 +48,9 @@ impl FrameEmit for DashMap<i32, PendingConnection> {
     fn broadcast(&self, frame: Vec<u8>) {
         broadcast(self, frame);
     }
+    fn broadcast_critical(&self, frame: Vec<u8>) {
+        enqueue_broadcast_critical(self, frame);
+    }
     fn enqueue_to(&self, connection_id: i32, frame: Vec<u8>, critical: bool) -> bool {
         self.get(&connection_id)
             .map(|connection| enqueue_outbound(connection.value(), frame, critical))
@@ -62,6 +71,9 @@ impl FrameEmit for DashMap<i32, PendingConnection> {
 impl FrameEmit for Arc<DashMap<i32, PendingConnection>> {
     fn broadcast(&self, frame: Vec<u8>) {
         self.as_ref().broadcast(frame);
+    }
+    fn broadcast_critical(&self, frame: Vec<u8>) {
+        self.as_ref().broadcast_critical(frame);
     }
     fn enqueue_to(&self, connection_id: i32, frame: Vec<u8>, critical: bool) -> bool {
         self.as_ref().enqueue_to(connection_id, frame, critical)
@@ -136,6 +148,17 @@ pub(crate) fn enqueue_outbound_routed(
 pub(crate) fn broadcast(connections: &DashMap<i32, PendingConnection>, frame: Vec<u8>) {
     for connection in connections.iter() {
         enqueue_outbound_routed(connection.value(), frame.clone(), false, false);
+    }
+}
+
+/// Reliable TCP, never dropped as a non-critical frame. BeginPlace and
+/// ConstructFinish must arrive or the 159.7 client keeps the plan ghost.
+pub(crate) fn enqueue_broadcast_critical(
+    connections: &DashMap<i32, PendingConnection>,
+    frame: Vec<u8>,
+) {
+    for connection in connections.iter() {
+        enqueue_outbound_routed(connection.value(), frame.clone(), true, true);
     }
 }
 

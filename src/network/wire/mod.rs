@@ -1,13 +1,17 @@
 //! Wire frame-format layer. Domain code builds official 158.1 frame layouts
 //! here; the listener/session adapters own socket delivery.
 
+pub(crate) mod calls;
 pub(crate) mod encode;
 pub(crate) use encode::{
     batch_block_snapshot_entries, block_snapshot_requires_world, coalesce_build_health,
     encode_block_snapshot, encode_block_snapshot_entry, encode_block_snapshots,
     encode_block_snapshots_with_threshold, encode_build_destroyed_frame,
-    encode_build_health_update_frame, encode_construct_block_snapshot, encode_debug_status_client,
-    encode_enemy_entity_snapshots, encode_initial_entity_snapshot, encode_player_disconnect_frames,
+    encode_build_health_update_frame, encode_construct_block_snapshot,
+    encode_construct_block_snapshot_with_previous, encode_construct_block_snapshot_with_progress,
+    encode_debug_status_client, encode_enemy_entity_snapshots,
+    encode_enemy_entity_snapshots_visible_to, encode_initial_entity_snapshot,
+    encode_initial_entity_snapshot_in, encode_player_disconnect_frames, encode_set_rules_frame,
     encode_state_snapshot, encode_state_snapshot_for, encode_unit_spawn_payload,
     finish_block_snapshot_batch, frame_generated_packet, max_synced_plans, state_snapshot_teams,
     take_coalesced_build_health, write_puddle_sync, write_unit_plans_queue, write_unit_sync,
@@ -25,7 +29,7 @@ pub(crate) use transfer::{
     broadcast_player_snapshot, broadcast_respawn, deposit_player_inventory,
     encode_take_items_frame, encode_transfer_item_to_frame, enemy_weapon_mount_count,
     item_storage_target, nearest_opposing_unit, player_can_transfer, respawn_session_player,
-    withdraw_items_to_player, ItemStorageTarget,
+    unit_clear_session_player, withdraw_items_to_player, ItemStorageTarget,
 };
 pub(crate) mod tile_config;
 pub(crate) use tile_config::{
@@ -55,11 +59,11 @@ pub(crate) use bootstrap::{
 };
 pub(crate) mod persistence;
 pub(crate) use persistence::{
-    apply_loaded_team_cores, apply_loaded_team_items, decode_typeio_string,
-    encode_construct_finish, encode_construct_finish_for_unit, encode_typeio_string, load_tiles,
-    outbound_typeio_object, persist_tiles, persist_world_sync, sanitize_standalone_payload,
-    sanitize_unit_payloads, snapshot_persisted_world, valid_build_position, PersistJob,
-    PersistenceWorker,
+    apply_loaded_team_cores, apply_loaded_team_items, apply_loaded_wave_rules,
+    checkpoint_rules_json, decode_typeio_string, encode_construct_finish,
+    encode_construct_finish_for_unit, encode_typeio_string, load_tiles, outbound_typeio_object,
+    persist_tiles, persist_world_sync, sanitize_standalone_payload, sanitize_unit_payloads,
+    snapshot_persisted_world, valid_build_position, PersistJob, PersistenceWorker,
 };
 
 pub(crate) mod outbound;

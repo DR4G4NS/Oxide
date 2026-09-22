@@ -27,7 +27,8 @@ pub(crate) use mining::{
     choose_navigation_step_with, enemy_navigation_target, heal_building, heal_building_for_team,
     heal_buildings_in_radius, heal_nearest_building, heal_nearest_building_by,
     heal_nearest_building_flat, move_repair_unit, move_unit_toward, navigation_tile_avoided,
-    nearest_mineable_ore, unit_avoidance_requests, UnitAvoidanceRequest, ORE_CELL_TILES,
+    nearest_mineable_ore, team_has_damaged_building, unit_avoidance_requests, unit_idle_retreat,
+    UnitAvoidanceRequest, ORE_CELL_TILES,
 };
 pub(crate) mod controller;
 pub(crate) use controller::{
@@ -38,12 +39,12 @@ pub(crate) use controller::{
     write_carried_payload, write_unit_controller_sync, write_unit_payload, ControllerSnapshot,
 };
 mod spawn;
-pub(crate) use spawn::EnemySpec;
 pub(crate) use spawn::{
     enemy_spec, nearest_enemy_spawn, parse_unit_type, spawn_enemy_units, spawn_unit_world,
-    ANTUMBRA, ATRAX, CRAWLER, DAGGER, FLARE, FORTRESS, HORIZON, MACE, MONO, NOVA, PULSAR, QUASAR,
-    REIGN, RETUSA, RISSO, SCEPTER, SPIROCT, VELA, ZENITH,
+    ANTUMBRA, ATRAX, CORVUS, CRAWLER, DAGGER, FLARE, FORTRESS, HORIZON, MACE, MONO, NOVA, PULSAR,
+    QUASAR, REIGN, RETUSA, RISSO, SCEPTER, SPIROCT, TOXOPID, VELA, ZENITH,
 };
+pub(crate) use spawn::{repair_field_spec, EnemySpec};
 /// Official `SpawnGroup.getSpawned(wave)` (SpawnGroup.java v158.1):
 /// `min(unitAmount + (int)(((wave - begin) / spacing) / unitScaling), max)`,
 /// where `unitScaling == Integer.MAX_VALUE` (`never`) contributes 0 so the
@@ -56,13 +57,13 @@ pub(crate) use status::{
 
 /// `UnitOrder` that exists without an active target (factory/wave default
 /// setups, exhausted queues) does NOT count.
-mod rules;
+pub(crate) mod rules;
 pub(crate) use rules::{
     arc_json_to_strict, initial_official_wave_groups, map_spawn_group_amount, map_wave_spawns,
     parse_loadout, parse_spawn_group, parse_wave_rules, parse_wave_rules_report,
-    spawn_group_amount, status_effect_id_by_name, wave_spawn, wave_spawn_with_effect,
-    MapSpawnGroup, SpawnGroupParse, TeamRule, WaveRules, DEFAULT_INITIAL_WAVE_SPACING,
-    DEFAULT_WAVE_SPACING,
+    serialize_live_rules_json, spawn_group_amount, status_effect_id_by_name, wave_spawn,
+    wave_spawn_with_effect, MapSpawnGroup, SpawnGroupParse, TeamRule, WaveRules, WaveSpawn,
+    DEFAULT_INITIAL_WAVE_SPACING, DEFAULT_WAVE_SPACING,
 };
 
 /// Official `CommandAI.hasCommand()` (158.1: `targetPos != null`) evaluated
@@ -81,10 +82,10 @@ pub(crate) use orders::{
 };
 mod control;
 pub(crate) use control::{
-    acquire_command_control, apply_logic_unit_movement, detach_unit_control,
-    integrate_unit_velocity, logic_accelerate_toward, logic_movement_snapshot,
-    release_command_control, switch_player_unit, unit_move_physics, unit_possessed_by,
-    LogicMovementSnapshot,
+    acquire_command_control, apply_logic_unit_movement, clamp_ground_unit_to_solids,
+    detach_unit_control, integrate_unit_velocity, integrate_unit_velocity_drag,
+    logic_accelerate_toward, logic_movement_snapshot, release_command_control, switch_player_unit,
+    unit_move_physics, unit_possessed_by, LogicMovementSnapshot,
 };
 
 /// Official `UnitType` movement constants for LogicAI `moveAt`/`moveTo`.
@@ -126,7 +127,9 @@ mod status_tests {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: Default::default(),
+            drown_progress: 0.0,
         }
     }
 
@@ -326,7 +329,7 @@ mod authority_tests {
             base_buildings: dashmap::DashMap::new(),
             floors: vec![0; 40 * 40],
             overlays: vec![0; 40 * 40],
-            enemy_spawns: Vec::new(),
+            enemy_spawns: parking_lot::RwLock::new(Vec::new()),
             enemies: dashmap::DashMap::new(),
             players: dashmap::DashMap::new(),
             player_sessions: dashmap::DashMap::new(),
@@ -336,6 +339,7 @@ mod authority_tests {
             next_player_unit_id: std::sync::atomic::AtomicI32::new(2_500_000),
             next_enemy_id: std::sync::atomic::AtomicI32::new(3_000_100),
             unit_group_order: parking_lot::Mutex::new(Vec::new()),
+            damaged_window: parking_lot::Mutex::new(Vec::new()),
             projectiles: dashmap::DashMap::new(),
             next_projectile_id: std::sync::atomic::AtomicI32::new(4_000_000),
             overdrive_boosts: dashmap::DashMap::new(),
@@ -346,10 +350,12 @@ mod authority_tests {
             pending_breaks: dashmap::DashMap::new(),
             mineable_ore: std::sync::OnceLock::new(),
             mono_mining_targets: dashmap::DashMap::new(),
+            ai_rebuild_state: Default::default(),
             tile_footprint: dashmap::DashMap::new(),
             navigation_revision: std::sync::atomic::AtomicU64::new(0),
             ground_navigation: parking_lot::Mutex::new(None),
             leg_navigation: parking_lot::Mutex::new(None),
+            naval_navigation: parking_lot::Mutex::new(None),
             save_path: std::env::temp_dir().join("authority-functional-test.json"),
             network_template: std::sync::Arc::new(Vec::new()),
             persistence_dirty: std::sync::atomic::AtomicBool::new(false),
@@ -362,12 +368,19 @@ mod authority_tests {
             base_turret_progress: dashmap::DashMap::new(),
             base_mender_progress: dashmap::DashMap::new(),
             team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-            wave_rules: parking_lot::RwLock::new(WaveRules::default()),
+            wave_rules: parking_lot::RwLock::new({
+                WaveRules {
+                    waves_enabled: true,
+                    ..Default::default()
+                }
+            }),
             votekick_target: parking_lot::RwLock::new(None),
             votekick_votes: std::sync::atomic::AtomicI32::new(0),
             votekick_voters: dashmap::DashMap::new(),
             votekick_cooldowns: dashmap::DashMap::new(),
             puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+            building_last_damage: dashmap::DashMap::new(),
+            repair_beam_strengths: dashmap::DashMap::new(),
         }
     }
 
@@ -403,7 +416,9 @@ mod authority_tests {
             authority,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: Default::default(),
+            drown_progress: 0.0,
         }
     }
 
@@ -421,9 +436,13 @@ mod authority_tests {
             mouse_x: 0.0,
             mouse_y: 0.0,
             rotation: 0.0,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
             boosting: false,
             shooting: false,
+            building: true,
             last_command: None,
+            docked_type: None,
             active_plans: std::collections::HashSet::new(),
             mining_position: None,
             mining_progress: 0.0,
@@ -1024,6 +1043,7 @@ mod command_queue_tests {
         let id = 3_001_010;
         let wall_position = (30 << 16) | 30;
         let wall = DynamicTile {
+            logic_control: None,
             position: wall_position,
             block: 216,
             team: 2,
@@ -1147,7 +1167,7 @@ mod command_queue_tests {
             y: 2.0,
         });
         let saved = PersistedWorld {
-            version: 14,
+            version: 15,
             map_name: "command-queue-roundtrip".into(),
             tiles: Vec::new(),
             core_items: Vec::new(),
@@ -1166,6 +1186,7 @@ mod command_queue_tests {
             logic_flags: Vec::new(),
             game_stats: Default::default(),
             puddles: Vec::new(),
+            rules_json: String::new(),
         };
         let json = serde_json::to_string(&saved).expect("checkpoint serializes");
         let loaded: PersistedWorld = serde_json::from_str(&json).expect("checkpoint parses");
@@ -1211,8 +1232,9 @@ mod command_timing_tests {
             .insert(FOE, unit(FOE, 6, UnitAuthority::DefaultAi));
         world.unit_orders.insert(UNIT, default_order(UNIT));
         let mut proc = crate::network::world::DynamicTile {
+            logic_control: None,
             position: PROC,
-            block: 431,
+            block: 432,
             team: 1,
             ..Default::default()
         };
@@ -1223,6 +1245,7 @@ mod command_timing_tests {
 
     fn issue_building(world: &DynamicWorld) {
         let wall = crate::network::world::DynamicTile {
+            logic_control: None,
             position: WALL,
             block: 22,
             team: 6,
@@ -1330,8 +1353,9 @@ mod logic_move_timing_tests {
         world.enemies.insert(UNIT, flare);
         world.unit_orders.insert(UNIT, default_order(UNIT));
         let mut proc = crate::network::world::DynamicTile {
+            logic_control: None,
             position: PROC,
-            block: 431,
+            block: 432,
             team: 1,
             ..Default::default()
         };
@@ -1483,8 +1507,12 @@ mod possession_tests {
     use super::authority_tests::{authority_world, default_order, session, unit};
     use super::*;
     use crate::network::decoders::apply_command_units_for_team;
-    use crate::network::wire::{apply_unit_control, respawn_session_player, unit_control_allowed};
-    use crate::network::world::{ControlledUnit, EnemyUnit, PlayerCombatState, UnitOrderTarget};
+    use crate::network::wire::{
+        apply_unit_control, respawn_session_player, unit_clear_session_player, unit_control_allowed,
+    };
+    use crate::network::world::{
+        ControlledUnit, DynamicTile, EnemyUnit, PlayerCombatState, UnitOrderTarget,
+    };
 
     const ACTOR: u8 = 1;
 
@@ -1783,6 +1811,34 @@ mod possession_tests {
         assert!(unit_control_allowed(&world, &admin, &player, 2, id));
     }
 
+    #[test]
+    fn c02_logic_ai_unit_is_possessable_and_player_wins_the_next_tick() {
+        let world = authority_world();
+        let admin = crate::state::administration::Administration::new();
+        let mut player = session(12);
+        world.players.insert(player.unit_id, combat(&player, ACTOR));
+        let id = 3_002_080;
+        let mut bound = mono(id);
+        bound.authority = UnitAuthority::Logic {
+            processor_pos: 1,
+            remaining_ticks: 90.0,
+            processor_generation: 0,
+        };
+        world.enemies.insert(id, bound);
+        assert!(
+            unit_control_allowed(&world, &admin, &player, 2, id),
+            "LogicAI remains isAI and playerControllable"
+        );
+        apply_unit_control(&world, &mut player, 2, id).unwrap();
+        assert_eq!(
+            authority_of(&world, id),
+            UnitAuthority::Player {
+                player_id: player.id
+            }
+        );
+        assert!(!unit_bound_to_logic(&world, id));
+    }
+
     /// Test 5 — a disconnecting player releases the possessed unit with the
     /// command restore — the exact sequence of the TCP teardown
     /// (`switch_player_unit(..., None)` after session removal).
@@ -1826,6 +1882,180 @@ mod possession_tests {
         assert_eq!(authority_of(&world, id), UnitAuthority::Command);
         assert_eq!(order_of(&world, id).command, 4);
         assert_eq!(unit_possessed_by(&world, id), None);
+    }
+
+    #[test]
+    fn c07_respawn_uses_nearest_core_unit_health() {
+        let world = authority_world();
+        crate::network::world::register_team_core(
+            &world,
+            ACTOR,
+            crate::network::world::TeamCore {
+                position: world.core_position,
+                block: 340,
+                health: 4_000.0,
+                max_health: 4_000.0,
+            },
+        );
+        let mut player = session(21);
+        world.players.insert(player.unit_id, combat(&player, ACTOR));
+        world.player_sessions.insert(player.unit_id, player.clone());
+        assert!(respawn_session_player(&mut player, &world).is_some());
+        let health = world.players.get(&player.unit_id).unwrap().health;
+        assert_eq!(
+            health,
+            crate::network::units::enemy_spec(36).unwrap().health,
+            "foundation respawn is beta HP, not a hardcoded alpha 150"
+        );
+    }
+
+    #[test]
+    fn c07_unit_clear_from_possession_returns_to_core_not_dock() {
+        for (player_id, block, core_type) in [(22i32, 340i16, 36i16), (25, 339, 35), (26, 341, 37)]
+        {
+            let world = authority_world();
+            crate::network::world::register_team_core(
+                &world,
+                ACTOR,
+                crate::network::world::TeamCore {
+                    position: world.core_position,
+                    block,
+                    health: 4_000.0,
+                    max_health: 4_000.0,
+                },
+            );
+            let mut player = session(player_id);
+            player.x = 8.0;
+            player.y = 8.0;
+            world.players.insert(player.unit_id, combat(&player, ACTOR));
+            world.player_sessions.insert(player.unit_id, player.clone());
+            let id = 3_000_000 + player_id;
+            let mut dagger = unit(id, ACTOR, UnitAuthority::Command);
+            dagger.x = 16.0;
+            dagger.y = 24.0;
+            world.enemies.insert(id, dagger);
+            apply_unit_control(&world, &mut player, 2, id).unwrap();
+            assert_eq!(player.docked_type, Some(core_type));
+            let old = unit_clear_session_player(&mut player, &world);
+            assert!(old.is_some(), "Serpulo coreUnitDock is false: playerSpawn");
+            assert_eq!(player.controlled_unit, ControlledUnit::Core);
+            let (core_x, core_y) = crate::network::world::core_world_for_team(&world, ACTOR);
+            assert!((player.x - core_x).abs() < 0.01 && (player.y - core_y).abs() < 0.01);
+            let health = world.players.get(&player.unit_id).unwrap().health;
+            assert_eq!(
+                health,
+                crate::network::units::enemy_spec(core_type).unwrap().health,
+                "core block {block} respawns type {core_type}"
+            );
+            assert_eq!(authority_of(&world, id), UnitAuthority::Command);
+        }
+    }
+
+    #[test]
+    fn c07_erekir_unit_clear_docks_in_place() {
+        let world = authority_world();
+        crate::network::world::register_team_core(
+            &world,
+            ACTOR,
+            crate::network::world::TeamCore {
+                position: world.core_position,
+                block: 342,
+                health: 6_000.0,
+                max_health: 6_000.0,
+            },
+        );
+        let mut player = session(23);
+        player.x = 8.0;
+        player.y = 8.0;
+        world.players.insert(player.unit_id, combat(&player, ACTOR));
+        world.player_sessions.insert(player.unit_id, player.clone());
+        let id = 3_002_201;
+        let mut dagger = unit(id, ACTOR, UnitAuthority::Command);
+        dagger.x = 48.0;
+        dagger.y = 56.0;
+        world.enemies.insert(id, dagger);
+        apply_unit_control(&world, &mut player, 2, id).unwrap();
+        assert_eq!(player.docked_type, Some(58));
+        assert!(crate::game::unit_types::core_unit_dock(58));
+        let old = unit_clear_session_player(&mut player, &world);
+        assert!(
+            old.is_none(),
+            "evoke docks at the left unit, not playerSpawn"
+        );
+        assert_eq!(player.controlled_unit, ControlledUnit::Core);
+        assert!((player.x - 48.0).abs() < 0.01 && (player.y - 56.0).abs() < 0.01);
+        let health = world.players.get(&player.unit_id).unwrap().health;
+        assert_eq!(
+            health,
+            crate::network::units::enemy_spec(58).unwrap().health
+        );
+        assert!(world.enemies.contains_key(&id), "possessed body stays");
+    }
+
+    #[test]
+    fn c07_building_control_clear_returns_to_core() {
+        let world = authority_world();
+        crate::network::world::register_team_core(
+            &world,
+            ACTOR,
+            crate::network::world::TeamCore {
+                position: world.core_position,
+                block: 340,
+                health: 4_000.0,
+                max_health: 4_000.0,
+            },
+        );
+        let turret = (21 << 16) | 20;
+        world.tiles.insert(
+            turret,
+            DynamicTile {
+                position: turret,
+                block: 266,
+                team: 1,
+                occupied: vec![turret],
+                ..Default::default()
+            },
+        );
+        let mut player = session(24);
+        world.players.insert(player.unit_id, combat(&player, ACTOR));
+        world.player_sessions.insert(player.unit_id, player.clone());
+        apply_unit_control(&world, &mut player, 1, turret).unwrap();
+        assert!(matches!(
+            player.controlled_unit,
+            ControlledUnit::Building(_)
+        ));
+        assert!(unit_clear_session_player(&mut player, &world).is_some());
+        assert_eq!(player.controlled_unit, ControlledUnit::Core);
+    }
+
+    #[test]
+    fn c07_losing_core_during_possession_clears_without_orphan() {
+        let world = authority_world();
+        crate::network::world::register_team_core(
+            &world,
+            ACTOR,
+            crate::network::world::TeamCore {
+                position: world.core_position,
+                block: 340,
+                health: 4_000.0,
+                max_health: 4_000.0,
+            },
+        );
+        let mut player = session(25);
+        world.players.insert(player.unit_id, combat(&player, ACTOR));
+        world.player_sessions.insert(player.unit_id, player.clone());
+        let id = 3_002_210;
+        world
+            .enemies
+            .insert(id, unit(id, ACTOR, UnitAuthority::Command));
+        apply_unit_control(&world, &mut player, 2, id).unwrap();
+        world.team_core_lists.clear();
+        world.cores.clear();
+        let _ = unit_clear_session_player(&mut player, &world);
+        assert_eq!(player.controlled_unit, ControlledUnit::Core);
+        assert_eq!(authority_of(&world, id), UnitAuthority::Command);
+        assert_eq!(unit_possessed_by(&world, id), None);
+        assert_eq!(world.enemies.len(), 1, "no orphaned player unit entity");
     }
 
     /// Test 6 — the possessed unit dying (kill_enemy path) removes the
@@ -2016,7 +2246,7 @@ mod p2b1_unit_ai_breadth_tests {
             base_buildings: DashMap::new(),
             floors: vec![0; cells],
             overlays: vec![0; cells],
-            enemy_spawns: Vec::new(),
+            enemy_spawns: parking_lot::RwLock::new(Vec::new()),
             enemies: DashMap::new(),
             players: DashMap::new(),
             player_sessions: DashMap::new(),
@@ -2026,6 +2256,7 @@ mod p2b1_unit_ai_breadth_tests {
             next_player_unit_id: AtomicI32::new(2_500_000),
             next_enemy_id: AtomicI32::new(1),
             unit_group_order: parking_lot::Mutex::new(Vec::new()),
+            damaged_window: parking_lot::Mutex::new(Vec::new()),
             projectiles: DashMap::new(),
             next_projectile_id: AtomicI32::new(4_000_000),
             overdrive_boosts: DashMap::new(),
@@ -2036,10 +2267,12 @@ mod p2b1_unit_ai_breadth_tests {
             pending_breaks: DashMap::new(),
             mineable_ore: std::sync::OnceLock::new(),
             mono_mining_targets: DashMap::new(),
+            ai_rebuild_state: Default::default(),
             tile_footprint: DashMap::new(),
             navigation_revision: AtomicU64::new(0),
             ground_navigation: parking_lot::Mutex::new(None),
             leg_navigation: parking_lot::Mutex::new(None),
+            naval_navigation: parking_lot::Mutex::new(None),
             save_path: std::env::temp_dir().join("p2b1-nav-test.json"),
             network_template: Arc::new(Vec::new()),
             persistence_dirty: AtomicBool::new(false),
@@ -2052,12 +2285,19 @@ mod p2b1_unit_ai_breadth_tests {
             base_turret_progress: DashMap::new(),
             base_mender_progress: DashMap::new(),
             team_build_plans: RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-            wave_rules: RwLock::new(WaveRules::default()),
+            wave_rules: RwLock::new({
+                WaveRules {
+                    waves_enabled: true,
+                    ..Default::default()
+                }
+            }),
             votekick_target: RwLock::new(None),
             votekick_votes: AtomicI32::new(0),
             votekick_voters: DashMap::new(),
             votekick_cooldowns: DashMap::new(),
             puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+            building_last_damage: dashmap::DashMap::new(),
+            repair_beam_strengths: dashmap::DashMap::new(),
         }
     }
 
@@ -2094,7 +2334,9 @@ mod p2b1_unit_ai_breadth_tests {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         }
     }
 
@@ -2107,6 +2349,8 @@ mod p2b1_unit_ai_breadth_tests {
             "MissileAI",
             "NeoplasmAI",
             "InternalAI",
+            "CargoAI",
+            "AssemblerAI",
         ];
         const MOVEMENT: &[&str] = &["ground", "flying", "legs", "naval", "hover", "missile"];
         const TARGETS: &[&str] = &[
@@ -2176,7 +2420,10 @@ mod p2b1_unit_ai_breadth_tests {
                     !has_spec,
                     "{name} ({id}) marked REJECTED but has enemy_spec"
                 ),
-                "INTERNAL" => assert_eq!(*id, 68, "only build-tower is INTERNAL"),
+                "INTERNAL" => assert!(
+                    matches!(*id, 64 | 69),
+                    "only dummy and build-tower are INTERNAL"
+                ),
                 other => panic!("unknown rust_status '{other}' for {name}"),
             }
             assert_eq!(
@@ -2278,10 +2525,10 @@ mod p2b1_unit_ai_breadth_tests {
         let enemy = wave_enemy(1, RISSO.unit_type, 4, 2);
         let avoidance = unit_avoidance_requests(&world);
         let nav = enemy_navigation_target(&world, &enemy, core_x, core_y, &avoidance);
-        assert!(
-            nav.movement.0 < enemy.x,
-            "naval wave AI uses the same flow-field step as ground, got {:?}",
-            nav.movement
+        assert_eq!(
+            (nav.movement.0, nav.movement.1),
+            (enemy.x, enemy.y),
+            "naval units do not beach across dry land (costNaval >= 6000)"
         );
     }
 
@@ -2294,6 +2541,7 @@ mod p2b1_unit_ai_breadth_tests {
         world.tiles.insert(
             wall_pos,
             crate::network::world::DynamicTile {
+                logic_control: None,
                 position: wall_pos,
                 block: 216,
                 rotation: 0,
@@ -2306,7 +2554,10 @@ mod p2b1_unit_ai_breadth_tests {
         world
             .navigation_revision
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let enemy = wave_enemy(1, HORIZON.unit_type, 6, 2);
+        let mut enemy = wave_enemy(1, HORIZON.unit_type, 6, 2);
+        // Core at (4,20) is 48 wu away; vanilla findMainTarget uses the core
+        // when it is inside attack range. Shrink range so flag selection runs.
+        enemy.attack_range = 10.0;
         let avoidance = unit_avoidance_requests(&world);
         let nav = enemy_navigation_target(&world, &enemy, core_x, core_y, &avoidance);
         assert!(

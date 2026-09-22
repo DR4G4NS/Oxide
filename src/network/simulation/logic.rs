@@ -114,8 +114,8 @@ pub fn simulate_logic_control_leases(world: &DynamicWorld, delta_ticks: f32) -> 
     changed
 }
 
-/// Runs the live logic processors (micro 431, logic 432, hyper 433, and
-/// privileged world processor 442) for one
+/// Runs the live logic processors (micro 432, logic 433, hyper 434, and
+/// privileged world processor 443) for one
 /// simulation tick. Compiles each processor's config once and recompiles when
 /// the program changes; executes up to the block's instructions-per-tick and
 /// applies side effects (memory cells, message blocks, control enabled).
@@ -128,7 +128,7 @@ pub fn simulate_logic(
     let processors: Vec<(i32, i16, Vec<u8>)> = world
         .tiles
         .iter()
-        .filter(|tile| matches!(tile.block, 431..=433 | 442))
+        .filter(|tile| matches!(tile.block, 432..=434 | 443))
         .filter_map(|tile| {
             building_config::logic_payload(&tile.config)
                 .map(|payload| (tile.position, tile.block, payload.to_vec()))
@@ -194,7 +194,7 @@ pub fn simulate_logic(
                 .collect();
             let mut state = crate::logic::ExecutorState::new(program.clone(), links);
             state.config_hash = hash;
-            state.privileged = block == 442;
+            state.privileged = block == 443;
             state
         });
         if entry.config_hash != hash {
@@ -206,21 +206,32 @@ pub fn simulate_logic(
                 .collect();
             let mut state = crate::logic::ExecutorState::new(program, links);
             state.config_hash = hash;
-            state.privileged = block == 442;
+            state.privileged = block == 443;
             *entry = state;
         }
         // LogicBlock instructionsPerTick from Blocks.java: micro=2,
         // logic=8, hyper=25; world processors are privileged but start at 8
-        // and may raise their rate through `setrate` up to 1000.
-        entry.privileged = block == 442;
+        // and may raise their rate through `setrate` up to
+        // maxInstructionsPerTick=40 (LogicBlock.java:46-48). Ordinary
+        // processors clamp setrate to their own per-block ipt.
+        entry.privileged = block == 443;
         let budget = match block {
-            431 => 2,
-            432 | 442 => 8,
+            432 => 2,
+            433 | 443 => 8,
             _ => 25,
         };
+        entry.ipt_cap = if block == 443 { 40 } else { budget as u32 };
         let ipt_var = entry.program.ipt_var;
+        // @ipt mirrors the official build.ipt: the block default unless a
+        // previous setrate raised it (SetRateI keeps it updated; we must not
+        // clobber it back to the default every tick).
+        let current_ipt = if entry.rate > 0.0 {
+            entry.rate.min(entry.ipt_cap as f64)
+        } else {
+            budget as f64
+        };
         if let Some(v) = entry.vars.get_mut(ipt_var) {
-            v.numval = budget as f64;
+            v.numval = current_ipt;
             v.isobj = false;
         }
         let view = crate::logic::WorldView {
@@ -233,6 +244,27 @@ pub fn simulate_logic(
         let steps = delta_ticks.round().max(1.0) as usize;
         for _ in 0..steps {
             entry.run_tick(Some(&view), budget);
+        }
+        // M14: LogicBlock.syncVariable — world processors publish numeric
+        // vars on a 60-tick cadence (Call.syncVariable).
+        let mut sync_frames = Vec::new();
+        if entry.privileged && (entry.exec_time as i64) % 60 == 0 {
+            for (index, var) in entry.vars.iter().enumerate() {
+                if var.constant || var.isobj || var.name.starts_with('@') {
+                    continue;
+                }
+                if let Ok(frame) = crate::network::wire::calls::encode_sync_variable_frame(
+                    pos,
+                    index as i32,
+                    var.num(),
+                ) {
+                    sync_frames.push(frame);
+                }
+            }
+        }
+        drop(entry);
+        for frame in sync_frames {
+            out.broadcast(frame);
         }
         changed = true;
     }
@@ -251,6 +283,7 @@ pub(crate) fn empty_logic_program() -> Arc<crate::logic::Program> {
             unit_var: 0,
             links_var: 0,
             ipt_var: 0,
+            runtime_globals: Vec::new(),
         };
         Arc::new(program)
     })
@@ -280,14 +313,11 @@ pub fn simulate_logic_mining(world: &DynamicWorld, snapshot: &EnemyUnit, delta_t
         }
         return;
     }
-    let tile_x = (f64::from(target_x) / 8.0).floor() as i16;
-    let tile_y = (f64::from(target_y) / 8.0).floor() as i16;
-    let pos = ((tile_x as i32) << 16) | tile_y as i32;
-    let Some(item) = world
-        .overlays
-        .get(pos as usize)
-        .and_then(|overlay| crate::logic::ore_item_id(*overlay))
-    else {
+    let tile_x = crate::network::combat::enemy::world_to_tile(target_x);
+    let tile_y = crate::network::combat::enemy::world_to_tile(target_y);
+    let Some(item) = crate::logic::ore_item_id(crate::network::combat::overlay_at_tile(
+        world, tile_x, tile_y,
+    )) else {
         return;
     };
     let carried: i32 = snapshot.items.iter().map(|(_, amount)| *amount).sum();
@@ -320,8 +350,23 @@ pub fn simulate_logic_fire(
     else {
         return;
     };
-    let target_x = order.target_x.unwrap_or(snapshot.x);
-    let target_y = order.target_y.unwrap_or(snapshot.y);
+    // ucontrol targetp tracks a UNIT object: re-read its CURRENT position on
+    // every fire tick (Java keeps the Teamc reference). A dead/gone target
+    // falls back to the last stored coordinates.
+    let (target_x, target_y) = if order.target_kind == 7 || order.target_kind == 8 {
+        match world.enemies.get(&order.target_id) {
+            Some(target) => (target.x, target.y),
+            None => (
+                order.target_x.unwrap_or(snapshot.x),
+                order.target_y.unwrap_or(snapshot.y),
+            ),
+        }
+    } else {
+        (
+            order.target_x.unwrap_or(snapshot.x),
+            order.target_y.unwrap_or(snapshot.y),
+        )
+    };
     let angle = (target_x - snapshot.x)
         .atan2(target_y - snapshot.y)
         .to_degrees();
@@ -366,6 +411,8 @@ pub fn simulate_logic_build(
     };
     let block = (order.target_id & 0xffff) as i16;
     let rotation = ((order.target_id >> 16) & 3) as u8;
+    let config = order.payload_cooldown;
+    let deconstruct = order.target_kind == 10;
     let target_x = order.target_x.unwrap_or(snapshot.x);
     let target_y = order.target_y.unwrap_or(snapshot.y);
     let dx = target_x - snapshot.x;
@@ -381,6 +428,32 @@ pub fn simulate_logic_build(
     let tile_x = (f64::from(target_x) / 8.0).floor() as i16;
     let tile_y = (f64::from(target_y) / 8.0).floor() as i16;
     let position = ((tile_x as i32) << 16) | tile_y as i32;
+    if deconstruct {
+        let should_break = if let Some(mut unit) = world.enemies.get_mut(&snapshot.id) {
+            unit.mine_progress += delta_ticks;
+            if unit.mine_progress >= 60.0 {
+                unit.mine_progress = 0.0;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if should_break {
+            if let Some(tile) = world.tiles.get(&position) {
+                let block = tile.block;
+                let team = tile.team;
+                drop(tile);
+                crate::network::buildings::construction::refund_requirements_for(
+                    world, team, block,
+                );
+                world.tiles.remove(&position);
+            }
+            clear_logic_build_order(world, snapshot.id);
+        }
+        return;
+    }
     // Site must be empty; otherwise cancel the order.
     let Some(occupied) = block_footprint(world, position, block) else {
         clear_logic_build_order(world, snapshot.id);
@@ -406,7 +479,7 @@ pub fn simulate_logic_build(
     // Release the enemies write guard before helpers that transitively read
     // `world.enemies` (place_logic_building → encode_block_snapshot).
     if should_place {
-        place_logic_building(world, out, position, block, rotation, occupied);
+        place_logic_building(world, out, position, block, rotation, occupied, config);
         clear_logic_build_order(world, snapshot.id);
     }
 }

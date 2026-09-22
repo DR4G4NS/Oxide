@@ -734,10 +734,10 @@ pub fn write_msav_content_region() -> std::io::Result<Vec<u8>> {
     for id in 0..22 {
         write_utf8(&mut out, item_name_from_id(id).unwrap_or_default())?;
     }
-    // blocks (ContentType.block ordinal 1), 446 entries.
+    // blocks (ContentType.block ordinal 1), 447 entries.
     out.push(1);
-    out.extend_from_slice(&446u16.to_be_bytes());
-    for id in 0..446 {
+    out.extend_from_slice(&447u16.to_be_bytes());
+    for id in 0..447 {
         write_utf8(&mut out, block_name_from_id(id).unwrap_or_default())?;
     }
     // liquids (ContentType.liquid ordinal 4), 11 entries.
@@ -1136,7 +1136,12 @@ pub(crate) fn write_unit_entity_body(
 /// Official `MapMarkers.write`: JsonIO.writeBytes of the objective markers
 /// map. Empty markers serialize as `{}` (arc JsonIO of an empty IntMap).
 pub fn write_msav_markers_region() -> std::io::Result<Vec<u8>> {
-    Ok(b"{}".to_vec())
+    write_msav_markers_region_json("{}")
+}
+
+pub fn write_msav_markers_region_json(json: &str) -> std::io::Result<Vec<u8>> {
+    let body = if json.trim().is_empty() { "{}" } else { json };
+    Ok(body.as_bytes().to_vec())
 }
 
 /// Official `writeCustomChunks`: writeInt(0) — no custom chunks.
@@ -1208,7 +1213,12 @@ pub fn write_msav_complete(
         world.puddles,
         world.runtime,
     )?;
-    let markers_region = write_msav_markers_region()?;
+    let markers_region = write_msav_markers_region_json(
+        &world
+            .runtime
+            .map(|runtime| runtime.game_state.extras.markers_json.read().clone())
+            .unwrap_or_else(|| "{}".into()),
+    )?;
     let custom_region = write_msav_custom_region()?;
     // Official region order per version (SaveVersion.read + versions/Save*.java,
     // mirrored by world_stream::extract_msav_regions):
@@ -1274,8 +1284,8 @@ const OFFICIAL_ITEM_BLOCKS: &[i16] = &[
     281, 282, 308, 310, 311, 312, 315, 316, 324, 325, 326, 327, 328, 330, 331, 332, 333, 334, 335,
     336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 357, 358,
     361, 362, 363, 364, 365, 367, 368, 370, 371, 374, 375, 377, 378, 379, 380, 381, 382, 383, 386,
-    387, 388, 389, 390, 391, 392, 393, 394, 395, 404, 405, 406, 407, 408, 409, 412, 418, 421, 422,
-    423, 425, 426, 427, 428,
+    387, 388, 389, 390, 391, 392, 393, 394, 395, 404, 405, 406, 407, 408, 409, 412, 418, 422, 423,
+    424, 426, 427, 428, 429,
 ];
 const OFFICIAL_POWER_BLOCKS: &[i16] = &[
     182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200,
@@ -1284,7 +1294,7 @@ const OFFICIAL_POWER_BLOCKS: &[i16] = &[
     313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 327, 328, 329, 330, 331, 332, 333,
     334, 335, 336, 337, 338, 354, 355, 356, 359, 364, 366, 372, 373, 376, 377, 378, 379, 380, 381,
     382, 383, 384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 402, 403, 404,
-    405, 406, 407, 408, 409, 410, 411, 419, 420, 421, 422, 423, 425, 426, 428,
+    405, 406, 407, 408, 409, 410, 411, 420, 421, 422, 423, 424, 426, 427, 429,
 ];
 const OFFICIAL_LIQUID_BLOCKS: &[i16] = &[
     182, 186, 189, 192, 193, 194, 195, 197, 198, 200, 201, 202, 204, 209, 211, 212, 213, 214, 215,
@@ -1292,7 +1302,7 @@ const OFFICIAL_LIQUID_BLOCKS: &[i16] = &[
     297, 298, 299, 300, 301, 310, 311, 315, 316, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329,
     330, 331, 332, 334, 335, 336, 337, 338, 349, 350, 351, 352, 353, 354, 355, 357, 358, 360, 361,
     362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 373, 374, 375, 382, 383, 385, 389, 390, 391,
-    392, 393, 394, 395, 397, 408, 409, 414, 415, 426, 427, 433,
+    392, 393, 394, 395, 397, 408, 409, 414, 415, 427, 428, 434,
 ];
 
 fn has_official_module(block: i16, modules: &[i16]) -> bool {
@@ -1314,7 +1324,9 @@ fn building_version(block: i16) -> u8 {
     // The writeBase format version (the byte *inside* writeAll) stays 3.
     match block {
         308..=323 => 1,
-        431..=433 | 442 => 4,
+        377..=383 | 386..=392 => 3,
+        5..=20 | 384 | 385 => 1,
+        432..=434 | 443 => 4,
         _ => 0,
     }
 }
@@ -1406,22 +1418,53 @@ fn write_building_tail(
     // generateTime. ConsumeGenerator (combustion/thermal/steam/etc.) and
     // SolarGenerator inherit this exact tail. DynamicTile does not track
     // these animation values, so the official defaults (zero) are valid.
-    let generator = matches!(tile.block, 308..=314 | 320..=323);
+    let generator = matches!(tile.block, 308..=316 | 320..=323);
     if generator {
-        out.extend_from_slice(&0.0f32.to_be_bytes());
+        let production_efficiency = if tile.block == 315 {
+            (tile
+                .inventory
+                .iter()
+                .find(|(item, _)| *item == 7)
+                .map(|(_, amount)| *amount)
+                .unwrap_or(0) as f32
+                / 30.0)
+                .clamp(0.0, 1.0)
+        } else if tile.block == 316 {
+            tile.output_liquid_amount.clamp(0.0, 1.0).powi(5)
+        } else {
+            0.0
+        };
+        out.extend_from_slice(&production_efficiency.to_be_bytes());
         out.extend_from_slice(&0.0f32.to_be_bytes());
     }
     // Nuclear/impact reactors append one value to GeneratorBuild; the
     // variable reactor appends three values (heat, instability, warmup).
     match tile.block {
-        315 | 316 => out.extend_from_slice(&0.0f32.to_be_bytes()),
+        315 | 316 => out.extend_from_slice(&tile.output_liquid_amount.max(0.0).to_be_bytes()),
         323 => {
             out.extend_from_slice(&0.0f32.to_be_bytes());
             out.extend_from_slice(&0.0f32.to_be_bytes());
             out.extend_from_slice(&0.0f32.to_be_bytes());
         }
-        431..=433 | 442 => write_logic_build_tail(out, tile)?,
+        432..=434 | 443 => write_logic_build_tail(out, tile)?,
         398..=401 => write_payload_conveyor_tail(out, tile)?,
+        228 | 229 | 239 => out.push(u8::from(tile.door_open)),
+        5..=20 => write_construct_build_tail(out, tile)?,
+        244 => out.extend_from_slice(&tile.shield.to_be_bytes()),
+        245..=248 => {
+            out.extend_from_slice(&tile.production_progress.to_be_bytes());
+            out.extend_from_slice(&tile.transport_progress.to_be_bytes());
+        }
+        249 => write_force_projector_tail(out, tile)?,
+        251 | 384 | 385 => out.extend_from_slice(&tile.mass_driver_rotation.to_be_bytes()),
+        252 => write_build_tower_tail(out, tile)?,
+        281 => out.extend_from_slice(&tile.stored_amount.to_be_bytes()),
+        282 => {
+            out.extend_from_slice(&tile.stored_item.to_be_bytes());
+            out.push(u8::from(tile.ammo_units > 0.5));
+        }
+        377..=379 | 386..=388 => write_unit_factory_tail(out, tile)?,
+        380..=383 | 389..=392 => write_reconstructor_tail(out, tile)?,
         _ => {
             if let Some(payload) = tile.payload.as_deref() {
                 // PayloadBlock.write: payVector.x/y, payRotation, Payload.write.
@@ -1451,7 +1494,7 @@ fn write_logic_build_tail(
     out.extend_from_slice(&compressed);
     out.write_i(0)?; // no executor vars (recompiled from source on load)
     out.write_i(0)?; // memory unused
-    if tile.block == 442 {
+    if tile.block == 443 {
         out.write_s(8)?; // world-processor default ipt
     }
     out.write_typeio_string(None)?;
@@ -1473,6 +1516,142 @@ fn write_payload_conveyor_tail(
         Some(payload) => crate::network::units::controller::write_carried_payload(out, payload)?,
         None => out.write_bool(false)?,
     }
+    Ok(())
+}
+
+fn write_payload_block_prefix(
+    out: &mut Vec<u8>,
+    tile: &crate::network::world::DynamicTile,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+    out.write_f(0.0)?;
+    out.write_f(0.0)?;
+    out.write_f(f32::from(tile.rotation) * 90.0)?;
+    match tile.payload.as_deref() {
+        Some(payload) => crate::network::units::controller::write_carried_payload(out, payload)?,
+        None => out.write_bool(false)?,
+    }
+    Ok(())
+}
+
+fn write_unit_factory_tail(
+    out: &mut Vec<u8>,
+    tile: &crate::network::world::DynamicTile,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+    write_payload_block_prefix(out, tile)?;
+    out.write_f(tile.production_progress.max(0.0))?;
+    let plan = crate::network::wire::tile_config::unit_factory_plan(tile.block, &tile.config)
+        .map(|(plan, _)| plan)
+        .unwrap_or(0);
+    out.write_s(plan)?;
+    out.write_f(f32::NAN)?;
+    out.write_f(f32::NAN)?;
+    out.write_b(crate::network::wire::tile_config::configured_unit_command(tile).unwrap_or(255))?;
+    Ok(())
+}
+
+fn write_reconstructor_tail(
+    out: &mut Vec<u8>,
+    tile: &crate::network::world::DynamicTile,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+    write_payload_block_prefix(out, tile)?;
+    out.write_f(tile.production_progress.max(0.0))?;
+    out.write_f(f32::NAN)?;
+    out.write_f(f32::NAN)?;
+    out.write_b(crate::network::wire::tile_config::configured_unit_command(tile).unwrap_or(255))?;
+    Ok(())
+}
+
+fn write_construct_build_tail(
+    out: &mut Vec<u8>,
+    tile: &crate::network::world::DynamicTile,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+    out.write_f(tile.production_progress)?;
+    out.write_s(tile.stored_item)?;
+    out.write_s(i16::try_from(tile.stored_amount).unwrap_or(0))?;
+    if tile.payload_accum.is_empty() {
+        out.write_b(-1i8 as u8)?;
+    } else {
+        let count = (tile.payload_accum.len() / 3).min(127);
+        out.write_b(count as u8)?;
+        for chunk in tile.payload_accum.chunks(3).take(count) {
+            out.write_f(chunk.first().copied().unwrap_or(0.0))?;
+            out.write_f(chunk.get(1).copied().unwrap_or(0.0))?;
+            out.write_i(chunk.get(2).copied().unwrap_or(0.0) as i32)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_construct_build_tail(
+    tile: &mut crate::network::world::DynamicTile,
+    extra: &[u8],
+) -> std::io::Result<()> {
+    use crate::network::codec::Reads;
+    let mut cursor = std::io::Cursor::new(extra);
+    tile.production_progress = cursor.read_f().unwrap_or(0.0);
+    tile.stored_item = cursor.read_s().unwrap_or(-1);
+    tile.stored_amount = i32::from(cursor.read_s().unwrap_or(0));
+    let count = cursor.read_b().unwrap_or(0xFF) as i8;
+    tile.payload_accum.clear();
+    if count >= 0 {
+        for _ in 0..count {
+            tile.payload_accum.push(cursor.read_f().unwrap_or(0.0));
+            tile.payload_accum.push(cursor.read_f().unwrap_or(0.0));
+            tile.payload_accum.push(cursor.read_i().unwrap_or(0) as f32);
+        }
+    }
+    Ok(())
+}
+
+fn write_force_projector_tail(
+    out: &mut Vec<u8>,
+    tile: &crate::network::world::DynamicTile,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+    out.write_bool(crate::network::economy::force_broken(tile))?;
+    out.write_f(tile.production_progress)?;
+    out.write_f(tile.transport_progress)?;
+    out.write_f(tile.ammo_units)?;
+    out.write_f(tile.output_liquid_amount)?;
+    Ok(())
+}
+
+fn apply_force_projector_tail(
+    tile: &mut crate::network::world::DynamicTile,
+    extra: &[u8],
+) -> std::io::Result<()> {
+    use crate::network::codec::Reads;
+    let mut cursor = std::io::Cursor::new(extra);
+    let broken = cursor.read_bool().unwrap_or(false);
+    crate::network::economy::set_force_broken(tile, broken);
+    tile.production_progress = cursor.read_f().unwrap_or(0.0);
+    tile.transport_progress = cursor.read_f().unwrap_or(0.0);
+    tile.ammo_units = cursor.read_f().unwrap_or(0.0);
+    tile.output_liquid_amount = cursor.read_f().unwrap_or(0.0);
+    Ok(())
+}
+
+fn write_build_tower_tail(
+    out: &mut Vec<u8>,
+    tile: &crate::network::world::DynamicTile,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+    out.write_f(tile.mass_driver_rotation)?;
+    out.write_s(0)?; // TypeIO.writePlans empty
+    Ok(())
+}
+
+fn apply_build_tower_tail(
+    tile: &mut crate::network::world::DynamicTile,
+    extra: &[u8],
+) -> std::io::Result<()> {
+    use crate::network::codec::Reads;
+    let mut cursor = std::io::Cursor::new(extra);
+    tile.mass_driver_rotation = cursor.read_f().unwrap_or(90.0);
     Ok(())
 }
 
@@ -1527,8 +1706,64 @@ pub fn apply_msav_building_tail(
         return Ok(());
     }
     match tile.block {
-        431..=433 | 442 => apply_logic_build_tail(tile, extra),
+        432..=434 | 443 => apply_logic_build_tail(tile, extra),
+        315 | 316 => {
+            // GeneratorBuild writes productionEfficiency + generateTime, then
+            // NuclearReactor/ImpactReactor append heat/warmup.
+            if extra.len() >= 12 {
+                tile.output_liquid_amount =
+                    f32::from_be_bytes(extra[8..12].try_into().unwrap_or([0; 4]));
+            } else if extra.len() >= 4 {
+                tile.output_liquid_amount =
+                    f32::from_be_bytes(extra[..4].try_into().unwrap_or([0; 4]));
+            }
+            Ok(())
+        }
+        377..=379 | 386..=388 => apply_unit_factory_tail(tile, extra),
+        380..=383 | 389..=392 => apply_reconstructor_tail(tile, extra),
         398..=401 => apply_payload_conveyor_tail(tile, extra),
+        228 | 229 | 239 => {
+            tile.door_open = extra[0] != 0;
+            Ok(())
+        }
+        5..=20 => apply_construct_build_tail(tile, extra),
+        244 => {
+            if extra.len() >= 4 {
+                tile.shield = f32::from_be_bytes(extra[..4].try_into().unwrap_or([0; 4]));
+            }
+            Ok(())
+        }
+        245..=248 => {
+            if extra.len() >= 8 {
+                tile.production_progress =
+                    f32::from_be_bytes(extra[..4].try_into().unwrap_or([0; 4]));
+                tile.transport_progress =
+                    f32::from_be_bytes(extra[4..8].try_into().unwrap_or([0; 4]));
+            }
+            Ok(())
+        }
+        249 => apply_force_projector_tail(tile, extra),
+        251 | 384 | 385 => {
+            if extra.len() >= 4 {
+                tile.mass_driver_rotation =
+                    f32::from_be_bytes(extra[..4].try_into().unwrap_or([0; 4]));
+            }
+            Ok(())
+        }
+        252 => apply_build_tower_tail(tile, extra),
+        281 => {
+            if extra.len() >= 4 {
+                tile.stored_amount = i32::from_be_bytes(extra[..4].try_into().unwrap_or([0; 4]));
+            }
+            Ok(())
+        }
+        282 => {
+            if extra.len() >= 3 {
+                tile.stored_item = i16::from_be_bytes(extra[..2].try_into().unwrap_or([0; 2]));
+                tile.ammo_units = if extra[2] != 0 { 1.0 } else { 0.0 };
+            }
+            Ok(())
+        }
         _ => {
             if extra.len() >= 13 {
                 // PayloadBlock.write: 3 floats + Payload.write.
@@ -1590,6 +1825,50 @@ fn apply_payload_block_tail(
     if let Ok(Some(payload)) = read_carried_payload(&mut cursor) {
         tile.payload = Some(Box::new(payload));
     }
+    Ok(())
+}
+
+fn apply_unit_factory_tail(
+    tile: &mut crate::network::world::DynamicTile,
+    extra: &[u8],
+) -> std::io::Result<()> {
+    use crate::network::codec::Reads;
+    apply_payload_block_tail(tile, extra)?;
+    let mut cursor = std::io::Cursor::new(extra);
+    // Skip PayloadBlock prefix (2 payVector floats + payRotation + payload).
+    let _ = cursor.read_f()?;
+    let _ = cursor.read_f()?;
+    let _ = cursor.read_f()?;
+    let _ = read_carried_payload(&mut cursor)?;
+    tile.production_progress = cursor.read_f().unwrap_or(0.0);
+    if let Ok(plan) = cursor.read_s() {
+        if tile.config.is_empty() && plan >= 0 {
+            let bytes = i32::from(plan).to_be_bytes();
+            tile.config = vec![1, bytes[0], bytes[1], bytes[2], bytes[3]];
+        }
+    }
+    let _ = cursor.read_f();
+    let _ = cursor.read_f();
+    if let Ok(command) = cursor.read_b() {
+        if command != 255 {
+            tile.factory_command = Some(command);
+        }
+    }
+    Ok(())
+}
+
+fn apply_reconstructor_tail(
+    tile: &mut crate::network::world::DynamicTile,
+    extra: &[u8],
+) -> std::io::Result<()> {
+    use crate::network::codec::Reads;
+    apply_payload_block_tail(tile, extra)?;
+    let mut cursor = std::io::Cursor::new(extra);
+    let _ = cursor.read_f()?;
+    let _ = cursor.read_f()?;
+    let _ = cursor.read_f()?;
+    let _ = read_carried_payload(&mut cursor)?;
+    tile.production_progress = cursor.read_f().unwrap_or(0.0);
     Ok(())
 }
 
@@ -1859,7 +2138,9 @@ pub(crate) fn read_unit_write<R: crate::network::codec::Reads + std::io::Seek>(
         authority: controller.authority,
         build_plans,
         update_building,
+        missile_time: 0.0,
         status_agg: None,
+        drown_progress: 0.0,
     })
 }
 
@@ -2084,6 +2365,8 @@ mod tests {
         // stored item to exercise the ItemModule).
         let dynamic = dashmap::DashMap::new();
         let mut wall = crate::network::world::DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: (45 << 16) | 100,
             block: 216,
             team: 1,
@@ -2181,17 +2464,19 @@ mod tests {
                 authority: crate::network::world::UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
                 update_building: true,
+                missile_time: 0.0,
                 status_agg: None,
+                drown_progress: 0.0,
             },
             crate::network::world::EnemyUnit {
                 id: 7002,
                 unit_type: 5,
-                entity_class: 4,
+                entity_class: 17,
                 team: 2,
                 x: 88.0,
                 y: 96.0,
                 rotation: -90.0,
-                health: 120.0,
+                health: 200.0,
                 shield: 0.0,
                 status_effect: -1,
                 status_duration: f32::MAX,
@@ -2209,12 +2494,14 @@ mod tests {
                 quaternary_attack_reload: 0.0,
                 move_speed: 0.55,
                 attack_damage: 13.0,
-                attack_reload_time: 24.0,
+                attack_reload_time: 30.0,
                 attack_range: 156.0,
                 authority: crate::network::world::UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
                 update_building: true,
+                missile_time: 0.0,
                 status_agg: None,
+                drown_progress: 0.0,
             },
         ];
         eprintln!(
@@ -2251,7 +2538,9 @@ mod tests {
                 .unwrap();
         assert_eq!(i32::from_be_bytes(entities[6..10].try_into().unwrap()), 2);
         let mut entity_pos = 10;
-        for expected in [3u8, 4] {
+        // Nova's v160.5 entity class has an unmodeled generated tail, so the
+        // bounded save writer deliberately uses its UnitEntity fallback.
+        for expected in [3u8, 3] {
             let len = i32::from_be_bytes(entities[entity_pos..entity_pos + 4].try_into().unwrap())
                 as usize;
             entity_pos += 4;
@@ -2290,6 +2579,7 @@ mod tests {
         // Round-73 M1 probe: export v7 + v11 saves with a building so the
         // desktop.jar can be asked to load them (run with --ignored).
         let tile = crate::network::world::DynamicTile {
+            logic_control: None,
             position: (10 << 16) | 10,
             block: 216,
             team: 1,
@@ -2335,6 +2625,7 @@ mod tests {
         // prefix. The port used to write i32 for every version, which made
         // desktop.jar 158.1 reject v4-v9 saves with buildings.
         let tile = crate::network::world::DynamicTile {
+            logic_control: None,
             position: 0,
             block: 216, // copper wall
             team: 1,
@@ -2452,7 +2743,7 @@ mod tests {
         assert_eq!(seen[0].1, 22);
         assert_eq!(seen[0].2[0], "copper");
         assert_eq!(seen[1].0, 1);
-        assert_eq!(seen[1].1, 446);
+        assert_eq!(seen[1].1, 447);
         assert_eq!(seen[1].2[0], "air");
         assert_eq!(seen[2].0, 4);
         assert_eq!(seen[2].1, 11);
@@ -2512,6 +2803,8 @@ mod tests {
             dynamic.insert(
                 position,
                 crate::network::world::DynamicTile {
+                    logic_control: None,
+                    payload_inventory: Vec::new(),
                     position,
                     block: 216 + index,
                     team: 1,
@@ -2587,7 +2880,9 @@ mod tests {
             authority: crate::network::world::UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         };
         let units = vec![make_unit(7001, 3), make_unit(7002, 4)];
         let region =
@@ -2977,6 +3272,8 @@ mod tests {
         dynamic_tiles.insert(
             0i32,
             crate::network::world::DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
                 position: 0,
                 block: 341,
                 team: 1,
@@ -3229,7 +3526,9 @@ mod tests {
             authority,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         }
     }
 
@@ -3303,6 +3602,7 @@ mod tests {
         unit.status_duration = 12.0;
         unit.payloads = vec![CarriedPayload::Build(CarriedBuildPayload {
             tile: DynamicTile {
+                logic_control: None,
                 position: 0,
                 block: 216,
                 team: 1,

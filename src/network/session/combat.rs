@@ -3,6 +3,7 @@
 
 use crate::network::listener::*;
 use crate::network::world::*;
+use crate::state::game_state::GameMode;
 
 use super::*;
 
@@ -164,6 +165,11 @@ pub fn spawn_team_projectile(
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: false,
             apply_direct_on_impact: false,
@@ -178,6 +184,7 @@ pub fn spawn_team_projectile(
             source_position,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     if let Ok(payload) = encode_create_bullet_payload(

@@ -8,7 +8,7 @@ import sys
 
 HEADER = ("# unit_id\tunit_name\tweapon\treload\tshots\tbullet_id\tspeed"
           "\tdamage\tlifetime\tsplash_damage\tsplash_radius\tpierce"
-          "\tpierce_building\tstatus_id\tstatus_duration")
+          "\tpierce_building\tstatus_id\tstatus_duration\tmirror\tmount_x")
 
 UNIT_RE = re.compile(
     r"(\S+) id=(\d+) class=(\S+) health=([\d.]+) speed=([\d.]+) "
@@ -19,7 +19,7 @@ WEAPON_RE = re.compile(
     r"velocityRnd=([\d.]+) bullet=(\d+) speed=([\d.]+) damage=([\d.]+) "
     r"life=([\d.]+) splash=([\d.]+) radius=([\d.-]+) pierce=(\S+) "
     r"pierceBuilding=(\S+) cap=(\S+) homingRange=([\d.]+) status=(\S+)\((\d+)\) "
-    r"statusDuration=([\d.]+) frags=(\d+) frag=(\S+)"
+    r"statusDuration=([\d.]+) frags=(\d+) frag=(\S+) mirror=(\S+) x=([\d.-]+)"
 )
 
 
@@ -43,7 +43,7 @@ def main() -> int:
                         unit[0], unit[1], w.group(2), w.group(3), w.group(4),
                         w.group(7), w.group(8), w.group(9), w.group(10),
                         w.group(11), w.group(12), w.group(13), w.group(14),
-                        w.group(18), w.group(19),
+                        w.group(18), w.group(19), w.group(22), w.group(23),
                     ]
                 )
             )

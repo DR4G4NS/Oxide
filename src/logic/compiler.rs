@@ -41,6 +41,63 @@ pub struct Program {
     pub links_var: usize,
     /// Index of the @ipt variable (runtime-filled).
     pub ipt_var: usize,
+    /// Referenced official GlobalVars runtime constants (GlobalVars.java:68-82)
+    /// with their var indices, updated every tick by the executor.
+    pub runtime_globals: Vec<(usize, RuntimeGlobal)>,
+}
+
+/// Official logic MessageType (mindustry.logic.MessageType).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageType {
+    Notify,
+    Announce,
+    Toast,
+    Mission,
+}
+
+impl MessageType {
+    pub fn parse(token: &str) -> Option<MessageType> {
+        Some(match token {
+            "notify" => MessageType::Notify,
+            "announce" => MessageType::Announce,
+            "toast" => MessageType::Toast,
+            "mission" => MessageType::Mission,
+            _ => return None,
+        })
+    }
+}
+
+/// Official GlobalVars state variables refreshed by `GlobalVars.update()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeGlobal {
+    Time,
+    Tick,
+    Second,
+    Minute,
+    WaveNumber,
+    WaveTime,
+    MapW,
+    MapH,
+    Server,
+    Client,
+}
+
+impl RuntimeGlobal {
+    pub fn parse(token: &str) -> Option<RuntimeGlobal> {
+        Some(match token {
+            "@time" => RuntimeGlobal::Time,
+            "@tick" => RuntimeGlobal::Tick,
+            "@second" => RuntimeGlobal::Second,
+            "@minute" => RuntimeGlobal::Minute,
+            "@waveNumber" => RuntimeGlobal::WaveNumber,
+            "@waveTime" => RuntimeGlobal::WaveTime,
+            "@mapw" => RuntimeGlobal::MapW,
+            "@maph" => RuntimeGlobal::MapH,
+            "@server" => RuntimeGlobal::Server,
+            "@client" => RuntimeGlobal::Client,
+            _ => return None,
+        })
+    }
 }
 
 impl Program {
@@ -80,6 +137,7 @@ pub fn compile_report(source: &str) -> (Option<Arc<Program>>, Vec<String>) {
                 unit_var,
                 links_var,
                 ipt_var,
+                runtime_globals: asm.runtime_globals,
             }))
         }
         _ => None,
@@ -98,6 +156,7 @@ pub struct Assembler {
     unit_var: Option<usize>,
     links_var: Option<usize>,
     ipt_var: Option<usize>,
+    runtime_globals: Vec<(usize, RuntimeGlobal)>,
     warned: std::collections::HashSet<String>,
     /// P0-7: structured diagnostics for statements that cannot be compiled
     /// faithfully (unsupported names or malformed arity). Populated in
@@ -117,6 +176,7 @@ impl Assembler {
             unit_var: None,
             links_var: None,
             ipt_var: None,
+            runtime_globals: Vec::new(),
             warned: std::collections::HashSet::new(),
             diagnostics: Vec::new(),
         };
@@ -181,6 +241,20 @@ impl Assembler {
             return idx;
         }
         let cleaned = symbol.replace(' ', "_");
+        // Official GlobalVars state constants (@time, @tick, ...): register
+        // them once so the executor refreshes their values every tick
+        // (GlobalVars.java:68-82 + update()).
+        if let Some(kind) = RuntimeGlobal::parse(&cleaned) {
+            let idx = self.put_const_num(&cleaned, 0.0);
+            if !self
+                .runtime_globals
+                .iter()
+                .any(|(existing, _)| *existing == idx)
+            {
+                self.runtime_globals.push((idx, kind));
+            }
+            return idx;
+        }
         // GlobalVars registers Arc Align values used by `draw print` as
         // constants. Keep these aliases numeric so ordinary source such as
         // `draw print 0 0 @topLeft` does not allocate a writable variable.
@@ -298,8 +372,7 @@ impl Assembler {
             // structural no-op (label/end) is silent degradation. Record a
             // located diagnostic so strict callers can reject it.
             if matches!(instr, Instr::NoOp)
-                && statement_name != "label"
-                && statement_name != "end"
+                && !is_structural_or_client_noop(&statement_name)
                 && !self
                     .diagnostics
                     .iter()
@@ -315,7 +388,29 @@ impl Assembler {
         self.instructions = built;
         Some(())
     }
+}
 
+fn is_structural_or_client_noop(name: &str) -> bool {
+    matches!(
+        name,
+        "label"
+            | "end"
+            | "noop"
+            | "sync"
+            | "bullet"
+            | "cutscene"
+            | "effect"
+            | "playsound"
+            | "playmusic"
+            | "makemarker"
+            | "setmarker"
+            | "localeprint"
+            | "query"
+            | "clientdata"
+    )
+}
+
+impl Assembler {
     /// Resolves a jump target token: numeric instruction index or named label.
     fn resolve_label(&self, token: &str) -> i32 {
         if let Some(index) = parse_i32(token) {
@@ -335,7 +430,12 @@ impl Assembler {
             "set" => {
                 if args.len() >= 2 {
                     let dest = self.var(&args[0]);
-                    let expr = self.expr(&args[1..]);
+                    // 159.7 JAR: LogicIO.read assigns SetStatement.to =
+                    // tokens[1] and SetStatement.from = tokens[2] only;
+                    // extra tokens are ignored. `set a b + c` therefore
+                    // stores the literal value token `b`, never an
+                    // expression.
+                    let expr = self.expr(&args[1..2]);
                     return Instr::Set(dest, expr);
                 }
                 Instr::NoOp
@@ -352,6 +452,24 @@ impl Assembler {
                             let b = self.expr(&args[3..]);
                             return Instr::Op(dest, op, a, Some(b));
                         }
+                    }
+                }
+                Instr::NoOp
+            }
+            "select" => {
+                // JAR 159.7 LogicIO.read (generated):
+                //   select result op comp0 comp1 a b
+                // Official SelectI.run:
+                //   result.set(op.test(comp0, comp1) ? a : b)
+                // — a full var copy (num + object), like `set`.
+                if args.len() >= 6 {
+                    if let Some(cond) = parse_cond(&args[1]) {
+                        let dest = self.var(&args[0]);
+                        let a = self.expr(&args[2..3]);
+                        let b = self.expr(&args[3..4]);
+                        let then_value = self.expr(&args[4..5]);
+                        let else_value = self.expr(&args[5..6]);
+                        return Instr::Select(dest, cond, a, b, then_value, else_value);
                     }
                 }
                 Instr::NoOp
@@ -524,6 +642,23 @@ impl Assembler {
                             };
                             return Instr::ControlEnabled(target, value);
                         }
+                        // JAR LogicIO field order: control shoot target x y shoot
+                        "shoot" if args.len() >= 5 => {
+                            let x = self.expr(&args[2..3]);
+                            let y = self.expr(&args[3..4]);
+                            let shoot = self.expr(&args[4..5]);
+                            return Instr::ControlShoot(target, x, y, shoot);
+                        }
+                        // control shootp target unit shoot
+                        "shootp" if args.len() >= 4 => {
+                            let unit = self.expr(&args[2..3]);
+                            let shoot = self.expr(&args[3..4]);
+                            return Instr::ControlShootp(target, unit, shoot);
+                        }
+                        "config" | "color" => {
+                            self.warn_unsupported(&format!("control {ctrl}"));
+                            return Instr::NoOp;
+                        }
                         _ => {
                             self.warn_unsupported(&format!("control {ctrl}"));
                             return Instr::NoOp;
@@ -620,11 +755,21 @@ impl Assembler {
                         if let Some(block_id) = crate::game::block_names::block_id_from_name(block)
                         {
                             let rotation = self.expr(&rest[3..4]);
-                            Instr::Ucontrol(UcOp::Build(x, y, block_id, rotation))
+                            let config = if rest.len() >= 5 {
+                                self.expr(&rest[4..5])
+                            } else {
+                                Expr::Num(0.0)
+                            };
+                            Instr::Ucontrol(UcOp::Build(x, y, block_id, rotation, config))
                         } else {
                             self.warn_unsupported("ucontrol build (unknown block)");
                             Instr::NoOp
                         }
+                    }
+                    "deconstruct" if rest.len() >= 2 => {
+                        let x = self.expr(&rest[0..1]);
+                        let y = self.expr(&rest[1..2]);
+                        Instr::Ucontrol(UcOp::Deconstruct(x, y))
                     }
                     "unbind" => Instr::Ucontrol(UcOp::Unbind),
                     "pathfind" if rest.len() >= 2 => {
@@ -632,6 +777,24 @@ impl Assembler {
                         let y = self.expr(&rest[1..2]);
                         Instr::Ucontrol(UcOp::Pathfind(x, y))
                     }
+                    "idle" => Instr::Ucontrol(UcOp::Idle),
+                    "approach" if rest.len() >= 3 => {
+                        let x = self.expr(&rest[0..1]);
+                        let y = self.expr(&rest[1..2]);
+                        let radius = self.expr(&rest[2..3]);
+                        Instr::Ucontrol(UcOp::Approach(x, y, radius))
+                    }
+                    "autoPathfind" => Instr::Ucontrol(UcOp::AutoPathfind),
+                    "targetp" if rest.len() >= 2 => {
+                        let unit = self.expr(&rest[0..1]);
+                        let shoot = self.expr(&rest[1..2]);
+                        Instr::Ucontrol(UcOp::Targetp(unit, shoot))
+                    }
+                    "payDrop" => Instr::Ucontrol(UcOp::PayDrop),
+                    "payTake" if !rest.is_empty() => {
+                        Instr::Ucontrol(UcOp::PayTake(self.expr(&rest[0..1])))
+                    }
+                    "payEnter" => Instr::Ucontrol(UcOp::PayEnter),
                     _ => {
                         self.warn_unsupported(&format!("ucontrol {sub}"));
                         Instr::NoOp
@@ -703,6 +866,28 @@ impl Assembler {
                     let flag = self.flag_key(&args[0]);
                     let value = self.expr(&args[1..]);
                     return Instr::SetFlag(flag, value);
+                }
+                Instr::NoOp
+            }
+            "message" => {
+                // JAR LogicIO: message <type> <duration> [outSuccess]
+                // (MessageType: notify/announce/toast/mission). Official
+                // FlushMessageI on a HEADLESS host sets outSuccess=1, clears
+                // the text buffer and returns — the dedicated server never
+                // sends announce/toast packets from logic (audit H19).
+                if !args.is_empty() {
+                    if let Some(message_type) = MessageType::parse(&args[0]) {
+                        let duration = if args.len() >= 2 {
+                            self.expr(&args[1..2])
+                        } else {
+                            Expr::Num(3.0)
+                        };
+                        // Official default outSuccess is the @wait var; the
+                        // headless path only ever writes `1` to it, so an
+                        // absent operand simply has nothing to write.
+                        let out_success = args.get(2).map(|token| self.var(token));
+                        return Instr::FlushMessage(message_type, duration, out_success);
+                    }
                 }
                 Instr::NoOp
             }
@@ -1020,8 +1205,32 @@ impl Assembler {
                 self.warn_unsupported("setprop");
                 Instr::NoOp
             }
+            "weathersense" => {
+                // Official LogicIO WeatherSenseStatement field order: result, weather.
+                if args.len() >= 2 {
+                    let dest = self.var(&args[0]);
+                    let weather = self.expr(&args[1..2]);
+                    return Instr::WeatherSense(dest, weather);
+                }
+                self.warn_unsupported("weathersense");
+                Instr::NoOp
+            }
+            "weatherset" => {
+                // Official LogicIO WeatherSetStatement field order: weather, state.
+                if args.len() >= 2 {
+                    let weather = self.expr(&args[0..1]);
+                    let state = self.expr(&args[1..2]);
+                    return Instr::WeatherSet(weather, state);
+                }
+                self.warn_unsupported("weatherset");
+                Instr::NoOp
+            }
             "end" => Instr::End,
-            "label" => Instr::NoOp,
+            "label" | "noop" => Instr::NoOp,
+            // Official LStatements that are client-visual or processor-local
+            // no-ops on a dedicated server (vanilla headless skips the FX).
+            "sync" | "bullet" | "cutscene" | "effect" | "playsound" | "playmusic"
+            | "makemarker" | "setmarker" | "localeprint" | "query" | "clientdata" => Instr::NoOp,
             _ => {
                 self.warn_unsupported(name);
                 Instr::NoOp
@@ -1099,6 +1308,10 @@ impl Assembler {
             "true" => return Expr::Num(1.0),
             "false" => return Expr::Num(0.0),
             "@pi" | "π" => return Expr::Num(std::f64::consts::PI),
+            "@e" => return Expr::Num(std::f64::consts::E),
+            // Mathf.degRad / Mathf.radDeg (GlobalVars.java:61-63).
+            "@degToRad" => return Expr::Num(std::f64::consts::PI / 180.0),
+            "@radToDeg" => return Expr::Num(180.0 / std::f64::consts::PI),
             _ => {}
         }
         if let Some(value) = parse_number(&token.replace(' ', "_")) {

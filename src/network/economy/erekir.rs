@@ -112,6 +112,29 @@ pub(crate) fn duct_accept_item(
     let Some(snapshot) = world.tiles.get(&position).map(|tile| tile.value().clone()) else {
         return false;
     };
+    if matches!(snapshot.block, 259 | 279) {
+        // StackConveyorBuild.acceptItem compares buildings, not adjacent
+        // origin coordinates. A 3x3/4x4 drill's origin is several tiles
+        // away from the loading dock even though its edge touches it.
+        // Requiring relative_direction here left the authoritative belt
+        // empty while the client predicted a full line until inspection.
+        let capacity_ok = snapshot.conveyor_items.len() < 10
+            && snapshot
+                .conveyor_items
+                .first()
+                .is_none_or(|(stored, _)| *stored == item);
+        if source == position {
+            return capacity_ok;
+        }
+        let front = offset_position(position, snapshot.rotation);
+        let front_origin = crate::network::buildings::construction::dynamic_at(world, front)
+            .map(|tile| tile.position)
+            .unwrap_or(front);
+        return capacity_ok
+            && snapshot.stack_state == 1
+            && snapshot.stack_cooldown <= 1.0
+            && source != front_origin;
+    }
     let Some(rel) = relative_direction(source, position) else {
         return false;
     };
@@ -135,20 +158,6 @@ pub(crate) fn duct_accept_item(
                 && rel != snapshot.rotation
                 && !duct_bridge_input_occupied(world, &snapshot, (rel + 2) % 4)
                 && inventory_total(&snapshot.inventory) < 4
-        }
-        // StackConveyorBuild.acceptItem (bytecode 158.1): capacity 10,
-        // single item type, never fed by its own front, and only while the
-        // machine is in stateLoad with cooldown <= recharge - 1 (the
-        // official `cooldown <= recharge - 1f && state == stateLoad &&
-        // front() != source`). Plastanium (259) and surge (279) share the
-        // same StackConveyorBuild class and gates. stack_state/stack_cooldown
-        // are persisted by the 259|279 machine in simulate_erekir_ducts.
-        259 | 279 => {
-            snapshot.stack_state == 1
-                && snapshot.stack_cooldown <= 1.0
-                && snapshot.conveyor_items.len() < 10
-                && (snapshot.conveyor_items.is_empty() || snapshot.conveyor_items[0].0 == item)
-                && source != offset_position(position, snapshot.rotation)
         }
         // StackRouter: only from the back (feed) side, single type, not
         // unloading, capacity 10.
@@ -1440,8 +1449,7 @@ pub(crate) fn wall_ore_drop(world: &DynamicWorld, position: i32) -> Option<(i16,
     if x < 0 || y < 0 || x >= world.width || y >= world.height {
         return None;
     }
-    let index = (y * world.width + x) as usize;
-    match world.floors[index] {
+    match crate::network::combat::floor_at_tile(world, x, y) {
         175 | 176 => Some((7, 4)), // ore-crystal-thorium / ore-wall-thorium
         177 => Some((16, 3)),      // ore-wall-beryllium
         179 => Some((3, 1)),       // ore-wall-graphite
@@ -1476,8 +1484,10 @@ pub(crate) fn beam_drill_facing(
             if x < 0 || y < 0 || x >= world.width || y >= world.height {
                 break;
             }
-            if crate::game::content::block_navigation(world.floors[(y * world.width + x) as usize])
-                .solid
+            if crate::game::content::block_navigation(crate::network::combat::floor_at_tile(
+                world, x, y,
+            ))
+            .solid
             {
                 break;
             }
@@ -1583,11 +1593,16 @@ pub(crate) fn dump_erekir_drill(world: &DynamicWorld, key: i32) -> bool {
 // ===========================================================================
 // EREKIR: TURRETS (367-376)
 // ===========================================================================
-// Reload/range/ammo from Blocks.java v158.1; bullet ids are the registered
-// content order (verified with InspectBullets against desktop.jar 158.1:
-// id = 113 + creation index; breach=163.., diffuse=167.., sublimate=170..,
-// titan=172.., disperse=176.., afflict=181/182, lustre=183, scathe missile
-// payloads=185/188/191, smite=193/194, malign=196).
+// Reload/range/ammo from Blocks.java v159.7; bullet ids are the registered
+// content order of the 159.7 desktop.jar (probed with runtime reflection over
+// ContentType.bullet). The 158.1 -> 159.7 content shift moved the scathe
+// launcher payloads from 185/188/191 to 186/189/192. Scathe family on 159.7:
+// 186/189/192 = launcher BulletType(0f, 0f): NO direct/splash damage, they
+// only carry spawnUnit scathe-missile/-phase/-surge. ALL scathe damage comes
+// from each missile's shootOnDeath death explosion, applied at the missile
+// death point by kill_enemy (combat/damage.rs): 187 = 1000/65, 190 = 320/120,
+// 193 = 1800/40 + lightning 10x45 length 12 + five-frag fan (carrier 194 ->
+// surge-split 67); 195 = 180/35 + lightning 4x25 len 6; buildings x0.1.
 // afflict (heatRequirement 20) and malign (heatRequirement 144) only fire
 // with input heat (Turret.canConsume / updateEfficiencyMultiplier).
 
@@ -1613,7 +1628,7 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (367, 16) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 163,
-            damage: 85.0,
+            damage: 63.75,
             speed: 7.5,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1622,7 +1637,7 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (367, 17) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 164,
-            damage: 95.0,
+            damage: 71.25,
             speed: 8.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1631,7 +1646,7 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (367, 19) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 165,
-            damage: 325.0 / 0.75,
+            damage: 325.0,
             speed: 12.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1641,7 +1656,7 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (368, 3) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 167,
-            damage: 41.0,
+            damage: 30.75,
             speed: 8.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1650,7 +1665,7 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (368, 18) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 168,
-            damage: 90.0,
+            damage: 67.5,
             speed: 8.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1659,7 +1674,7 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (368, 9) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 169,
-            damage: 35.0,
+            damage: 26.25,
             speed: 8.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1669,7 +1684,7 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (370, 7) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 172,
-            damage: 350.0,
+            damage: 262.5,
             speed: 2.5,
             splash_damage: 350.0,
             splash_radius: 65.0,
@@ -1678,44 +1693,45 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         (370, 19) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 173,
-            damage: 700.0,
+            damage: 525.0,
             speed: 3.25,
-            splash_damage: 700.0,
-            splash_radius: 65.0,
+            splash_damage: 750.0,
+            splash_radius: 36.0,
             pierce: false,
         },
         (370, 18) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 175,
-            damage: 300.0,
+            damage: 225.0,
             speed: 2.5,
-            splash_damage: 300.0,
-            splash_radius: 65.0,
+            splash_damage: 180.0,
+            splash_radius: 110.0,
             pierce: false,
         },
-        // disperse: tungsten/thorium/silicon/surge-alloy, ammoMultiplier 3.
+        // disperse: tungsten/thorium/silicon/surge-alloy. JAR content ids
+        // 178-181; ammoMultiplier 3/1/4/3 (official 159.7 probe).
         (371, 17) => ErekirTurretAmmo {
             multiplier: 3.0,
-            bullet_id: 176,
-            damage: 65.0,
+            bullet_id: 178,
+            damage: 48.75,
             speed: 8.5,
             splash_damage: 0.0,
             splash_radius: 0.0,
             pierce: false,
         },
         (371, 7) => ErekirTurretAmmo {
-            multiplier: 3.0,
-            bullet_id: 177,
-            damage: 90.0,
+            multiplier: 1.0,
+            bullet_id: 179,
+            damage: 67.5,
             speed: 8.5,
             splash_damage: 0.0,
             splash_radius: 0.0,
             pierce: false,
         },
         (371, 9) => ErekirTurretAmmo {
-            multiplier: 3.0,
-            bullet_id: 178,
-            damage: 37.0,
+            multiplier: 4.0,
+            bullet_id: 180,
+            damage: 27.75,
             speed: 9.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1723,46 +1739,55 @@ pub(crate) fn erekir_turret_ammo_spec(block: i16, item: i16) -> Option<ErekirTur
         },
         (371, 12) => ErekirTurretAmmo {
             multiplier: 3.0,
-            bullet_id: 179,
-            damage: 65.0,
+            bullet_id: 181,
+            damage: 48.75,
             speed: 8.5,
             splash_damage: 0.0,
             splash_radius: 0.0,
             pierce: false,
         },
-        // scathe: carbide/phase-fabric/surge-alloy -> missile payloads.
+        // scathe: carbide/phase-fabric/surge-alloy -> missile payloads
+        // (Blocks.java v159.7 ids 186/189/192). Launchers are BulletType(0f,
+        // 0f): NO direct/splash damage, spawnUnit only. ALL scathe damage
+        // comes from each missile's shootOnDeath death explosion at its
+        // death point (kill_enemy): 187 = splash 1000 r65, 190 = 320 r120,
+        // 193 = 1800 r40 + lightning 10x45 length 12 + surge-split fan,
+        // 195 = 180 r35 + lightning 4x25 length 6; buildings take x0.1.
+        // speed keeps the headless flight model on the missile speed.
         (374, 19) => ErekirTurretAmmo {
             multiplier: 1.0,
-            bullet_id: 185,
-            damage: 1_000.0,
+            bullet_id: 186,
+            damage: 0.0,
             speed: 4.6,
-            splash_damage: 1_000.0,
-            splash_radius: 65.0,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
             pierce: false,
         },
         (374, 11) => ErekirTurretAmmo {
             multiplier: 1.0,
-            bullet_id: 188,
-            damage: 320.0,
-            speed: 4.6,
-            splash_damage: 320.0,
-            splash_radius: 120.0,
+            bullet_id: 189,
+            damage: 0.0,
+            speed: 2.5,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
             pierce: false,
         },
         (374, 12) => ErekirTurretAmmo {
             multiplier: 1.0,
-            bullet_id: 191,
-            damage: 1_800.0,
-            speed: 4.6,
-            splash_damage: 1_800.0,
-            splash_radius: 40.0,
+            bullet_id: 192,
+            damage: 0.0,
+            speed: 4.4,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
             pierce: false,
         },
-        // smite: surge-alloy, pierce 4 + lightning.
+        // smite: surge-alloy pierce-4 orb. JAR content id 196
+        // (BasicBulletType 7f/250 registered at damage 187.5, pierceCap 4);
+        // 193 is the scathe-missile-surge death explosion, NOT this ammo.
         (375, 12) => ErekirTurretAmmo {
             multiplier: 1.0,
-            bullet_id: 193,
-            damage: 250.0,
+            bullet_id: 196,
+            damage: 187.5,
             speed: 7.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1779,7 +1804,7 @@ pub(crate) fn erekir_liquid_turret_ammo(block: i16, liquid: i16) -> Option<Ereki
         (369, 7) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 170,
-            damage: 60.0,
+            damage: 45.0,
             speed: 3.5,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1788,7 +1813,7 @@ pub(crate) fn erekir_liquid_turret_ammo(block: i16, liquid: i16) -> Option<Ereki
         (369, 10) => ErekirTurretAmmo {
             multiplier: 1.0,
             bullet_id: 171,
-            damage: 130.0,
+            damage: 97.5,
             speed: 3.5,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1808,7 +1833,7 @@ pub(crate) fn erekir_turret_params(block: i16) -> Option<ErekirTurretParams> {
         367 => (40.0, 190.0, 1, 2.0, false, false, 0.0, 0.0), // breach
         368 => (30.0, 125.0, 15, 3.0, false, false, 0.0, 0.0), // diffuse: ShootSpread(15, 4deg)
         369 => (5.0, 130.0, 1, 1.0, false, false, 0.0, 0.0),  // sublimate (continuous)
-        370 => (60.0, 390.0, 1, 4.0, false, true, 0.0, 0.0),  // titan
+        370 => (138.0, 390.0, 1, 4.0, false, true, 0.0, 0.0), // titan: reload = 60f * 2.3f
         371 => (9.0, 310.0, 4, 4.0, true, false, 0.0, 0.0),   // disperse (air only)
         372 => (50.0, 368.0, 1, 0.0, false, false, 20.0, 1.0), // afflict
         373 => (10.0, 250.0, 1, 0.0, false, false, 0.0, 1.0), // lustre (continuous laser)
@@ -1825,7 +1850,7 @@ pub(crate) fn erekir_power_turret_weapon(block: i16) -> Option<ErekirTurretAmmo>
     let ammo = match block {
         372 => ErekirTurretAmmo {
             multiplier: 0.0,
-            bullet_id: 181,
+            bullet_id: 183,
             damage: 180.0,
             speed: 5.0,
             splash_damage: 0.0,
@@ -1834,8 +1859,8 @@ pub(crate) fn erekir_power_turret_weapon(block: i16) -> Option<ErekirTurretAmmo>
         },
         373 => ErekirTurretAmmo {
             multiplier: 0.0,
-            bullet_id: 183,
-            damage: 210.0,
+            bullet_id: 185,
+            damage: 157.5,
             speed: 0.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
@@ -1843,11 +1868,11 @@ pub(crate) fn erekir_power_turret_weapon(block: i16) -> Option<ErekirTurretAmmo>
         },
         376 => ErekirTurretAmmo {
             multiplier: 0.0,
-            bullet_id: 196,
+            bullet_id: 199,
             damage: 70.0,
             speed: 8.0,
-            splash_damage: 70.0,
-            splash_radius: 12.0,
+            splash_damage: 0.0,
+            splash_radius: 34.0,
             pierce: false,
         },
         _ => return None,
@@ -2087,10 +2112,11 @@ pub(crate) fn simulate_erekir_turrets(
 ///   393 tank-assembler: vanquish(41) 50s | conquer(42) 180s
 ///   394 ship-assembler: quell(52) 60s   | disrupt(54) 180s
 ///   395 mech-assembler: tecta(47) 70s   | collaris(48) 180s
-/// The port does not model per-unit payload stock; the plan's payload
-/// requirements are represented as item requirements drawn from the owning
-/// team's core (materials equivalent), and the assembled unit spawns in front
-/// of the assembler like a factory spawn.
+/// Payload and liquid requirements follow the official consumers: the plan's
+/// PayloadStacks must be LOADED into the build (BuildingComp.getPayloads,
+/// ConsumePayloadDynamic) and tier >= 1 additionally drains cyanogen from the
+/// build's own LiquidModule per tick (ConsumeLiquidsDynamic.update). No team
+/// core items are involved (plan().itemReq is null for all vanilla plans).
 pub(crate) fn simulate_erekir_assemblers(
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
@@ -2114,26 +2140,95 @@ pub(crate) fn simulate_erekir_assemblers(
         // (checkTier/plan). plan() clamps to the last plan, so tier 2+ behaves
         // as tier 1 for the two-plan tank/ship/mech assemblers.
         let tier = assembler_tier(world, &snapshot).min(1);
-        let Some((unit_type, build_time, item_reqs)) = assembler_plan(snapshot.block, tier) else {
+        let Some((unit_type, build_time, payload_reqs)) = assembler_plan(snapshot.block, tier)
+        else {
             continue;
         };
         let efficiency = power.get(&key).copied().unwrap_or(0.0);
         if efficiency <= 0.0 {
             continue;
         }
-        // Requirements drawn from the team's core.
         let team = snapshot.team;
+        // Official updateTile gates assembly on Units.canCreate(team,
+        // plan.unit): the team unit cap / ban applies to assemblers too.
+        if !crate::network::economy::can_create_unit(world, team, unit_type) {
+            continue;
+        }
+        // ConsumePayloadDynamic.efficiency (UnitAssembler.java init()):
+        // required stacks must be present IN THE BUILD. Oxide models
+        // assemblyDrones for AssemblerAI movement, but they do not ferry
+        // payload stacks; when the build has not been fed by hand or via
+        // payload conveyors the team CORE stands in for the drone ferry and
+        // the same stacks are drawn from its inventory (documented deviation,
+        // README gaps row).
+        let payloads_cover = |snapshot_payloads: &[(i16, i32)]| {
+            payload_reqs.iter().all(|(content, amount)| {
+                snapshot_payloads
+                    .iter()
+                    .filter(|(id, n)| id == content && *n > 0)
+                    .map(|(_, n)| *n)
+                    .sum::<i32>()
+                    >= *amount
+            })
+        };
+        let proxy_items = crate::network::economy::assembler_proxy_items(snapshot.block, tier);
         let items = crate::network::economy::items_for_team(world, team);
-        let affordable = item_reqs
+        let core_covers = proxy_items
             .iter()
             .all(|(item, amount)| items.get(*item as usize).copied().unwrap_or(0) >= *amount);
-        if !affordable {
+        if !payloads_cover(&snapshot.payload_inventory) && !core_covers {
+            continue;
+        }
+        let feed_from_core = !payloads_cover(&snapshot.payload_inventory);
+        // Blocks.java consumeLiquid(cyanogen, 9f/60f | 12f/60f) is an
+        // UNCONDITIONAL block consumer for every plan/tier
+        // (ConsumeLiquid.efficiency returns 0 without it, so updateTile never
+        // accumulates progress): stack.amount * edelta per tick.
+        if snapshot.stored_liquid != CYANOGEN_LIQUID || snapshot.liquid_amount <= 0.0001 {
+            continue;
+        }
+        let cyanogen_cost =
+            (delta_ticks * efficiency * assembler_cyanogen_per_tick(snapshot.block))
+                .min(snapshot.liquid_amount);
+        // Official updateTile only progresses while the spawn area is free
+        // (!wasOccupied, UnitAssembler.checkSolid): any grounded unit parked
+        // on the spawn point stalls assembly until it moves away.
+        if assembler_output_occupied(world, &snapshot) {
             continue;
         }
         let completed = if let Some(mut asm) = world.tiles.get_mut(&key) {
+            // ConsumeLiquidsDynamic.update drains cyanogen every tick the
+            // build is assembling, before progress accumulates.
+            asm.liquid_amount -= cyanogen_cost;
+            if asm.liquid_amount <= 0.0001 {
+                asm.liquid_amount = 0.0;
+            }
             asm.production_progress += delta_ticks * efficiency;
             if asm.production_progress >= build_time {
                 asm.production_progress %= build_time;
+                // spawned() -> consume() -> ConsumePayloadDynamic.trigger:
+                // the full payload stacks leave the build at completion (or,
+                // in the drone-proxy deviation, the team core inventory).
+                if feed_from_core {
+                    let mut items = crate::network::economy::items_for_team_mut(world, team);
+                    for (item, amount) in proxy_items {
+                        if let Some(stored) = items.get_mut(*item as usize) {
+                            *stored = stored.saturating_sub(*amount);
+                        }
+                    }
+                } else {
+                    for (content, amount) in payload_reqs.iter() {
+                        let mut left = *amount;
+                        for entry in asm.payload_inventory.iter_mut() {
+                            if entry.0 == *content && left > 0 {
+                                let take = left.min(entry.1.max(0));
+                                entry.1 -= take;
+                                left -= take;
+                            }
+                        }
+                    }
+                    asm.payload_inventory.retain(|(_, n)| *n > 0);
+                }
                 true
             } else {
                 false
@@ -2142,17 +2237,6 @@ pub(crate) fn simulate_erekir_assemblers(
             false
         };
         if completed {
-            // Consume the item requirements from the REAL team core inventory
-            // (items_for_team returns a clone; deducting on that copy never
-            // reached the actual store — economy.rs SOL-010 mutation bug).
-            {
-                let mut items = crate::network::economy::items_for_team_mut(world, team);
-                for (item, amount) in item_reqs {
-                    if let Some(stored) = items.get_mut(*item as usize) {
-                        *stored = stored.saturating_sub(*amount);
-                    }
-                }
-            }
             // Spawn the assembled unit in front of the assembler.
             if let Some(tile) = world.tiles.get(&key).map(|t| t.clone()) {
                 spawn_factory_unit(world, out, &tile, unit_type);
@@ -2163,25 +2247,75 @@ pub(crate) fn simulate_erekir_assemblers(
     changed
 }
 
+/// Approximation of UnitAssembler.checkSolid(spawn): the spawn point sits
+/// `tilesize * (areaSize + size) / 2` world units in front of the block
+/// (areaSize 13, size 5 -> 72), and assembly stalls while ANY live unit
+/// overlaps it. The port approximates the official hitSize*1.4 overlap box
+/// with a fixed 24-unit radius circle around the spawn point.
+pub(crate) fn assembler_output_occupied(world: &DynamicWorld, assembler: &DynamicTile) -> bool {
+    let center_x = (assembler.position >> 16) as i16 as f32 * 8.0;
+    let center_y = assembler.position as i16 as f32 * 8.0;
+    let angle = f32::from(assembler.rotation) * 90.0;
+    let radians = angle.to_radians();
+    let len = 8.0 * (13.0 + f32::from(crate::game::content::block_size(assembler.block))) / 2.0;
+    let spawn_x = center_x + radians.cos() * len;
+    let spawn_y = center_y + radians.sin() * len;
+    world.enemies.iter().any(|unit| {
+        let dx = unit.x - spawn_x;
+        let dy = unit.y - spawn_y;
+        dx.hypot(dy) < 24.0
+    })
+}
+
 /// UnitAssembler plan table (Blocks.java v158.1). `tier` 0 is the default.
-/// Payload requirements are mapped to equivalent item ids from the team core:
-/// the plan's unit payloads map to their build cost materials (approximated).
-/// (unit_type, build_time_ticks, item_requirements).
+/// Payload requirements are the official PayloadStack.list contents; content
+/// ids follow unit_weapons.tsv (units) and block_names.tsv (wall payloads).
+/// Vanilla plans carry NO itemReq — the core inventory never feeds an
+/// assembler. (unit_type, build_time_ticks, payload_requirements).
 pub(crate) type AssemblerPlan = (i16, f32, &'static [(i16, i32)]);
 
 pub(crate) fn assembler_plan(block: i16, tier: usize) -> Option<AssemblerPlan> {
     match (block, tier) {
-        // tank-assembler: vanquish (41) 50s; conquer (42) 180s
-        // (conquer=42, cleroi=44 per parse_unit_type/unit_weapons.tsv).
-        (393, 0) => Some((41, 60.0 * 50.0, &[(16, 40), (9, 40)])), // beryllium, silicon
-        (393, 1) => Some((42, 60.0 * 180.0, &[(18, 60), (10, 40)])), // oxide, phase
-        // ship-assembler: quell (52) 60s; disrupt (54) 180s.
-        (394, 0) => Some((52, 60.0 * 60.0, &[(16, 50), (3, 50)])), // beryllium, graphite
-        (394, 1) => Some((54, 60.0 * 180.0, &[(18, 50), (10, 30)])),
-        // mech-assembler: tecta (47) 70s; collaris (48) 180s.
-        (395, 0) => Some((47, 60.0 * 70.0, &[(16, 50), (17, 40)])), // beryllium, tungsten
-        (395, 1) => Some((48, 60.0 * 180.0, &[(18, 40), (10, 40)])),
+        // tank-assembler: vanquish (41) 50s = stell(38)x4 + tungsten-wall-large
+        // (238)x10; conquer (42) 180s = locus(39)x6 + carbide-wall-large
+        // (243)x20 (Blocks.java v158.1 PayloadStack.list).
+        (393, 0) => Some((41, 60.0 * 50.0, &[(38, 4), (238, 10)])),
+        (393, 1) => Some((42, 60.0 * 180.0, &[(39, 6), (243, 20)])),
+        // ship-assembler: quell (52) 60s = elude(49)x4 + beryllium-wall-large
+        // (236)x12; disrupt (54) 180s = avert(50)x6 + carbide-wall-large x20.
+        (394, 0) => Some((52, 60.0 * 60.0, &[(49, 4), (236, 12)])),
+        (394, 1) => Some((54, 60.0 * 180.0, &[(50, 6), (243, 20)])),
+        // mech-assembler: tecta (47) 70s = merui(43)x5 + tungsten-wall-large
+        // x12; collaris (48) 180s = cleroi(44)x6 + carbide-wall-large x20.
+        (395, 0) => Some((47, 60.0 * 70.0, &[(43, 5), (238, 12)])),
+        (395, 1) => Some((48, 60.0 * 180.0, &[(44, 6), (243, 20)])),
         _ => None,
+    }
+}
+
+/// Official per-tick cyanogen drain of each assembler (Blocks.java v158.1
+/// consumeLiquid amounts; ConsumeLiquidsDynamic.update consumes
+/// stack.amount * edelta per tick while assembling).
+pub(crate) fn assembler_cyanogen_per_tick(block: i16) -> f32 {
+    match block {
+        // tankAssembler: 9/60; shipAssembler / mechAssembler: 12/60.
+        393 => 9.0 / 60.0,
+        _ => 12.0 / 60.0,
+    }
+}
+
+/// Drone-ferry proxy (documented deviation): when an assembler has no loaded
+/// payload stacks, these equivalent CORE ITEMS stand in for the plan stacks
+/// (unit payloads approximated by their build-cost materials).
+pub(crate) fn assembler_proxy_items(block: i16, tier: usize) -> &'static [(i16, i32)] {
+    match (block, tier) {
+        (393, 0) => &[(16, 40), (9, 40)],  // beryllium, silicon
+        (393, 1) => &[(18, 60), (10, 40)], // oxide, phase fabric
+        (394, 0) => &[(16, 50), (3, 50)],  // beryllium, graphite
+        (394, 1) => &[(18, 50), (10, 30)], // oxide, phase fabric
+        (395, 0) => &[(16, 50), (17, 40)], // beryllium, tungsten
+        (395, 1) => &[(18, 40), (10, 40)], // oxide, phase fabric
+        _ => &[],
     }
 }
 

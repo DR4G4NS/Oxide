@@ -1,12 +1,14 @@
 # Architecture
 
-Where gameplay changes belong, and which invariants are non-negotiable. The **compatibility target** is Mindustry desktop **159.7** (`compat/current.toml`). The **historical smoke/codec baseline** is **158.1**; a 159.7 layout is never inferred from source order.
+Where gameplay changes belong, and which invariants are non-negotiable. The **compatibility target** is Mindustry desktop **160.5** (`compat/current.toml`). Older smoke/codec artifacts are historical evidence; a 160.5 layout is never inferred from earlier source order.
+
+Read the sections relevant to the changed behaviour. For finding code or probing the target JAR, use [navigation.md](navigation.md); for local checks, use [CONTRIBUTING.md](CONTRIBUTING.md#validation).
 
 ## Authoritative flow
 
 ```text
 client packet
-  → listener: authenticate, decode, validate wire
+  → listener/session: bounded decode, authenticate, validate action
   → buildings/config: TypeIO → typed value
   → buildings/placement: shared created/placed lifecycle
   → domain (power, sandbox, reactor, economy, erekir, combat, units)
@@ -32,6 +34,8 @@ The Mindustry client predicts buildings between snapshots. Every resource, link,
 | `network/session` | Connections, replay, unknown packets. |
 | `tui/` | Operator UI; **out of** vanilla parity. |
 
+Domains must not import listener, runtime, console, or TUI (**ARCH001–ARCH002**). Emit through `&dyn FrameEmit`, not connection maps or outbound helpers (**ARCH003–ARCH006**).
+
 Valid handler: decode with limits → authenticate → delegate **without** holding a `DashMap::Ref` → persist/broadcast after a valid mutation.
 
 ## Protocol contract
@@ -50,12 +54,12 @@ Valid handler: decode with limits → authenticate → delegate **without** hold
 12. Interpolated `writeSync` fields (drill `progress`/`warmup`, conveyor items) are gameplay state.
 13. Cadence: entity snapshots ~50 ms; `blockSyncTime` = **6 s**. Do not speed snapshots to hide rollback.
 14. A loaded building is simulated on one authoritative path only.
-15. Client prediction is not authority. New predicted blocks need a test spanning **> 360** game ticks.
+15. Client prediction is not authority. New or changed predicted block behaviour needs a test spanning **> 360** game ticks and crossing a `BlockSnapshot`.
 16. Domain services never treat TypeIO tag 5/14 as a raw ID.
 17. Every construction path runs the post-placement hook.
 18. Reactor heat/warmup must not appear as cryofluid in `LiquidModule`.
 
-Sandbox preset (158.1/159.7 bytecode): `infiniteResources`, `allowEditRules`, `waves=true`, `waveTimer=false`. Builds complete immediately when `infiniteResources` is set.
+Sandbox preset (target bytecode): `infiniteResources`, `allowEditRules`, `waves=true`, `waveTimer=false`. Builds complete immediately when `infiniteResources` is set.
 
 Conveyor: Rust keeps FIFO front at index 0; the official client treats `ids[len-1]` as front — reverse on serialize.
 
@@ -72,7 +76,18 @@ Until subclass-typed state exists:
 | ImpactReactor 316 | `output_liquid_amount` | warmup |
 | ItemSource 412 | `transport_progress` / `unloader_offset` | emit counter / round-robin |
 | HeatSource 418 | `mass_driver_rotation` | heat output |
+| Door 228/229 / AutoDoor 239 | `door_open` | `Building.checkSolid() == !open`; tap-toggle (228/229) and AutoDoor proximity (239) |
+| AutoDoor 239 | `production_progress` | `checkInterval` (20 tick) scan accumulator |
+| Turret (logic control, H18) | `logic_control` | `Some((aim_x, aim_y, shooting, unit_id))`: `control shoot/shootp` aim state; `None` = automatic targeting |
 | Conveyor | `conveyor_items` | FIFO `(item, progress)`, front at index 0 |
+| UnitFactory 377-379 / 386-388, Reconstructor 380-383 / 389-392 | `payload` | held `UnitPayload` (incoming or completed); released only after `moveOutPayload` |
+| UnitFactory / Reconstructor | `payload_accum` | official `payVector.x`, `payVector.y` (length 2); empty means the origin |
+| UnitFactory / Reconstructor | `payload_rotation` | official `payRotation` (degrees) |
+| Reconstructor | `stored_amount` | legacy held-unit type + 1 marker; never authoritative for consumption or snapshot efficiency (use `payload`) |
+| ConstructBlock 5..=20 | `production_progress` | `ConstructBuild.progress` (0..=1) |
+| ConstructBlock 5..=20 | `stored_item` | `ConstructBuild.previous.id` (air = 0) |
+| ConstructBlock 5..=20 | `stored_amount` | `ConstructBuild.current.id` |
+| ConstructBlock 5..=20 | `payload_accum` | triples of accumulator / totalAccumulator / itemsLeft |
 
 ## Recipe for porting a building
 
@@ -81,9 +96,9 @@ Until subclass-typed state exists:
 3. Put state and transition in the domain module. Do not reuse a field without updating the table above.
 4. Integrate once in the scheduler and the accept boundary.
 5. Add a byte-exact `writeSync` codec and a full TypeIO config case.
-6. Add negative tests and, if the client predicts the block, a case that crosses a `BlockSnapshot`.
-7. Run `fmt`, clippy, the full suite, and the matching JAR smoke.
-8. Record the residual gap in the README (do not revive audit diaries).
+6. Add negative tests and, if the client predicts the block, a case spanning **> 360** game ticks and crossing a `BlockSnapshot`.
+7. Complete the [applicable validation](CONTRIBUTING.md#validation), including the matching JAR smoke.
+8. Record residual product limitations in [README.md](README.md), and located divergences in [gaps.md](gaps.md).
 
 ## Concurrency
 
@@ -98,11 +113,10 @@ Enforced by `tools/dashmap_guard` (DM001–DM005) and `tools/architecture_guard.
 ## Explicit debt
 
 - `DynamicTile.config` still shares a physical type with legacy tails.
-- `listener` / `economy` remain large; extract with exclusive owners.
-- Beam-node link topology is incomplete.
+- `listener` / `economy` remain large; extraction belongs in an explicit architecture task.
 - StackConveyor: documented quirk on exactly-2-SC chains.
 - Product gaps (Erekir, units, projectiles, AI): [README.md](README.md).
 
 ## Minimum evidence for a wire change
 
-Exact payload fixture; decode with the JAR class and `handled()` when safe; framing test (packet ID, length, no trailing bytes); mutation cases (ally/enemy, range, replay); `cargo test --all-targets -- --test-threads=1`; clippy `-D warnings`. The label “byte-exact” requires the target JAR to have read the full fixture.
+Exact payload fixture; decode with the JAR class and `handled()` when safe; framing test (packet ID, length, no trailing bytes); mutation cases (ally/enemy, range, replay); and the [Rust checks](CONTRIBUTING.md#validation). The label “byte-exact” requires the target JAR to have read the full fixture.

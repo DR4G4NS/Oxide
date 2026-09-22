@@ -18,14 +18,15 @@ public final class InspectUnitWeapons {
                 "%s weapon=%s reload=%s shots=%s inaccuracy=%s velocityRnd=%s " +
                 "bullet=%s speed=%s damage=%s life=%s splash=%s radius=%s " +
                 "pierce=%s pierceBuilding=%s cap=%s homingRange=%s status=%s(%s) " +
-                "statusDuration=%s frags=%s frag=%s%n",
+                "statusDuration=%s frags=%s frag=%s mirror=%s x=%s%n",
                 unit.name, weapon.name, weapon.reload, weapon.shoot.shots,
                 weapon.inaccuracy, weapon.velocityRnd, bullet.id, bullet.speed,
                 bullet.damage, bullet.lifetime, bullet.splashDamage,
                 bullet.splashDamageRadius, bullet.pierce, bullet.pierceBuilding,
                 bullet.pierceCap, bullet.homingRange, bullet.status.name, bullet.status.id,
                 bullet.statusDuration, bullet.fragBullets,
-                bullet.fragBullet == null ? -1 : bullet.fragBullet.id
+                bullet.fragBullet == null ? -1 : bullet.fragBullet.id,
+                weapon.mirror, weapon.x
             );
         });
     }

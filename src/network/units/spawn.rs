@@ -8,8 +8,8 @@ use dashmap::DashMap;
 use super::*;
 
 pub(crate) fn parse_unit_type(name: &str) -> Option<i16> {
-    // P1: delegate to the single unit content registry (desktop 158.1 jar
-    // dump, 69 ids) instead of keeping a second name table here. Numeric
+    // P1: delegate to the single unit content registry (desktop 160.5 JAR
+    // dump, 70 ids) instead of keeping a second name table here. Numeric
     // ids keep working for console convenience; unregistered names return
     // None so callers fail explicitly (strict mode) instead of guessing.
     crate::game::unit_types::unit_id_from_name(name).or_else(|| name.trim().parse::<i16>().ok())
@@ -18,8 +18,8 @@ pub(crate) fn parse_unit_type(name: &str) -> Option<i16> {
 /// Nearest enemy spawn overlay to the core; fallback for `spawn` without x/y.
 pub(crate) fn nearest_enemy_spawn(world: &DynamicWorld) -> (i16, i16) {
     let (core_x, core_y) = core_world(world);
-    world
-        .enemy_spawns
+    let spawns = world.enemy_spawns.read();
+    spawns
         .iter()
         .copied()
         .min_by(|left, right| {
@@ -29,7 +29,7 @@ pub(crate) fn nearest_enemy_spawn(world: &DynamicWorld) -> (i16, i16) {
                 + (f32::from(right.1) * 8.0 - core_y).powi(2);
             dl.total_cmp(&dr)
         })
-        .unwrap_or(world.enemy_spawns[0])
+        .unwrap_or(spawns[0])
 }
 
 /// Console `spawn` implementation: inserts `count` enemy (team 2) units built
@@ -45,13 +45,18 @@ pub(crate) fn spawn_enemy_units(
     let Some(spec) = enemy_spec(unit_type) else {
         return 0;
     };
+    // Internal types (`block`, `dummy`, generated turret-unit-build-tower) have specs
+    // for wire/persistence parity but are never console-spawnable.
+    if crate::game::unit_types::unit_type_internal(unit_type) {
+        return 0;
+    }
     if count == 0 {
         return 0;
     }
     let (base_x, base_y) = match (x, y) {
         (Some(tile_x), Some(tile_y)) => (f32::from(tile_x) * 8.0, f32::from(tile_y) * 8.0),
         _ => {
-            if world.enemy_spawns.is_empty() {
+            if world.enemy_spawns.read().is_empty() {
                 return 0;
             }
             let (tile_x, tile_y) = nearest_enemy_spawn(world);
@@ -80,7 +85,11 @@ pub(crate) fn spawn_enemy_units(
                 statuses: Vec::new(),
                 velocity_x: 0.0,
                 velocity_y: 0.0,
-                elevation: 0.0,
+                elevation: if crate::game::content::unit_movement(spec.unit_type).flying {
+                    1.0
+                } else {
+                    0.0
+                },
                 payloads: Vec::new(),
                 flag: 0.0,
                 items: Vec::new(),
@@ -96,7 +105,15 @@ pub(crate) fn spawn_enemy_units(
                 authority: UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
                 update_building: true,
+                // TimedKillUnit self-destruct countdown (all MissileUnitType
+                // content): vanilla spawns with time = type.lifetime.
+                missile_time: if spec.entity_class == 39 {
+                    crate::game::unit_types::unit_missile_lifetime(spec.unit_type).unwrap_or(102.0)
+                } else {
+                    0.0
+                },
                 status_agg: Default::default(),
+                drown_progress: 0.0,
             },
         );
         world.register_unit_group(id);
@@ -138,7 +155,11 @@ pub(crate) fn spawn_unit_world(
             statuses: Vec::new(),
             velocity_x: 0.0,
             velocity_y: 0.0,
-            elevation: 0.0,
+            elevation: if crate::game::content::unit_movement(spec.unit_type).flying {
+                1.0
+            } else {
+                0.0
+            },
             payloads: Vec::new(),
             flag: 0.0,
             items: Vec::new(),
@@ -154,7 +175,13 @@ pub(crate) fn spawn_unit_world(
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: if spec.entity_class == 39 {
+                crate::game::unit_types::unit_missile_lifetime(spec.unit_type).unwrap_or(102.0)
+            } else {
+                0.0
+            },
             status_agg: Default::default(),
+            drown_progress: 0.0,
         },
     );
     world.register_unit_group(id);
@@ -175,6 +202,24 @@ pub(crate) struct EnemySpec {
     pub(crate) attack_damage: f32,
     pub(crate) attack_reload: f32,
     pub(crate) attack_range: f32,
+}
+
+/// RepairFieldAbility(amount, reload, range) triples dumped from the
+/// desktop.jar 159.7 content. `amount` is flat health (healPercent = 0):
+/// every `reload` ticks the owner heals EVERY damaged allied unit within
+/// `range` (Units.nearby includes the owner; buildings are not healed by
+/// this ability).
+pub(crate) const REPAIR_FIELD_ABILITIES: &[(i16, f32, f32, f32)] = &[
+    (5, 10.0, 240.0, 60.0),    // nova
+    (21, 5.0, 480.0, 50.0),    // poly
+    (24, 130.0, 120.0, 140.0), // oct
+];
+
+pub(crate) fn repair_field_spec(unit_type: i16) -> Option<(f32, f32, f32)> {
+    REPAIR_FIELD_ABILITIES
+        .iter()
+        .find(|entry| entry.0 == unit_type)
+        .map(|(_, amount, reload, range)| (*amount, *reload, *range))
 }
 
 pub(crate) const DAGGER: EnemySpec = EnemySpec {
@@ -235,10 +280,10 @@ pub(crate) const REIGN: EnemySpec = EnemySpec {
 pub(crate) const NOVA: EnemySpec = EnemySpec {
     unit_type: 5,
     entity_class: 17,
-    health: 120.0,
+    health: 200.0,
     speed: 0.55,
     attack_damage: 13.0,
-    attack_reload: 24.0,
+    attack_reload: 30.0,
     attack_range: 156.0,
 };
 pub(crate) const PULSAR: EnemySpec = EnemySpec {
@@ -349,6 +394,29 @@ pub(crate) const ANTUMBRA: EnemySpec = EnemySpec {
     attack_reload: 20.0,
     attack_range: 200.0,
 };
+pub(crate) const CORVUS: EnemySpec = EnemySpec {
+    unit_type: 9,
+    entity_class: 24,
+    // UnitTypes.java corvus: health 18000, armor 9, speed 0.3;
+    // LaserBulletType damage 560, reload 350, length 460.
+    health: 18_000.0,
+    speed: 0.3,
+    attack_damage: 560.0,
+    attack_reload: 350.0,
+    attack_range: 460.0,
+};
+pub(crate) const TOXOPID: EnemySpec = EnemySpec {
+    unit_type: 14,
+    entity_class: 33,
+    // UnitTypes.java toxopid: health 22000, armor 13, speed 0.5;
+    // attack stats preserved from the previously verified inline spec
+    // (shrapnel volley total 220, reload 30, engagement range 180).
+    health: 22_000.0,
+    speed: 0.5,
+    attack_damage: 220.0,
+    attack_reload: 30.0,
+    attack_range: 180.0,
+};
 
 pub(crate) fn enemy_spec(unit_type: i16) -> Option<EnemySpec> {
     match unit_type {
@@ -361,6 +429,8 @@ pub(crate) fn enemy_spec(unit_type: i16) -> Option<EnemySpec> {
         6 => Some(PULSAR),
         7 => Some(QUASAR),
         8 => Some(VELA),
+        9 => Some(CORVUS),
+        14 => Some(TOXOPID),
         10 => Some(CRAWLER),
         11 => Some(ATRAX),
         12 => Some(SPIROCT),
@@ -475,18 +545,18 @@ pub(crate) fn enemy_spec(unit_type: i16) -> Option<EnemySpec> {
             entity_class: 20,
             health: 20_000.0,
             speed: 0.65,
-            attack_damage: 60.0,
+            attack_damage: 110.0,
             attack_reload: 65.0,
             attack_range: 300.0,
         }),
-        // Campaign mechs (UnitTypes.java v158.1: alpha 150hp/3.0 speed,
-        // beta 170hp/3.3, gamma 220hp/3.55). Speeds converted to the port's
-        // tile-scale (dagger 0.5). Used by late Serpulo spawn groups.
+        // Campaign mechs (UnitTypes.java v159.7: alpha 150hp/3.0 speed,
+        // beta 170hp/3.3, gamma 220hp/3.55). ASTRA C07: these are world
+        // units/tick, same scale as dagger 0.5 is NOT applied here.
         35 => Some(EnemySpec {
             unit_type: 35,
             entity_class: 4,
             health: 150.0,
-            speed: 0.5,
+            speed: 3.0,
             attack_damage: 9.0,
             attack_reload: 13.0,
             attack_range: 145.0,
@@ -495,7 +565,7 @@ pub(crate) fn enemy_spec(unit_type: i16) -> Option<EnemySpec> {
             unit_type: 36,
             entity_class: 4,
             health: 170.0,
-            speed: 0.55,
+            speed: 3.3,
             attack_damage: 11.0,
             attack_reload: 13.0,
             attack_range: 150.0,
@@ -504,19 +574,10 @@ pub(crate) fn enemy_spec(unit_type: i16) -> Option<EnemySpec> {
             unit_type: 37,
             entity_class: 4,
             health: 220.0,
-            speed: 0.6,
+            speed: 3.55,
             attack_damage: 14.0,
             attack_reload: 13.0,
             attack_range: 160.0,
-        }),
-        9 => Some(EnemySpec {
-            unit_type: 9,
-            entity_class: 24,
-            health: 18_000.0,
-            speed: 0.3,
-            attack_damage: 560.0,
-            attack_reload: 350.0,
-            attack_range: 460.0,
         }),
         13 => Some(EnemySpec {
             unit_type: 13,
@@ -525,15 +586,6 @@ pub(crate) fn enemy_spec(unit_type: i16) -> Option<EnemySpec> {
             speed: 0.62,
             attack_damage: 40.0,
             attack_reload: 9.0,
-            attack_range: 180.0,
-        }),
-        14 => Some(EnemySpec {
-            unit_type: 14,
-            entity_class: 33,
-            health: 22_000.0,
-            speed: 0.5,
-            attack_damage: 220.0,
-            attack_reload: 30.0,
             attack_range: 180.0,
         }),
         19 => Some(EnemySpec {
@@ -688,6 +740,173 @@ pub(crate) fn enemy_spec(unit_type: i16) -> Option<EnemySpec> {
             entity_class: 46,
             health: 20_000.0,
             speed: 1.0,
+            attack_damage: 0.0,
+            attack_reload: 1.0,
+            attack_range: 8.0,
+        }),
+        // ---- Remaining vanilla UnitTypes (UnitTypes.java / Blocks.java /
+        // BuildTurret.java v159.7). Entity classes confirmed against the
+        // desktop.jar 159.7 EntityMapping idMap bytecode: LegsUnit=24
+        // (anthicus), TimedKillUnit=39 (all MissileUnitType content),
+        // PayloadUnit=5 (evoke/incite/emanate), BlockUnitUnit=2 (block and
+        // the generated turret-unit-build-tower),
+        // BuildingTetherPayloadUnit=36 (manifold/assembly-drone).
+        // anthicus: hp/speed from UnitTypes.java; launcher bullet deals
+        // 0.75 x 2 shots and spawns the missile (range follows the disrupt
+        // launcher precedent because bullet speed is 0).
+        45 => Some(EnemySpec {
+            unit_type: 45,
+            entity_class: 24,
+            health: 2_700.0,
+            speed: 0.65,
+            attack_damage: 1.5,
+            attack_reload: 130.0,
+            attack_range: 100.0,
+        }),
+        // anthicus-missile: ExplosionBulletType(140f, 25f) on a shootOnDeath
+        // weapon (reload 1); range = splash radius.
+        46 => Some(EnemySpec {
+            unit_type: 46,
+            entity_class: 39,
+            health: 55.0,
+            speed: 3.35,
+            attack_damage: 140.0,
+            attack_reload: 1.0,
+            attack_range: 25.0,
+        }),
+        // quell-missile: ExplosionBulletType(110f, 25f) on death.
+        53 => Some(EnemySpec {
+            unit_type: 53,
+            entity_class: 39,
+            health: 45.0,
+            speed: 4.3,
+            attack_damage: 110.0,
+            attack_reload: 1.0,
+            attack_range: 25.0,
+        }),
+        // disrupt-missile: ExplosionBulletType(140f, 25f) on death.
+        55 => Some(EnemySpec {
+            unit_type: 55,
+            entity_class: 39,
+            health: 70.0,
+            speed: 4.6,
+            attack_damage: 140.0,
+            attack_reload: 1.0,
+            attack_range: 25.0,
+        }),
+        // Erekir core units: RepairBeamWeapon (reload 20, bullet maxRange
+        // 60/60/65) heals instead of damaging, so attack_damage stays 0.
+        58 => Some(EnemySpec {
+            unit_type: 58,
+            entity_class: 5,
+            health: 300.0,
+            speed: 5.6,
+            attack_damage: 0.0,
+            attack_reload: 20.0,
+            attack_range: 60.0,
+        }),
+        59 => Some(EnemySpec {
+            unit_type: 59,
+            entity_class: 5,
+            health: 500.0,
+            speed: 7.0,
+            attack_damage: 0.0,
+            attack_reload: 20.0,
+            attack_range: 60.0,
+        }),
+        60 => Some(EnemySpec {
+            unit_type: 60,
+            entity_class: 5,
+            health: 700.0,
+            speed: 7.5,
+            attack_damage: 0.0,
+            attack_reload: 20.0,
+            attack_range: 65.0,
+        }),
+        // Hidden internal `block` UnitType (hp 1, speed 0).
+        61 => Some(EnemySpec {
+            unit_type: 61,
+            entity_class: 2,
+            health: 1.0,
+            speed: 0.0,
+            attack_damage: 0.0,
+            attack_reload: 1.0,
+            attack_range: 8.0,
+        }),
+        // manifold / assembly-drone: BuildingTetherPayloadUnit flyers with
+        // no weapons (CargoAI / AssemblerAI).
+        62 => Some(EnemySpec {
+            unit_type: 62,
+            entity_class: 36,
+            health: 200.0,
+            speed: 3.5,
+            attack_damage: 0.0,
+            attack_reload: 1.0,
+            attack_range: 8.0,
+        }),
+        63 => Some(EnemySpec {
+            unit_type: 63,
+            entity_class: 36,
+            health: 90.0,
+            speed: 1.3,
+            attack_damage: 0.0,
+            attack_reload: 1.0,
+            attack_range: 8.0,
+        }),
+        // TargetDummyUnit created by the v160 target-dummy block.
+        64 => Some(EnemySpec {
+            unit_type: 64,
+            entity_class: 49,
+            health: 200.0,
+            speed: 1.1,
+            attack_damage: 0.0,
+            attack_reload: 1.0,
+            attack_range: 8.0,
+        }),
+        // Scathe missile family (Blocks.java): ExplosionBulletType splash
+        // damage on a shootOnDeath weapon (reload 1); range = splash radius.
+        65 => Some(EnemySpec {
+            unit_type: 65,
+            entity_class: 39,
+            health: 240.0,
+            speed: 4.6,
+            attack_damage: 1_000.0,
+            attack_reload: 1.0,
+            attack_range: 65.0,
+        }),
+        66 => Some(EnemySpec {
+            unit_type: 66,
+            entity_class: 39,
+            health: 500.0,
+            speed: 2.5,
+            attack_damage: 320.0,
+            attack_reload: 1.0,
+            attack_range: 120.0,
+        }),
+        67 => Some(EnemySpec {
+            unit_type: 67,
+            entity_class: 39,
+            health: 300.0,
+            speed: 4.4,
+            attack_damage: 1_800.0,
+            attack_reload: 1.0,
+            attack_range: 40.0,
+        }),
+        68 => Some(EnemySpec {
+            unit_type: 68,
+            entity_class: 39,
+            health: 50.0,
+            speed: 4.8,
+            attack_damage: 180.0,
+            attack_reload: 1.0,
+            attack_range: 35.0,
+        }),
+        // Generated by BuildTurret.init(): hp 1, speed 0, BlockUnitUnit.
+        69 => Some(EnemySpec {
+            unit_type: 69,
+            entity_class: 2,
+            health: 1.0,
+            speed: 0.0,
             attack_damage: 0.0,
             attack_reload: 1.0,
             attack_range: 8.0,

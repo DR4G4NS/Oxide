@@ -359,7 +359,7 @@ fn compare_controller_save_fixture(fixture: &Value) -> Result<(), String> {
     // logic_roundtrip
     {
         let unit_id = 3_010_010;
-        let mut proc = tile_at(431, 1);
+        let mut proc = tile_at(432, 1);
         crate::network::world::stamp_new_building(&world, &mut proc);
         world.tiles.insert(wall_pos, proc);
         let mut unit = ubind_probe_unit(unit_id, 1, 0.0);

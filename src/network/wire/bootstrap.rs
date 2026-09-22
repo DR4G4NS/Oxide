@@ -73,6 +73,8 @@ pub(crate) fn network_building_tile(
         .copied()
         .unwrap_or((-1, 0.0));
     let mut tile = DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position: building.position,
         block: building.block,
         rotation: building.rotation,
@@ -140,6 +142,23 @@ pub(crate) fn network_building_tile(
         generation: 0,
     };
     let _ = crate::engine::save_io::apply_msav_building_tail(&mut tile, &building.extra_data);
+    if matches!(tile.block, 259 | 279) && tile.conveyor_items.is_empty() {
+        for &(item, count) in &tile.inventory {
+            for _ in 0..count.min(10) {
+                tile.conveyor_items.push((item, 0.0));
+            }
+        }
+        tile.inventory.clear();
+        tile.stored_item = tile
+            .conveyor_items
+            .first()
+            .map(|(item, _)| *item)
+            .unwrap_or(-1);
+        tile.stored_amount = i32::try_from(tile.conveyor_items.len()).unwrap_or(0);
+        if !tile.conveyor_items.is_empty() {
+            tile.stack_link = tile.position;
+        }
+    }
     tile
 }
 
@@ -199,6 +218,8 @@ pub(crate) fn apply_wave_rules_overrides(
             "reactorExplosions" => flag(key, &mut rules.reactor_explosions),
             "canGameOver" => flag(key, &mut rules.can_game_over),
             "instantBuild" => flag(key, &mut rules.instant_build),
+            "allowEditRules" => flag(key, &mut rules.allow_edit_rules),
+            "pvp" => flag(key, &mut rules.pvp),
             "waves" => flag(key, &mut rules.waves_enabled),
             "waveTimer" => flag(key, &mut rules.wave_timer),
             "waveSending" => flag(key, &mut rules.wave_sending),
@@ -235,13 +256,13 @@ pub(crate) fn apply_wave_rules_overrides(
                 }
             },
             "fog" => flag(key, &mut rules.fog),
-            "loadout" => match value.as_str() {
+            "loadout" => match crate::network::units::parse_loadout(&value) {
                 Some(loadout) => {
-                    rules.loadout = crate::network::units::parse_loadout(loadout);
+                    rules.loadout = loadout;
                     true
                 }
                 None => {
-                    warn!("Rules override 'loadout' expects a string like 'copper-20/lead-10'");
+                    warn!("Rules override 'loadout' expects an ItemStack array or 'copper-20/lead-10'");
                     false
                 }
             },
@@ -254,6 +275,14 @@ pub(crate) fn apply_wave_rules_overrides(
             debug!("Rules override applied: {} = {}", key, value);
         }
     }
+    // `construction_is_instant` also reads the mirrored atomic; keep it
+    // aligned so an admin `infiniteResources` edit is not silently ignored.
+    let infinite = rules.infinite_resources;
+    drop(rules);
+    world
+        .game_state
+        .infinite_resources
+        .store(infinite, Ordering::Relaxed);
 }
 
 /// P0-7: strict-mode gate for unsupported map spawn groups. In strict mode
@@ -296,16 +325,34 @@ pub(crate) fn mode_transition_rules(
     Ok(rules)
 }
 
+/// The rules JSON a joining client must receive: the map's own rules with
+/// every interpreted live field written from `rules`. Uninterpreted keys
+/// (`spawns`, `class` hints, unknown TeamRule fields) stay on the original
+/// object. Join, SetRules and MSAV export share this helper (ASTRA R01).
+pub(crate) fn client_visible_rules_json(
+    world: &DynamicWorld,
+    rules: &WaveRules,
+) -> std::io::Result<String> {
+    let map_rules = crate::engine::world_stream::inspect_metadata(&world.network_template)?.rules;
+    Ok(crate::network::units::serialize_live_rules_json(
+        &map_rules, rules,
+    ))
+}
+
 /// Applies the subset of the official `Gamemode` preset represented by
 /// `WaveRules`. Mode presets are applied after map rules: a Survival map
 /// hosted as Sandbox must not be allowed to turn infinite resources back off.
 pub(crate) fn apply_game_mode_to_wave_rules(rules: &mut WaveRules, mode: GameMode) {
     match mode {
         GameMode::Sandbox => {
-            // Gamemode.sandbox (v158.1): infiniteResources=true, waves=true and
-            // waveTimer=false. allowEditRules is a client-facing Rules field and
-            // is patched into the serialized world stream separately.
+            // Gamemode.sandbox (v159.7 javap lambda$static$2):
+            // infiniteResources=true, allowEditRules=true, waves=true,
+            // waveTimer=false. It does NOT set instantBuild (that is
+            // Gamemode.editor, lambda$static$7) — instant placement comes
+            // from ConstructBlock.construct/deconstruct, which finish on
+            // the first tick whenever `state.rules.infiniteResources` holds.
             rules.infinite_resources = true;
+            rules.allow_edit_rules = true;
             rules.waves_enabled = true;
             rules.wave_timer = false;
         }
@@ -316,12 +363,30 @@ pub(crate) fn apply_game_mode_to_wave_rules(rules: &mut WaveRules, mode: GameMod
             rules.waves_enabled = true;
         }
         GameMode::Pvp => {
-            // Gamemode.pvp: pvp flag is GameMode::Pvp; attackMode is out of
-            // scope for this task. Radius/build multipliers match 158.1.
+            // Gamemode.pvp (v159.7 javap lambda$static$5): pvp=true,
+            // attackMode=true, enemyCoreBuildRadius=600, build cost/speed
+            // multipliers reset to 1 and unit factory speed doubles.
+            rules.pvp = true;
+            rules.attack_mode = true;
             rules.enemy_core_build_radius = 600.0;
             rules.build_speed_multiplier = 1.0;
+            rules.unit_build_speed_multiplier = 2.0;
         }
-        GameMode::Attack => {}
+        GameMode::Attack => {
+            // Gamemode.attack (v159.7): attackMode=true, waveTimer=true with
+            // a 2-minute spacing, and the wave team builds for free
+            // (waveTeam.rules().infiniteResources = true).
+            rules.attack_mode = true;
+            rules.wave_timer = true;
+            rules.wave_spacing = 2.0 * 60.0;
+            let mut wave_team_rule = rules
+                .team_rules
+                .get(&rules.wave_team)
+                .cloned()
+                .unwrap_or_else(|| crate::network::units::rules::DEFAULT_TEAM_RULE.clone());
+            wave_team_rule.infinite_resources = true;
+            rules.team_rules.insert(rules.wave_team, wave_team_rule);
+        }
     }
 }
 
@@ -442,7 +507,7 @@ pub(crate) fn fresh_world_from_template_for_mode(
     // emits waves from its own core instead of the map's spawn overlays.
     // Combine overlay spawns with enemy-core positions when the map has them.
     let mut enemy_spawns = base_map.enemy_spawns();
-    if mode == GameMode::Attack {
+    if mode == GameMode::Attack && wave_rules.waves_spawn_at_cores {
         extend_attack_spawns_for_team(&mut enemy_spawns, &base_map.buildings, wave_rules.wave_team);
     }
     // Wave generation comes from the loaded map's Rules, with the wave/team
@@ -459,7 +524,9 @@ pub(crate) fn fresh_world_from_template_for_mode(
     state
         .infinite_resources
         .store(wave_rules.infinite_resources, Ordering::Relaxed);
-    Ok(DynamicWorld {
+    *state.extras.objectives.write() =
+        crate::network::simulation::remaining::parse_map_objectives(&metadata.rules);
+    let world = DynamicWorld {
         game_state: state.clone(),
         width,
         height,
@@ -481,7 +548,7 @@ pub(crate) fn fresh_world_from_template_for_mode(
         },
         floors: base_map.floors.clone(),
         overlays: base_map.overlays.clone(),
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -491,6 +558,7 @@ pub(crate) fn fresh_world_from_template_for_mode(
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -506,10 +574,12 @@ pub(crate) fn fresh_world_from_template_for_mode(
             &base_map.overlays,
         )),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path,
         logic_flags: DashMap::new(),
         logic_executors: DashMap::new(),
@@ -528,7 +598,11 @@ pub(crate) fn fresh_world_from_template_for_mode(
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
-    })
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
+    };
+    crate::network::core_inventory::initialize_loadout(&world);
+    Ok(world)
 }
 
 /// Resolved source for the `host <map>` console command.
@@ -703,7 +777,7 @@ pub fn host_map(
         world.wave_rules.read().infinite_resources,
         Ordering::Relaxed,
     );
-    *state.core_items.write() = GameState::initial_core_items();
+    crate::network::core_inventory::initialize_loadout(&world);
     *state.core_health.write() = world.core_max_health;
     state.game_over.store(false, Ordering::Relaxed);
     *state.simulation_time.write() = 0.0;
@@ -768,6 +842,7 @@ pub fn host_map(
         fresh.mouse_y = team_spawn_y;
         fresh.rotation = 90.0;
         fresh.active_plans.clear();
+        fresh.last_snapshot = -1;
         fresh.mining_position = None;
         fresh.mining_progress = 0.0;
         fresh.carried_item = -1;
@@ -802,6 +877,10 @@ pub fn host_map(
     // on their next loop iteration.
     store.swap(world);
     let world = store.load();
+    world
+        .game_state
+        .host_map_events
+        .fetch_add(1, Ordering::Relaxed);
 
     // Persist the fresh state to the active save; this also records the new
     // map identity so later `load`/restart validations accept the file.
@@ -819,6 +898,7 @@ pub fn host_map(
         (&world.cores, &world.team_core_lists),
         &world.logic_flags,
         &world.puddles,
+        crate::network::wire::persistence::checkpoint_rules_json(&world),
     )?;
 
     // Re-stream: WorldDataBegin resets the client world, then the new stream
@@ -827,14 +907,13 @@ pub fn host_map(
     let wave = world.game_state.wave.load(Ordering::Relaxed);
     let wave_time = *world.game_state.wave_time.read();
     let tick = f64::from(*world.game_state.simulation_time.read());
-    let mode = *world.game_state.mode.read();
     let begin_frame = frame_generated_packet(WORLD_DATA_BEGIN_PACKET_ID, &[], false)?;
     for connection in connections.iter() {
         let player_id = 1_000_000 + *connection.key();
         let Some(session) = sessions.iter().find(|session| session.id == player_id) else {
             continue;
         };
-        let stream = crate::engine::world_stream::personalize_current_with_state_mode(
+        let stream = crate::engine::world_stream::personalize_current_with_state_mode_and_rand(
             &network_template_with_plans(&world)?,
             player_id,
             &session.name,
@@ -843,8 +922,7 @@ pub fn host_map(
             wave,
             wave_time,
             tick,
-            mode == GameMode::Pvp,
-            mode == GameMode::Sandbox,
+            world.game_state.extras.rand_seeds(),
         )?;
         enqueue_outbound(&connection, begin_frame.clone(), true);
         for frame in world_stream_frames(&stream)? {
@@ -868,8 +946,27 @@ pub(crate) fn emit_game_over_packet_with_winner(
     out: &dyn crate::network::outbound::FrameEmit,
     winner: u8,
 ) {
+    use crate::network::wire::encode::encode_info_message_frame;
     world.persistence_dirty.store(true, Ordering::Relaxed);
     if let Ok(frame) = frame_generated_packet(GAME_OVER_PACKET_ID, &[winner], false) {
+        out.broadcast(frame);
+    }
+    // Official ServerControl game-over infoMessage (audit H14). The next-map
+    // line of the official text is omitted: map rotation lives behind the
+    // runtime/console boundary (ARCH002) and is not visible here.
+    let pvp = matches!(
+        *world.game_state.mode.read(),
+        crate::state::game_state::GameMode::Pvp
+    );
+    let team_name = if winner == 1 { "sharded" } else { "crux" };
+    let header = if pvp {
+        format!("[accent]The []team {winner} ({team_name})[] is victorious![]\n")
+    } else {
+        "[scarlet]Game over![]\n".to_string()
+    };
+    // Config.roundExtraTime defaults to 10 seconds.
+    let text = format!("{header}\nNew game begins in 10 seconds.");
+    if let Ok(frame) = encode_info_message_frame(&text) {
         out.broadcast(frame);
     }
 }

@@ -1,4 +1,4 @@
-# P2-A1 server-authoritative bullet inventory (Mindustry v158.1 baseline).
+# P2-A1 server-authoritative bullet inventory (Mindustry v159.7).
 # Columns: bullet_id, consumers, direct, splash, pierce, status, frag, continuous,
 # lightning, heal, point_defense, spawnUnit, sticky
 # Values: IMPLEMENTED | DEVIATION | — (not applicable / not used by this bullet)
@@ -6,8 +6,11 @@
 # Turret families (113-196) share one row per family; see tools/BULLET_INVENTORY.md.
 # Generated from unit_weapons.tsv, listener.rs turret tables, economy.rs Erekir tables,
 # and combat.rs special-case handlers. Re-verify version-sensitive ids against
-# desktop.jar 158.1 when the local Mindustry tree is not exactly v158.1.
+# desktop.jar 159.7. Unlisted ids deal zero damage (C2 fail-closed).
 #
+1	Bullets.damageLightning	IMPLEMENTED	—	—	—	—	—	IMPLEMENTED	—	—	—	—
+2	Bullets.damageLightningGround	IMPLEMENTED	—	—	—	—	—	IMPLEMENTED	—	—	—	—
+3	Bullets.damageLightningAir	IMPLEMENTED	—	—	—	—	—	IMPLEMENTED	—	—	—	—
 6	dagger,large-weapon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
 7	mace,flamethrower	IMPLEMENTED	—	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—
 8	fortress,artillery	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
@@ -80,7 +83,7 @@
 97	elude,elude-weapon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
 98	avert,avert-weapon	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
 100	obviate,bomb	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
-103	quell,quell-weapon	—	—	—	—	—	—	—	—	—	DEVIATION	—
+103+104	quell,quell-weapon	—	—	—	—	—	—	—	—	—	DEVIATION	—
 105-107	quell/disrupt-missiles	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—
 106	disrupt,launcher	—	—	—	—	—	—	—	—	—	DEVIATION	—
 108-111	evoke/incite/emanate	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
@@ -104,8 +107,10 @@
 167-169	diffuse-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
 170-171	sublimate-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
 172-179	titan-turret	IMPLEMENTED	IMPLEMENTED	—	—	—	—	—	—	—	—	—
-181-182	afflict-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
-183	lustre-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
-185-195	scathe/smite payloads	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—
-196	malign-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+178-181	disperse-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+183	afflict-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+185	lustre-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
+186/189/192	scathe launchers	—	—	—	—	—	—	—	—	—	DEVIATION	—
+196	smite-turret	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—
+199	malign-turret	IMPLEMENTED	—	—	—	—	—	—	—	—	—	—
 187-195	scathe-missile-family	—	IMPLEMENTED	—	—	—	—	—	—	—	DEVIATION	—

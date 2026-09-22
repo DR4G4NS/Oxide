@@ -39,24 +39,37 @@ pub(crate) fn collision_position_passable(
     if unit_collision_layer(unit) == 2 {
         return true;
     }
-    let tile_x = (x / 8.0).floor() as i32;
-    let tile_y = (y / 8.0).floor() as i32;
+    let tile_x = crate::network::combat::enemy::world_to_tile(x);
+    let tile_y = crate::network::combat::enemy::world_to_tile(y);
     let Some(index) = navigation_index(world, tile_x, tile_y) else {
         return false;
     };
     let position = (tile_x << 16) | (tile_y as u16 as i32);
-    let block = dynamic_at(world, position)
-        .map(|tile| tile.block)
-        .or_else(|| base_building_at(world, position).map(|building| building.block))
+    let floor_id = crate::network::combat::floor_at_tile(world, tile_x, tile_y);
+    let floor = crate::game::content::block_navigation(floor_id);
+    let movement = crate::game::content::unit_movement(unit.unit_type);
+    if movement.naval {
+        if !crate::game::content::floor_is_liquid(floor_id) {
+            return false;
+        }
+    } else if floor.solid {
+        // Natural rock / solid floors (ASTRA F05 / C04).
+        return false;
+    }
+    if let Some(tile) = dynamic_at(world, position) {
+        return !crate::game::content::building_check_solid(tile.block, tile.door_open);
+    }
+    let block = base_building_at(world, position)
+        .map(|building| building.block)
         .unwrap_or(world.base_blocks[index]);
-    !crate::game::content::block_navigation(block).solid
+    !crate::game::content::building_check_solid(block, false)
 }
 
 /// Navigation fields only depend on solid building occupancy/health. Belts,
 /// routers, power blocks and other non-solid machines must not invalidate a
 /// full-map Dijkstra field every time a large plan finishes.
 pub(crate) fn invalidate_navigation_for_block(world: &DynamicWorld, block: i16) {
-    if crate::game::content::block_navigation(block).solid {
+    if crate::game::content::block_navigation(block).solid || matches!(block, 228 | 229 | 239) {
         world.navigation_revision.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -82,11 +95,12 @@ pub(crate) fn generic_unit_weapon_volley(
     }
 
     let (direct_damage, splash_damage, splash_radius) = match weapon.bullet_id {
-        // SpawnUnitBulletType launchers are represented by their spawned
-        // missile's terminal payload in this headless authoritative model.
-        92 => (0.75, 140.0, 25.0),  // anthicus -> anthicus-missile
-        103 => (0.75, 110.0, 25.0), // quell -> quell-missile
-        106 => (0.75, 140.0, 25.0), // disrupt -> disrupt-missile
+        // SpawnUnitBulletType launchers (BulletType.create JAR 158.1): these
+        // bullets never become bullet entities and never reach hit(), so they
+        // carry NO terminal splash of their own. The spawnUnit MissileUnitType
+        // is inserted at impact (simulate_projectiles::spawn_projectile_unit)
+        // and the payload damage lives in the spawned missile's own weapon.
+        92 | 103 | 106 => (weapon.damage, 0.0, 0.0),
         _ => (
             weapon.damage,
             weapon.splash_damage,
@@ -106,6 +120,8 @@ pub(crate) fn generic_unit_weapon_volley(
     EnemyProjectileVolley {
         bullet_id: weapon.bullet_id,
         shots: weapon.shots,
+        mirrored_mounts: if weapon.mirror { 2 } else { 1 },
+        mount_offset: weapon.mount_x,
         direct_damage,
         splash_damage,
         splash_radius,
@@ -114,6 +130,12 @@ pub(crate) fn generic_unit_weapon_volley(
         inaccuracy: 0.0,
         velocity_random: 0.0,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         status_effect: weapon.status_effect,
         status_duration: weapon.status_duration,
         pierce_units: if weapon.pierce_units { u8::MAX } else { 0 },
@@ -139,15 +161,75 @@ pub(crate) fn set_unit_weapon_timer(unit: &mut EnemyUnit, index: usize, value: f
     }
 }
 
+/// Vanilla WeaponsComp counts down and stays at 0 (ready). Counting up, that
+/// is a cap at `reload`. Extra idle time must not dump as simultaneous shots
+/// (ASTRA E06).
+pub(crate) fn accumulate_weapon_timer(timer: f32, delta: f32, reload: f32) -> f32 {
+    let reload = reload.max(0.0001);
+    (timer + delta.max(0.0)).min(reload)
+}
+
+pub(crate) fn take_weapon_shot(timer: &mut f32, reload: f32) -> bool {
+    let reload = reload.max(0.0001);
+    if *timer >= reload {
+        *timer = 0.0;
+        true
+    } else {
+        false
+    }
+}
+
+/// Advance every mount's reload without firing, capped at each weapon's period.
+pub(crate) fn accumulate_unit_weapon_timers(unit: &mut EnemyUnit, delta_ticks: f32) {
+    accumulate_idle_weapon_timers(unit, delta_ticks);
+}
+
+pub(crate) fn accumulate_wave_weapon_timers(unit: &mut EnemyUnit, delta_ticks: f32) {
+    accumulate_idle_weapon_timers(unit, delta_ticks);
+}
+
+fn accumulate_idle_weapon_timers(unit: &mut EnemyUnit, delta_ticks: f32) {
+    let delta = effective_unit_reload_delta(unit, delta_ticks);
+    let weapons = crate::game::content::unit_weapons(unit.unit_type);
+    if weapons.is_empty() {
+        unit.attack_reload =
+            accumulate_weapon_timer(unit.attack_reload, delta, unit.attack_reload_time);
+        return;
+    }
+    for (index, weapon) in weapons.iter().copied().take(4).enumerate() {
+        let reload = (weapon.reload * if weapon.mirror { 2.0 } else { 1.0 }).max(0.0001);
+        let timer = accumulate_weapon_timer(unit_weapon_timer(unit, index), delta, reload);
+        set_unit_weapon_timer(unit, index, timer);
+    }
+}
+
 pub(crate) fn drain_weapon_timer(
     timer: &mut f32,
     reload: f32,
     fire: AlliedWeaponFire,
     out: &mut Vec<AlliedWeaponFire>,
 ) {
-    while *timer >= reload {
+    drain_weapon_timer_n(timer, reload, fire, out, usize::MAX);
+}
+
+fn drain_weapon_timer_n(
+    timer: &mut f32,
+    reload: f32,
+    fire: AlliedWeaponFire,
+    out: &mut Vec<AlliedWeaponFire>,
+    max_bursts: usize,
+) {
+    let reload = reload.max(0.0001);
+    if max_bursts == 1 {
+        // Runtime updates fire at most once and discard overshoot, as a
+        // countdown reset to reload would. Idle credit is never a backlog.
+        *timer = timer.min(reload);
+    }
+    let mut bursts = 0;
+    while *timer >= reload && bursts < max_bursts {
         *timer -= reload;
         out.push(fire);
+        bursts += 1;
     }
 }
 
@@ -155,6 +237,25 @@ pub(crate) fn collect_allied_weapon_fire(
     unit: &mut EnemyUnit,
     delta_ticks: f32,
     target_distance: f32,
+) -> Option<Vec<AlliedWeaponFire>> {
+    collect_allied_weapon_fire_n(unit, delta_ticks, target_distance, usize::MAX)
+}
+
+/// One burst per mount: the 60 Hz server tick. Large `delta_ticks` must not
+/// dump idle overcharge as simultaneous volleys (ASTRA E06 / factory fire).
+pub(crate) fn collect_allied_weapon_fire_tick(
+    unit: &mut EnemyUnit,
+    delta_ticks: f32,
+    target_distance: f32,
+) -> Option<Vec<AlliedWeaponFire>> {
+    collect_allied_weapon_fire_n(unit, delta_ticks, target_distance, 1)
+}
+
+fn collect_allied_weapon_fire_n(
+    unit: &mut EnemyUnit,
+    delta_ticks: f32,
+    target_distance: f32,
+    max_bursts: usize,
 ) -> Option<Vec<AlliedWeaponFire>> {
     let damage_multiplier = effective_unit_damage_multiplier(unit);
     let can_shoot = unit_can_shoot(unit);
@@ -165,46 +266,52 @@ pub(crate) fn collect_allied_weapon_fire(
             unit.attack_reload += delta_ticks;
             unit.secondary_attack_reload += delta_ticks;
             unit.tertiary_attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
-                20.0,
+                40.0,
                 AlliedWeaponFire::Projectile(ANTUMBRA_MISSILE),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.secondary_attack_reload,
-                35.0,
+                70.0,
                 AlliedWeaponFire::Projectile(ANTUMBRA_MISSILE),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.tertiary_attack_reload,
-                12.0,
+                24.0,
                 AlliedWeaponFire::Projectile(ANTUMBRA_CANNON),
                 &mut fire,
+                max_bursts,
             );
         }
         3 => {
             unit.attack_reload += delta_ticks;
             unit.secondary_attack_reload += delta_ticks;
             unit.tertiary_attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
-                45.0,
+                90.0,
                 AlliedWeaponFire::Projectile(SCEPTER_BOLT),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.secondary_attack_reload,
-                12.0,
+                24.0,
                 AlliedWeaponFire::Projectile(SCEPTER_MOUNT),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.tertiary_attack_reload,
-                15.0,
+                30.0,
                 AlliedWeaponFire::Projectile(SCEPTER_MOUNT),
                 &mut fire,
+                max_bursts,
             );
         }
         13 => {
@@ -212,52 +319,59 @@ pub(crate) fn collect_allied_weapon_fire(
             unit.secondary_attack_reload += delta_ticks;
             unit.tertiary_attack_reload += delta_ticks;
             unit.quaternary_attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
-                45.0,
+                90.0,
                 AlliedWeaponFire::Projectile(ARKYID_ARTILLERY),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.secondary_attack_reload,
-                9.0,
-                AlliedWeaponFire::Projectile(ARKYID_SAP),
+                18.0,
+                AlliedWeaponFire::Projectile(volley_with_mount_offset(ARKYID_SAP, 4.0)),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.tertiary_attack_reload,
-                14.0,
-                AlliedWeaponFire::Projectile(ARKYID_SAP),
+                28.0,
+                AlliedWeaponFire::Projectile(volley_with_mount_offset(ARKYID_SAP, 9.0)),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.quaternary_attack_reload,
-                22.0,
-                AlliedWeaponFire::Projectile(ARKYID_SAP),
+                44.0,
+                AlliedWeaponFire::Projectile(volley_with_mount_offset(ARKYID_SAP, 14.0)),
                 &mut fire,
+                max_bursts,
             );
         }
         19 => {
             unit.attack_reload += delta_ticks;
             unit.secondary_attack_reload += delta_ticks;
             unit.tertiary_attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
-                45.0,
+                90.0,
                 AlliedWeaponFire::Projectile(ECLIPSE_LASER),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.secondary_attack_reload,
-                9.0,
-                AlliedWeaponFire::Projectile(ECLIPSE_FLAK),
+                18.0,
+                AlliedWeaponFire::Projectile(volley_with_mount_offset(ECLIPSE_FLAK, 11.0)),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.tertiary_attack_reload,
-                12.0,
-                AlliedWeaponFire::Projectile(ECLIPSE_FLAK),
+                24.0,
+                AlliedWeaponFire::Projectile(volley_with_mount_offset(ECLIPSE_FLAK, 20.0)),
                 &mut fire,
+                max_bursts,
             );
         }
         12 | 14 | 22 | 25..=28 => {
@@ -265,35 +379,39 @@ pub(crate) fn collect_allied_weapon_fire(
                 naval_weapon_volleys(unit.unit_type).unwrap();
             unit.attack_reload += delta_ticks;
             unit.secondary_attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
                 primary_reload,
                 AlliedWeaponFire::Projectile(primary),
                 &mut fire,
+                max_bursts,
             );
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.secondary_attack_reload,
                 secondary_reload,
                 AlliedWeaponFire::Projectile(secondary),
                 &mut fire,
+                max_bursts,
             );
         }
         8 => {
             unit.attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
                 155.0,
                 AlliedWeaponFire::Projectile(VELA_BEAM),
                 &mut fire,
+                max_bursts,
             );
         }
         30 => {
             unit.attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
-                22.0,
+                44.0,
                 AlliedWeaponFire::Projectile(RETUSA_BOLT),
                 &mut fire,
+                max_bursts,
             );
             let previous = unit.tertiary_attack_reload.max(0.0);
             let current = previous + delta_ticks;
@@ -306,18 +424,20 @@ pub(crate) fn collect_allied_weapon_fire(
         34 => {
             unit.attack_reload += delta_ticks;
             unit.secondary_attack_reload += delta_ticks;
-            drain_weapon_timer(
+            drain_weapon_timer_n(
                 &mut unit.attack_reload,
-                65.0,
+                130.0,
                 AlliedWeaponFire::Projectile(enemy_projectile_volley(34).unwrap()),
                 &mut fire,
+                max_bursts,
             );
             if target_distance <= 90.0 {
-                drain_weapon_timer(
+                drain_weapon_timer_n(
                     &mut unit.secondary_attack_reload,
                     170.0,
                     AlliedWeaponFire::NavanaxLasers(damage_multiplier),
                     &mut fire,
+                    max_bursts,
                 );
             }
         }
@@ -331,12 +451,19 @@ pub(crate) fn collect_allied_weapon_fire(
             // handled above as one group.
             debug_assert!(weapons.len() <= 4);
             for (index, weapon) in weapons.iter().copied().take(4).enumerate() {
-                let reload = weapon.reload.max(0.0001);
-                let mut timer = unit_weapon_timer(unit, index) + delta_ticks.max(0.0);
                 let volley = generic_unit_weapon_volley(unit, weapon);
-                while timer >= reload {
+                // The TSV is pre-init. UnitType.init doubles each mirrored
+                // mount's reload; our volley represents the pair together.
+                let reload = (weapon.reload * if weapon.mirror { 2.0 } else { 1.0 }).max(0.0001);
+                let mut timer = unit_weapon_timer(unit, index) + delta_ticks.max(0.0);
+                if max_bursts == 1 {
+                    timer = timer.min(reload);
+                }
+                let mut bursts = 0;
+                while timer >= reload && bursts < max_bursts {
                     timer -= reload;
                     fire.push(AlliedWeaponFire::Projectile(volley));
+                    bursts += 1;
                 }
                 set_unit_weapon_timer(unit, index, timer);
             }
@@ -362,7 +489,7 @@ pub(crate) fn collect_manual_weapon_fire(
     target_distance: f32,
 ) -> Option<Vec<AlliedWeaponFire>> {
     if unit.unit_type != 34 {
-        return collect_allied_weapon_fire(unit, delta_ticks, target_distance);
+        return collect_allied_weapon_fire_tick(unit, delta_ticks, target_distance);
     }
     let volley = scaled_projectile_volley(
         enemy_projectile_volley(34).unwrap(),
@@ -371,11 +498,12 @@ pub(crate) fn collect_manual_weapon_fire(
     let can_shoot = unit_can_shoot(unit);
     unit.attack_reload += effective_unit_reload_delta(unit, delta_ticks);
     let mut fire = Vec::new();
-    drain_weapon_timer(
+    drain_weapon_timer_n(
         &mut unit.attack_reload,
         65.0,
         AlliedWeaponFire::Projectile(volley),
         &mut fire,
+        1,
     );
     if !can_shoot {
         fire.clear();
@@ -428,21 +556,27 @@ pub(crate) fn spawn_weapon_fire_for_team(
     for fire in fires {
         match fire {
             AlliedWeaponFire::Projectile(volley) => {
-                for volley_shot in 0..volley.shots {
-                    spawn_unit_projectile_for_team(
-                        world,
-                        out,
-                        shooter_id,
-                        target_id,
-                        target_position,
-                        *volley,
-                        source_x,
-                        source_y,
-                        target_x,
-                        target_y,
-                        volley_shot,
-                        team,
-                    );
+                // Vanilla Weapon.mirror: every mount (the flipped copy has its
+                // local muzzle x negated) fires the full shot pattern.
+                for mount in 0..crate::network::combat::volley_mount_count(*volley) {
+                    let lateral = crate::network::combat::volley_mount_lateral(*volley, mount);
+                    for volley_shot in 0..volley.shots {
+                        spawn_unit_projectile_for_team(
+                            world,
+                            out,
+                            shooter_id,
+                            target_id,
+                            target_position,
+                            *volley,
+                            source_x,
+                            source_y,
+                            target_x,
+                            target_y,
+                            lateral,
+                            volley_shot,
+                            team,
+                        );
+                    }
                 }
             }
             AlliedWeaponFire::NavanaxLasers(multiplier) => spawn_navanax_lasers(
@@ -463,6 +597,63 @@ pub(crate) fn spawn_weapon_fire_for_team(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SupportWeaponTarget {
+    pub unit_id: i32,
+    pub building_position: Option<i32>,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Shared by support-unit simulation and weapon snapshots. RepairAI prefers
+/// a damaged allied building; without one, its weapons can target enemies.
+pub(crate) fn support_weapon_target(
+    world: &DynamicWorld,
+    unit: &EnemyUnit,
+) -> Option<SupportWeaponTarget> {
+    let command = world
+        .unit_orders
+        .get(&unit.id)
+        .map(|order| order.command)
+        .unwrap_or_else(|| default_unit_command(unit.unit_type));
+    if command == 1 {
+        if let Some((position, x, y)) =
+            damaged_allied_building_target(world, unit.team, unit.x, unit.y, f32::INFINITY)
+        {
+            // A distant repair target must not make the unit shoot at a
+            // different object while it is approaching that building.
+            return ((x - unit.x).hypot(y - unit.y) <= unit.attack_range).then_some(
+                SupportWeaponTarget {
+                    unit_id: -1,
+                    building_position: Some(position),
+                    x,
+                    y,
+                },
+            );
+        }
+    }
+    if let Some((position, x, y)) =
+        crate::network::units::unit_orders::ordered_opposing_building(world, unit)
+    {
+        return ((x - unit.x).hypot(y - unit.y) <= unit.attack_range).then_some(
+            SupportWeaponTarget {
+                unit_id: -1,
+                building_position: Some(position),
+                x,
+                y,
+            },
+        );
+    }
+    crate::network::wire::nearest_opposing_unit(world, unit.team, unit.x, unit.y)
+        .filter(|(_, x, y)| (*x - unit.x).hypot(*y - unit.y) <= unit.attack_range)
+        .map(|(unit_id, x, y)| SupportWeaponTarget {
+            unit_id,
+            building_position: None,
+            x,
+            y,
+        })
+}
+
 pub(crate) fn damaged_allied_building_target(
     world: &DynamicWorld,
     team: u8,
@@ -476,6 +667,7 @@ pub(crate) fn damaged_allied_building_target(
         .iter()
         .filter_map(|tile| {
             if tile.block == 0
+                || crate::network::buildings::construction::is_construct_block(tile.block)
                 || tile.team != team
                 || building_heal_suppressed(world, tile.position, tile.block)
                 || !seen.insert(tile.position)
@@ -484,8 +676,13 @@ pub(crate) fn damaged_allied_building_target(
             }
             let maximum = crate::game::content::block_health(tile.block);
             let health = dynamic_tile_health(&tile);
-            let target_x = (tile.position >> 16) as i16 as f32 * 8.0;
-            let target_y = tile.position as i16 as f32 * 8.0;
+            let offset = if crate::game::content::block_size(tile.block).is_multiple_of(2) {
+                4.0
+            } else {
+                0.0
+            };
+            let target_x = (tile.position >> 16) as i16 as f32 * 8.0 + offset;
+            let target_y = tile.position as i16 as f32 * 8.0 + offset;
             let distance = (target_x - x).hypot(target_y - y);
             (health < maximum && distance <= range).then_some((
                 distance,
@@ -506,8 +703,13 @@ pub(crate) fn damaged_allied_building_target(
                 return None;
             }
             let maximum = crate::game::content::block_health(building.block);
-            let target_x = (building.position >> 16) as i16 as f32 * 8.0;
-            let target_y = building.position as i16 as f32 * 8.0;
+            let offset = if crate::game::content::block_size(building.block).is_multiple_of(2) {
+                4.0
+            } else {
+                0.0
+            };
+            let target_x = (building.position >> 16) as i16 as f32 * 8.0 + offset;
+            let target_y = building.position as i16 as f32 * 8.0 + offset;
             let distance = (target_x - x).hypot(target_y - y);
             (building.health < maximum && distance <= range).then_some((
                 distance,
@@ -520,7 +722,7 @@ pub(crate) fn damaged_allied_building_target(
     dynamic
         .into_iter()
         .chain(base)
-        .min_by(|left, right| left.0.total_cmp(&right.0))
+        .min_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)))
         .map(|(_, position, target_x, target_y)| (position, target_x, target_y))
 }
 
@@ -548,11 +750,26 @@ pub(crate) fn scaled_projectile_volley(
 }
 
 pub(crate) fn effective_unit_speed(unit: &EnemyUnit) -> f32 {
+    effective_unit_speed_on_floor(unit, None)
+}
+
+/// World-aware variant applying the official `Floor.speedMultiplier` under
+/// the unit's tile (audit H13/H4). Flying units ignore terrain; grounded
+/// units are slowed by liquid/mud/ice floors per the JAR-probed table.
+pub(crate) fn effective_unit_speed_on_floor(unit: &EnemyUnit, floor: Option<i16>) -> f32 {
     let boost = boost_properties(unit.unit_type)
         .map(|(boost, _, _)| 1.0 + (boost - 1.0) * unit.elevation.clamp(0.0, 1.0))
         .unwrap_or(1.0);
     let status = crate::network::units::StatusContainer::status_aggregate(unit).speed;
-    unit.move_speed * boost * status
+    let floor_multiplier =
+        if unit.elevation >= 0.09 || crate::game::content::unit_movement(unit.unit_type).flying {
+            1.0
+        } else {
+            floor
+                .map(crate::game::content::floor_speed_multiplier)
+                .unwrap_or(1.0)
+        };
+    unit.move_speed * boost * status * floor_multiplier
 }
 
 pub(crate) fn effective_unit_reload_delta(unit: &EnemyUnit, delta_ticks: f32) -> f32 {
@@ -560,9 +777,10 @@ pub(crate) fn effective_unit_reload_delta(unit: &EnemyUnit, delta_ticks: f32) ->
     delta_ticks.max(0.0) * agg.reload
 }
 
-/// Official `UnitComp.canShoot` status half: `!disarmed`.
+/// 159.7 UnitEntity.canShoot: disarmed and airborne boost units cannot fire.
 pub(crate) fn unit_can_shoot(unit: &EnemyUnit) -> bool {
     !crate::network::units::StatusContainer::status_aggregate(unit).disarmed
+        && !(boost_properties(unit.unit_type).is_some() && unit.elevation >= 0.09)
 }
 
 /// Official `BuilderComp` `type.buildSpeed * buildSpeedMultiplier`.

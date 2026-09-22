@@ -24,10 +24,13 @@ use crate::network::units::mining::heal_building_for_team;
 use crate::network::wire::encode_build_health_update_frame;
 
 pub(crate) fn hostile_unit_count(world: &DynamicWorld) -> u32 {
+    let wave_team = world.wave_rules.read().wave_team;
     world
         .enemies
         .iter()
-        .filter(|unit| unit.team == world.wave_rules.read().wave_team)
+        .filter(|unit| {
+            unit.team == wave_team && crate::game::unit_types::unit_type_is_enemy(unit.unit_type)
+        })
         .count()
         .try_into()
         .unwrap_or(u32::MAX)
@@ -72,28 +75,151 @@ pub(crate) fn nearest_player_building(
         .map(|(_, position, target_x, target_y)| (position, target_x, target_y))
 }
 
+fn packed_tile(tx: i32, ty: i32) -> i32 {
+    (tx << 16) | (ty & 0xFFFF)
+}
+
+/// Floor content id under a world position (0 when out of bounds).
+/// Uses official `World.toTile` (ASTRA E04), not `floor(x/8)`.
+pub(crate) fn floor_at(world: &DynamicWorld, x: f32, y: f32) -> i16 {
+    floor_at_tile(world, world_to_tile(x), world_to_tile(y))
+}
+
+pub(crate) fn floor_at_tile(world: &DynamicWorld, tx: i32, ty: i32) -> i16 {
+    if tx < 0 || ty < 0 || tx >= world.width || ty >= world.height {
+        return 0;
+    }
+    if let Some(over) = world
+        .game_state
+        .extras
+        .floor_overrides
+        .get(&packed_tile(tx, ty))
+    {
+        return *over;
+    }
+    let idx = (ty * world.width + tx) as usize;
+    world.floors.get(idx).copied().unwrap_or(0)
+}
+
+/// Overlay (ore) content id under a world position.
+/// Uses official `World.toTile` (ASTRA E04), not `floor(x/8)`.
+pub(crate) fn overlay_at(world: &DynamicWorld, x: f32, y: f32) -> i16 {
+    overlay_at_tile(world, world_to_tile(x), world_to_tile(y))
+}
+
+pub(crate) fn overlay_at_tile(world: &DynamicWorld, tx: i32, ty: i32) -> i16 {
+    if tx < 0 || ty < 0 || tx >= world.width || ty >= world.height {
+        return 0;
+    }
+    if let Some(over) = world
+        .game_state
+        .extras
+        .overlay_overrides
+        .get(&packed_tile(tx, ty))
+    {
+        return *over;
+    }
+    let idx = (ty * world.width + tx) as usize;
+    world.overlays.get(idx).copied().unwrap_or(0)
+}
+
 pub(crate) fn navigation_index(world: &DynamicWorld, x: i32, y: i32) -> Option<usize> {
     (x >= 0 && y >= 0 && x < world.width && y < world.height)
         .then_some((y * world.width + x) as usize)
 }
 
-pub(crate) fn navigation_field(world: &DynamicWorld, legs: bool) -> Arc<Vec<u32>> {
+/// Official `World.toTile`: `Math.round(coord / tilesize)` via `floor(x+0.5)`.
+pub(crate) fn world_to_tile(coord: f32) -> i32 {
+    (coord / 8.0 + 0.5).floor() as i32
+}
+
+pub(crate) fn world_to_tile_in_map(coord: f32, extent: i32) -> i32 {
+    world_to_tile(coord).clamp(0, extent.saturating_sub(1))
+}
+
+/// Pathfinder cost-field variants. Ground uses `costGround` (ASTRA E04):
+/// only `allDeep` liquid is a wall; shallow water is costly. Naval prefers
+/// liquid and pays a high cost on land rather than treating every land tile
+/// as equally impassable when a channel exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NavigationClass {
+    Ground,
+    Legs,
+    Naval,
+}
+
+pub(crate) fn navigation_field_class(
+    world: &DynamicWorld,
+    class: NavigationClass,
+) -> Arc<Vec<u32>> {
     let revision = world.navigation_revision.load(Ordering::Relaxed);
-    let cache = if legs {
-        &world.leg_navigation
-    } else {
-        &world.ground_navigation
+    let cache = match class {
+        NavigationClass::Ground => &world.ground_navigation,
+        NavigationClass::Legs => &world.leg_navigation,
+        NavigationClass::Naval => &world.naval_navigation,
     };
     let mut cached = cache.lock();
     if let Some(field) = cached.as_ref().filter(|field| field.revision == revision) {
         return field.costs.clone();
     }
-    let costs = Arc::new(build_navigation_field(world, legs));
+    let costs = Arc::new(build_navigation_field_class(world, class));
     *cached = Some(NavigationField {
         revision,
         costs: costs.clone(),
     });
     costs
+}
+
+/// Pathfinder `PositionTarget` field (audit H13): cost-to-go toward an
+/// arbitrary tile instead of the team's core. Cached per (class, team, goal, revision).
+pub(crate) fn navigation_field_toward(
+    world: &DynamicWorld,
+    class: NavigationClass,
+    goal_x: i32,
+    goal_y: i32,
+    agent_team: u8,
+) -> Arc<Vec<u32>> {
+    let revision = world.navigation_revision.load(Ordering::Relaxed);
+    let packed = (goal_x << 16) | (goal_y as u16 as i32);
+    let class_id = match class {
+        NavigationClass::Ground => 0u8,
+        NavigationClass::Legs => 1,
+        NavigationClass::Naval => 2,
+    };
+    type TowardCache = Vec<(u64, u8, u8, i32, Arc<Vec<u32>>)>;
+    thread_local! {
+        static CACHE: std::cell::RefCell<TowardCache> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((_, _, _, _, costs)) = cache.iter().find(|(rev, cid, team, goal, _)| {
+            *rev == revision && *cid == class_id && *team == agent_team && *goal == packed
+        }) {
+            return costs.clone();
+        }
+        let costs = Arc::new(build_navigation_field_toward(
+            world, class, goal_x, goal_y, agent_team,
+        ));
+        cache.retain(|(rev, _, _, _, _)| *rev == revision);
+        if cache.len() >= 16 {
+            cache.remove(0);
+        }
+        cache.push((revision, class_id, agent_team, packed, costs.clone()));
+        costs
+    })
+}
+
+/// Legacy two-variant wrapper (ground/legs).
+pub(crate) fn navigation_field(world: &DynamicWorld, legs: bool) -> Arc<Vec<u32>> {
+    navigation_field_class(
+        world,
+        if legs {
+            NavigationClass::Legs
+        } else {
+            NavigationClass::Ground
+        },
+    )
 }
 
 pub(crate) fn tile_is_leg_solid(block: i16, floor: i16, data: u8) -> bool {
@@ -106,19 +232,42 @@ pub(crate) fn tile_is_leg_solid(block: i16, floor: i16, data: u8) -> bool {
     natural_filled_wall || solid_floor_without_wall
 }
 
-pub(crate) fn build_navigation_field(world: &DynamicWorld, legs: bool) -> Vec<u32> {
+pub(crate) fn build_navigation_field_class(
+    world: &DynamicWorld,
+    class: NavigationClass,
+) -> Vec<u32> {
+    let (gx, gy) = core_tile(world);
+    build_navigation_field_toward(
+        world,
+        class,
+        i32::from(gx),
+        i32::from(gy),
+        world.wave_rules.read().wave_team,
+    )
+}
+
+pub(crate) fn build_navigation_field_toward(
+    world: &DynamicWorld,
+    class: NavigationClass,
+    goal_x: i32,
+    goal_y: i32,
+    agent_team: u8,
+) -> Vec<u32> {
+    let legs = class == NavigationClass::Legs;
+    let naval = class == NavigationClass::Naval;
     const IMPASSABLE: u32 = u32::MAX / 4;
 
     let total = (world.width * world.height).max(0) as usize;
     let mut dynamic_cells = HashMap::new();
     for tile in world.tiles.iter().filter(|tile| tile.block != 0) {
         let health = dynamic_tile_health(&tile);
+        let solid = crate::game::content::building_check_solid(tile.block, tile.door_open);
         for position in &tile.occupied {
-            dynamic_cells.insert(*position, (tile.block, tile.team, health));
+            dynamic_cells.insert(*position, (tile.block, tile.team, health, solid));
         }
         dynamic_cells
             .entry(tile.position)
-            .or_insert((tile.block, tile.team, health));
+            .or_insert((tile.block, tile.team, health, solid));
     }
     let mut base_cells = HashMap::new();
     for building in world.base_buildings.iter() {
@@ -126,24 +275,66 @@ pub(crate) fn build_navigation_field(world: &DynamicWorld, legs: bool) -> Vec<u3
             base_cells.insert(*position, (building.block, building.team, building.health));
         }
     }
-    let (target_x, target_y) = core_tile(world);
-    let target_x = i32::from(target_x);
-    let target_y = i32::from(target_y);
-    let Some(target) = navigation_index(world, target_x, target_y) else {
+    let Some(target) = navigation_index(world, goal_x, goal_y) else {
         return vec![IMPASSABLE; total];
     };
+    let neighbor_flags = |x: i32, y: i32| {
+        let mut near_solid = false;
+        let mut near_liquid = false;
+        let mut near_ground = false;
+        let mut all_deep = crate::game::content::block_navigation(floor_at_tile(world, x, y)).deep;
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let nx = x + dx;
+            let ny = y + dy;
+            if nx < 0 || ny < 0 || nx >= world.width || ny >= world.height {
+                continue;
+            }
+            let nfloor_id = floor_at_tile(world, nx, ny);
+            let nfloor = crate::game::content::block_navigation(nfloor_id);
+            if crate::game::content::floor_is_liquid(nfloor_id) && nfloor.deep {
+                near_liquid = true;
+            }
+            if !crate::game::content::floor_is_liquid(nfloor_id) {
+                near_ground = true;
+            }
+            if !nfloor.deep {
+                all_deep = false;
+            }
+            let nindex = (ny * world.width + nx) as usize;
+            let npos = (nx << 16) | (ny as u16 as i32);
+            let nblock = dynamic_cells
+                .get(&npos)
+                .map(|(block, _, _, _)| *block)
+                .or_else(|| base_cells.get(&npos).map(|(block, _, _)| *block))
+                .unwrap_or(world.base_blocks[nindex]);
+            let nsolid = dynamic_cells.get(&npos).map_or_else(
+                || crate::game::content::building_check_solid(nblock, false),
+                |(_, _, _, solid)| *solid,
+            );
+            let npassable = crate::game::content::block_navigation(nblock).team_passable;
+            if nsolid && !npassable {
+                near_solid = true;
+            }
+        }
+        (near_solid, near_liquid, near_ground, all_deep)
+    };
     let tile_cost = |x: i32, y: i32| {
-        if x == target_x && y == target_y {
+        if x == goal_x && y == goal_y {
             return 1;
         }
         let index = (y * world.width + x) as usize;
-        let floor_id = world.floors[index];
+        let floor_id = floor_at_tile(world, x, y);
         let floor = crate::game::content::block_navigation(floor_id);
+        let (near_solid, near_liquid, near_ground, all_deep) = neighbor_flags(x, y);
+        // costGround: allDeep is a wall; a deep shore tile is +6000 (ASTRA E04).
+        if !legs && !naval && all_deep {
+            return IMPASSABLE;
+        }
         let terrain = 1 + u32::from(floor.deep) * 6000 + u32::from(floor.damages) * 30;
         let position = (x << 16) | (y as u16 as i32);
         let effective_block = dynamic_cells
             .get(&position)
-            .map(|(block, _, _)| *block)
+            .map(|(block, _, _, _)| *block)
             .or_else(|| base_cells.get(&position).map(|(block, _, _)| *block))
             .unwrap_or(world.base_blocks[index]);
         if legs
@@ -155,17 +346,23 @@ pub(crate) fn build_navigation_field(world: &DynamicWorld, legs: bool) -> Vec<u3
         {
             return IMPASSABLE;
         }
-        if let Some((block, team, health)) = dynamic_cells.get(&position).copied() {
+        let own_or_derelict_wall = |team: u8, team_passable: bool, check_solid: bool| {
+            check_solid && !team_passable && (team == agent_team || team == 0)
+        };
+        if let Some((block, team, health, check_solid)) = dynamic_cells.get(&position).copied() {
             let navigation = crate::game::content::block_navigation(block);
-            if navigation.solid {
+            if check_solid {
                 if legs {
                     return terrain + 5;
                 }
-                if team == world.wave_rules.read().wave_team && !navigation.team_passable {
+                if own_or_derelict_wall(team, navigation.team_passable, true) {
                     return IMPASSABLE;
                 }
                 let scaled_health = ((health / 40.0) as u32).min(80);
-                return terrain + scaled_health * 5;
+                return terrain
+                    + scaled_health * 5
+                    + u32::from(near_solid) * 2
+                    + u32::from(near_liquid) * 6;
             }
         }
         if let Some((block, team, health)) = base_cells.get(&position).copied() {
@@ -174,22 +371,41 @@ pub(crate) fn build_navigation_field(world: &DynamicWorld, legs: bool) -> Vec<u3
                 if legs {
                     return terrain + 5;
                 }
-                if team == world.wave_rules.read().wave_team && !navigation.team_passable {
+                if own_or_derelict_wall(team, navigation.team_passable, true) {
                     return IMPASSABLE;
                 }
                 let scaled_health = ((health / 40.0) as u32).min(80);
-                return terrain + scaled_health * 5;
+                return terrain
+                    + scaled_health * 5
+                    + u32::from(near_solid) * 2
+                    + u32::from(near_liquid) * 6;
             }
         }
         let base = crate::game::content::block_navigation(world.base_blocks[index]);
-        if base.solid {
+        if naval {
+            let team = dynamic_cells
+                .get(&position)
+                .map(|(_, team, _, _)| *team)
+                .or_else(|| base_cells.get(&position).map(|(_, team, _)| *team))
+                .unwrap_or(0);
+            let solid = crate::game::content::building_check_solid(effective_block, false);
+            if !crate::game::content::floor_is_liquid(floor_id)
+                || (solid && (team == agent_team || team == 0))
+            {
+                7000 + u32::from(near_ground || near_solid) * 14
+            } else {
+                1 + u32::from(near_ground || near_solid) * 14
+                    + u32::from(!floor.deep)
+                    + u32::from(floor.damages) * 35
+            }
+        } else if base.solid {
             if legs {
                 terrain + 5
             } else {
                 IMPASSABLE
             }
         } else {
-            terrain
+            terrain + u32::from(near_solid) * 2 + u32::from(near_liquid) * 6
         }
     };
 
@@ -268,38 +484,99 @@ pub(crate) fn reregister_team_core(world: &DynamicWorld, team: u8) {
     }
 }
 
+/// RtsAI.damagedSet (BuildDamageEvent listener): remember that `position`
+/// took damage this tick so squads can pick defend targets for the next
+/// ~two assignSquads windows (120-tick cadence each).
+pub(crate) fn record_damaged_building(world: &DynamicWorld, position: i32) {
+    let tick = world
+        .game_state
+        .world_ticks
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let mut window = world.damaged_window.lock();
+    window.retain(|(pos, seen)| *pos != position && tick.saturating_sub(*seen) < 240);
+    window.push((position, tick));
+}
+
+/// Whether `position` was damaged within the current defend window.
+pub(crate) fn recently_damaged(world: &DynamicWorld, position: i32) -> bool {
+    let tick = world
+        .game_state
+        .world_ticks
+        .load(std::sync::atomic::Ordering::Relaxed);
+    world
+        .damaged_window
+        .lock()
+        .iter()
+        .any(|(pos, seen)| *pos == position && tick.saturating_sub(*seen) <= 240)
+}
+
+/// Phase walls 224/225: `chanceDeflect = 10` → P(deflect) = min(1, 10/damage).
+fn wall_deflects(world: &DynamicWorld, position: i32, block: i16, damage: f32) -> bool {
+    if !matches!(block, 224 | 225) {
+        return false;
+    }
+    let chance = (10.0 / damage.max(1.0)).min(1.0);
+    let tick = *world.game_state.simulation_time.read() as i64;
+    let mut rand = crate::engine::arc_rand::ArcRand::new((i64::from(position) << 16) ^ tick);
+    rand.next_float() < chance
+}
+
+/// Surge walls 226/227: `lightningChance = 0.05`, 20 damage, length 17 tiles.
+fn wall_surge_lightning(world: &DynamicWorld, position: i32, block: i16, team: u8) {
+    if !matches!(block, 226 | 227) {
+        return;
+    }
+    let tick = *world.game_state.simulation_time.read() as i64;
+    let mut rand =
+        crate::engine::arc_rand::ArcRand::new((i64::from(position) << 16) ^ tick ^ 0x5A17);
+    if rand.next_float() >= 0.05 {
+        return;
+    }
+    let wx = (position >> 16) as i16 as f32 * 8.0;
+    let wy = position as i16 as f32 * 8.0;
+    world.game_state.extras.queue_wall_lightning(wx, wy, team);
+}
+
 pub(crate) fn damage_building(
     world: &DynamicWorld,
     position: i32,
     damage: f32,
 ) -> Option<(bool, f32)> {
+    // RtsAI.damagedSet: BuildDamageEvent feeds the squad defend window.
+    record_damaged_building(world, position);
+    // BuildingComp.lastDamageTime: feeds RepairBeamWeapon's
+    // wasRecentlyDamaged heal modifier.
+    world
+        .building_last_damage
+        .insert(position, *world.game_state.simulation_time.read());
+    if let Some(tile) = world.tiles.get(&position) {
+        if wall_deflects(world, position, tile.block, damage) {
+            return Some((false, tile.health));
+        }
+    }
     if let Some(mut tile) = world.tiles.get_mut(&position) {
         let max_health = crate::game::content::block_health(tile.block);
         if tile.health <= 0.0 || tile.health > max_health {
             tile.health = max_health;
         }
-        // Official Rules: blockDamage(team) scales incoming damage
-        // (BulletType.damageMultiplier, JAR), then Building.damage divides
-        // by blockHealth(team) (Rules.blockHealth = global * TeamRule of the
-        // BUILDING's team, Rules.java): a blockHealth of 3 means buildings
-        // take one third of the damage. A zero/absent multiplier destroys
-        // the building outright (official `Mathf.zero(dm)`).
+        // BulletType.damageMultiplier already applied the shooter's rule at
+        // creation. Only the victim's blockHealth divides incoming damage.
         let building_team = tile.team;
         let rules = world.wave_rules.read();
         let team_rule = rules.team_rule(building_team);
-        let scaled =
-            damage * (rules.block_damage_multiplier * team_rule.block_damage_multiplier).max(0.0);
         let health_mult = rules.block_health_multiplier * team_rule.block_health_multiplier;
         let effective = if health_mult.abs() <= 0.0001 {
             tile.health + 1.0
         } else {
-            scaled / health_mult
+            damage / health_mult
         };
         tile.health -= apply_unit_armor(effective, crate::game::content::block_armor(tile.block));
         let destroyed = tile.health <= 0.0;
         let health = tile.health.max(0.0);
+        let block = tile.block;
         let destroyed_state = destroyed.then(|| tile.clone());
         drop(tile);
+        wall_surge_lightning(world, position, block, building_team);
         if let Some(building) = destroyed_state {
             building_placement::teardown_building_in_place(world, position);
             world
@@ -316,17 +593,20 @@ pub(crate) fn damage_building(
         }
         return Some((destroyed, health));
     }
+    if let Some(building) = world.base_buildings.get(&position) {
+        if wall_deflects(world, position, building.block, damage) {
+            return Some((false, building.health));
+        }
+    }
     let mut building = world.base_buildings.get_mut(&position)?;
     let building_team = building.team;
     let rules = world.wave_rules.read();
     let team_rule = rules.team_rule(building_team);
-    let scaled =
-        damage * (rules.block_damage_multiplier * team_rule.block_damage_multiplier).max(0.0);
     let health_mult = rules.block_health_multiplier * team_rule.block_health_multiplier;
     let effective = if health_mult.abs() <= 0.0001 {
         building.health + 1.0
     } else {
-        scaled / health_mult
+        damage / health_mult
     };
     building.health -=
         apply_unit_armor(effective, crate::game::content::block_armor(building.block));
@@ -353,6 +633,8 @@ pub(crate) fn damage_building(
 
 pub(crate) fn base_building_tombstone(building: &BaseBuildingState) -> DynamicTile {
     DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position: building.position,
         block: 0,
         rotation: 0,
@@ -399,6 +681,8 @@ pub(crate) fn base_building_tombstone(building: &BaseBuildingState) -> DynamicTi
 
 pub(crate) fn dynamic_building_tombstone(building: &DynamicTile) -> DynamicTile {
     DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position: building.position,
         block: 0,
         rotation: building.rotation,
@@ -476,6 +760,72 @@ pub(crate) fn move_enemy_in_attack_orbit(
     enemy.rotation = velocity_y.atan2(velocity_x).to_degrees();
 }
 
+/// AI stand-in for FlyingFollowAI (quell 52 / disrupt 54) and HugAI
+/// (renale 56 / latum 57): shadow the nearest friendly unit whose
+/// `EnemySpec.health` ("large" proxy; hitSize is not tabulated for the
+/// Erekir ids) is strictly greater than the follower's own, staying within
+/// `TETHER_FOLLOW_DISTANCE` world units. Movement-only preference: attacks,
+/// abilities and player/logic authority are unchanged. Deterministic:
+/// distance ties break on unit id.
+pub(crate) const TETHER_FOLLOW_UNITS: &[i16] = &[52, 54, 56, 57];
+pub(crate) const TETHER_FOLLOW_DISTANCE: f32 = 40.0;
+
+/// Precomputed follower -> ally-position map for one simulation tick. Runs
+/// as a read-only pass so callers never hold an enemies write guard while it
+/// iterates (DashMap DM rule).
+pub(crate) fn tether_follow_targets(world: &DynamicWorld) -> HashMap<i32, (f32, f32)> {
+    let followers: Vec<_> = world
+        .enemies
+        .iter()
+        .filter(|unit| TETHER_FOLLOW_UNITS.contains(&unit.unit_type))
+        .filter(|unit| {
+            !crate::network::units::unit_is_player_controlled(world, unit.id)
+                && !crate::network::units::unit_bound_to_logic(world, unit.id)
+        })
+        .map(|unit| (unit.id, unit.team, unit.x, unit.y, unit.unit_type))
+        .collect();
+    let mut targets = HashMap::new();
+    for (id, team, x, y, unit_type) in followers {
+        let Some(own) = enemy_spec(unit_type) else {
+            continue;
+        };
+        let mut best: Option<(f32, i32, f32, f32)> = None;
+        let mut already_close = false;
+        for other in world.enemies.iter() {
+            if other.team != team || other.id == id || other.entity_class == 39 {
+                continue;
+            }
+            let Some(spec) = enemy_spec(other.unit_type) else {
+                continue;
+            };
+            if spec.health <= own.health {
+                continue;
+            }
+            let distance = (other.x - x).hypot(other.y - y);
+            if distance <= TETHER_FOLLOW_DISTANCE {
+                // Already shadowing a large ally: hold this spot.
+                already_close = true;
+                break;
+            }
+            let better = match best {
+                None => true,
+                Some((best_distance, best_id, _, _)) => {
+                    distance < best_distance || (distance == best_distance && other.id < best_id)
+                }
+            };
+            if better {
+                best = Some((distance, other.id, other.x, other.y));
+            }
+        }
+        if already_close {
+            targets.insert(id, (x, y));
+        } else if let Some((_, _, ally_x, ally_y)) = best {
+            targets.insert(id, (ally_x, ally_y));
+        }
+    }
+    targets
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum SupportRepairTarget {
     Unit(i32),
@@ -544,56 +894,38 @@ pub(crate) fn apply_enemy_support_abilities(
             }
             continue;
         }
-        if unit_type == 24 {
-            // Oct RepairFieldAbility(130, 120, 140): every 120 ticks heals
-            // 130 HP to EVERY allied unit within 140 (Units.nearby includes
-            // the oct itself; buildings are not healed).
-            if crossed(120.0) {
+        // Nova / poly / oct RepairFieldAbility table (spawn.rs, desktop.jar
+        // 159.7 dump): every `reload` ticks heal `amount` flat HP to EVERY
+        // damaged allied unit within `range` (Units.nearby includes the
+        // owner; buildings are not healed).
+        if let Some((amount, reload, range)) = repair_field_spec(unit_type) {
+            if crossed(reload) {
                 let allies: Vec<_> = world
                     .enemies
                     .iter()
                     .filter(|ally| {
                         ally.team == team
                             && ally.health < enemy_max_health(ally)
-                            && (ally.x - x).hypot(ally.y - y) <= 140.0
+                            && (ally.x - x).hypot(ally.y - y) <= range
                     })
                     .map(|ally| ally.id)
                     .collect();
                 for ally_id in allies {
                     if let Some(mut ally) = world.enemies.get_mut(&ally_id) {
-                        ally.health = (ally.health + 130.0).min(enemy_max_health(&ally));
+                        ally.health = (ally.health + amount).min(enemy_max_health(&ally));
                     }
                 }
-                if team == 1 {
+                if unit_type == 24 && team == 1 {
                     for mut player in world.players.iter_mut() {
+                        if possessed_unit_id(world, player.unit_id).is_some() {
+                            continue;
+                        }
                         if !player.dead
                             && player.health < 150.0
-                            && (player.x - x).hypot(player.y - y) <= 140.0
+                            && (player.x - x).hypot(player.y - y) <= range
                         {
-                            player.health = (player.health + 130.0).min(150.0);
+                            player.health = (player.health + amount).min(150.0);
                         }
-                    }
-                }
-            }
-            continue;
-        }
-        if unit_type == 21 {
-            // Poly RepairFieldAbility(5, 480, 50): every 480 ticks heal 5 HP
-            // to damaged allies within 50 tiles.
-            if crossed(480.0) {
-                let allies: Vec<_> = world
-                    .enemies
-                    .iter()
-                    .filter(|ally| {
-                        ally.team == team
-                            && ally.health < enemy_max_health(ally)
-                            && (ally.x - x).hypot(ally.y - y) <= 50.0
-                    })
-                    .map(|ally| ally.id)
-                    .collect();
-                for ally_id in allies {
-                    if let Some(mut ally) = world.enemies.get_mut(&ally_id) {
-                        ally.health = (ally.health + 5.0).min(enemy_max_health(&ally));
                     }
                 }
             }
@@ -624,6 +956,9 @@ pub(crate) fn apply_enemy_support_abilities(
                 }
                 if team == 1 {
                     for mut player in world.players.iter_mut() {
+                        if possessed_unit_id(world, *player.key()).is_some() {
+                            continue;
+                        }
                         if !player.dead && (player.x - x).hypot(player.y - y) <= 60.0 {
                             let overdrive_duration = player
                                 .statuses
@@ -733,14 +1068,14 @@ pub(crate) fn apply_enemy_support_abilities(
             }
             continue;
         }
-        // Nova RepairFieldAbility(10, 240, 60); Pulsar/Bryde
-        // ShieldRegenFieldAbility(20, 40, reload, 60).
-        let (period, heal, shield_amount, shield_cap) = match unit_type {
-            5 => (240.0, Some(10.0), None, 0.0),
-            6 => (300.0, None, Some(20.0), 40.0),
-            27 => (240.0, None, Some(20.0), 40.0),
-            _ => continue,
-        };
+        // Pulsar/Bryde ShieldRegenFieldAbility(20, 40, reload, 60). Nova's
+        // RepairFieldAbility lives in the repair_field_spec table above.
+        let (period, heal, shield_amount, shield_cap): (f32, Option<f32>, Option<f32>, f32) =
+            match unit_type {
+                6 => (300.0, None, Some(20.0), 40.0),
+                27 => (240.0, None, Some(20.0), 40.0),
+                _ => continue,
+            };
         if !crossed(period) {
             continue;
         }
@@ -766,9 +1101,7 @@ pub(crate) fn apply_enemy_support_abilities(
 
 pub(crate) fn enemy_max_health(enemy: &EnemyUnit) -> f32 {
     enemy_spec(enemy.unit_type)
-        .map(|spec| {
-            spec.health * status_multipliers_composite(enemy.status_effect, &enemy.statuses).0
-        })
+        .map(|spec| spec.health)
         .unwrap_or(enemy.health)
 }
 
@@ -822,100 +1155,343 @@ pub(crate) fn restore_base_buildings(
     }
 }
 
-pub(crate) fn spawn_wave(world: &DynamicWorld) {
-    if world.enemy_spawns.is_empty() {
-        warn!("Cannot spawn wave: bundled map has no spawn overlays");
-        return;
-    }
+/// WaveSpawner ground spread (`tilesize * 2`).
+const WAVE_GROUND_SPREAD: f32 = 16.0;
+/// WaveSpawner.spawnEffect: unmoving then invincible.
+const SPAWN_UNMOVING_TICKS: f32 = 30.0;
+const SPAWN_INVINCIBLE_TICKS: f32 = 60.0;
+/// WaveSpawner.doShockwave damage (Damage.damage with air=true).
+const SPAWN_SHOCKWAVE_DAMAGE: f32 = 99_999_999.0;
+
+pub(crate) fn spawn_wave(world: &DynamicWorld, out: &dyn crate::network::outbound::FrameEmit) {
+    // ASTRA W06: Logic.runWave increments the wave even when nobody appears.
     let wave = world.game_state.wave.fetch_add(1, Ordering::Relaxed);
     world.game_state.game_stats.write().waves_lasted += 1;
-    // Prefer the loaded map's Rules.spawns (official WaveSpawner); fall back
-    // to the bundled maze table only when the map defines no spawns.
+    let now = *world.game_state.simulation_time.read();
+    world
+        .game_state
+        .extras
+        .spawner_until
+        .store((now + 121.0) as u32, Ordering::Relaxed);
     let groups = if world.wave_rules.read().is_default() {
         initial_official_wave_groups(wave - 1)
     } else {
         map_wave_spawns(wave - 1, &world.wave_rules.read())
     };
-    let amount: u32 = groups.iter().map(|group| group.amount).sum();
-    let mut index = 0u32;
+    let spawn_points = wave_spawn_points(world);
+    let (wave_team, drop_zone) = {
+        let rules = world.wave_rules.read();
+        (rules.wave_team, rules.drop_zone_radius)
+    };
+    // ASTRA W03: one shockwave per overlay, not per unit and not at cores.
+    let overlays = world.enemy_spawns.read().clone();
+    for &(tile_x, tile_y) in &overlays {
+        crate::network::combat::apply_allied_splash_damage_for_team(
+            world,
+            out,
+            wave_team,
+            f32::from(tile_x) * 8.0,
+            f32::from(tile_y) * 8.0,
+            SPAWN_SHOCKWAVE_DAMAGE,
+            drop_zone,
+            1.0,
+            -1,
+            0.0,
+            1.0,
+        );
+    }
+    let mut spawned = 0u32;
     for group in groups {
-        let (health_multiplier, speed_multiplier, damage_multiplier) =
-            crate::game::status::status_multipliers(group.status_effect);
-        // Official WaveSpawner.eachGroundSpawn(group.spawn, ...): groups with a
-        // packed spawn position only use that spawn point; others use all.
+        // ASTRA W02: amount is per eligible overlay. A missing filter yields
+        // zero units for that group — never fall back to every overlay.
         let spawns: Vec<(i16, i16)> = if group.spawn >= 0 {
             let (sx, sy) = ((group.spawn >> 16) as i16, (group.spawn & 0xffff) as i16);
-            let matched: Vec<(i16, i16)> = world
-                .enemy_spawns
+            spawn_points
                 .iter()
                 .copied()
                 .filter(|(x, y)| *x == sx && *y == sy)
-                .collect();
-            if matched.is_empty() {
-                world.enemy_spawns.clone()
-            } else {
-                matched
-            }
+                .collect()
         } else {
-            world.enemy_spawns.clone()
+            spawn_points.clone()
         };
-        for _ in 0..group.amount {
-            let (tile_x, tile_y) = spawns[index as usize % spawns.len()];
-            let id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
-            let spread = (index / spawns.len() as u32) as f32 * 5.0;
-            world.enemies.insert(
-                id,
-                EnemyUnit {
-                    id,
-                    unit_type: group.spec.unit_type,
-                    entity_class: group.spec.entity_class,
-                    team: world.wave_rules.read().wave_team,
-                    x: tile_x as f32 * 8.0 + spread,
-                    y: tile_y as f32 * 8.0,
-                    rotation: -90.0,
-                    health: group.spec.health * health_multiplier,
-                    shield: group.shield,
-                    status_effect: group.status_effect,
-                    status_duration: f32::MAX,
-                    statuses: if group.status_effect >= 0 {
-                        vec![crate::game::status::ActiveStatus::simple(
-                            group.status_effect,
-                            f32::MAX,
-                        )]
-                    } else {
-                        Vec::new()
-                    },
-                    velocity_x: 0.0,
-                    velocity_y: 0.0,
-                    elevation: 0.0,
-                    payloads: Vec::new(),
-                    flag: 0.0,
-                    items: Vec::new(),
-                    mine_progress: 0.0,
-                    attack_reload: 0.0,
-                    secondary_attack_reload: 0.0,
-                    tertiary_attack_reload: 0.0,
-                    quaternary_attack_reload: 0.0,
-                    move_speed: group.spec.speed * speed_multiplier,
-                    attack_damage: group.spec.attack_damage * damage_multiplier,
-                    attack_reload_time: group.spec.attack_reload,
-                    attack_range: group.spec.attack_range,
-                    authority: UnitAuthority::DefaultAi,
-                    build_plans: Vec::new(),
-                    update_building: true,
-                    status_agg: Default::default(),
-                },
-            );
-            world.register_unit_group(id);
-            index += 1;
+        let team = group.team.unwrap_or(wave_team);
+        for &(tile_x, tile_y) in &spawns {
+            for _ in 0..group.amount {
+                let id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
+                insert_wave_unit(world, &group, team, tile_x, tile_y, id, wave);
+                spawned += 1;
+            }
         }
     }
     world
         .game_state
         .enemies_count
         .store(hostile_unit_count(world), Ordering::Relaxed);
+    if spawn_points.is_empty() {
+        warn!("Wave {wave} incremented with no spawn overlays or cores");
+    }
     info!(
         "Spawned official wave {} with {} supported units",
-        wave, amount
+        wave, spawned
     );
+}
+
+/// ASTRA W03/W05: geometry, spawnEffect statuses, base stats (not baked).
+pub(crate) fn insert_wave_unit(
+    world: &DynamicWorld,
+    group: &WaveSpawn,
+    team: u8,
+    tile_x: i16,
+    tile_y: i16,
+    id: i32,
+    wave: u32,
+) {
+    let flying = crate::game::content::unit_movement(group.spec.unit_type).flying;
+    let (base_x, base_y) = crate::network::simulation::remaining::flyer_spawn_world(
+        world,
+        tile_x,
+        tile_y,
+        group.spec.unit_type,
+    );
+    let (x, y) = if flying {
+        (base_x, base_y)
+    } else {
+        let (jx, jy) = ground_spawn_jitter(id, wave);
+        (base_x + jx, base_y + jy)
+    };
+    let cx = world.width as f32 * 4.0;
+    let cy = world.height as f32 * 4.0;
+    let rotation = (cy - y).atan2(cx - x).to_degrees();
+    let payloads = group
+        .payloads
+        .iter()
+        .filter_map(|unit_type| payload_unit_for_wave(*unit_type, team))
+        .map(CarriedPayload::Unit)
+        .collect();
+    let mut unit = EnemyUnit {
+        id,
+        unit_type: group.spec.unit_type,
+        entity_class: group.spec.entity_class,
+        team,
+        x,
+        y,
+        rotation,
+        health: group.spec.health,
+        shield: group.shield,
+        status_effect: group.status_effect,
+        status_duration: f32::MAX,
+        statuses: Vec::new(),
+        velocity_x: 0.0,
+        velocity_y: 0.0,
+        elevation: if crate::game::content::unit_movement(group.spec.unit_type).flying {
+            1.0
+        } else {
+            0.0
+        },
+        payloads,
+        flag: 0.0,
+        items: group.items.clone(),
+        mine_progress: 0.0,
+        attack_reload: 0.0,
+        secondary_attack_reload: 0.0,
+        tertiary_attack_reload: 0.0,
+        quaternary_attack_reload: 0.0,
+        move_speed: group.spec.speed,
+        attack_damage: group.spec.attack_damage,
+        attack_reload_time: group.spec.attack_reload,
+        attack_range: group.spec.attack_range,
+        authority: UnitAuthority::DefaultAi,
+        build_plans: Vec::new(),
+        update_building: true,
+        missile_time: 0.0,
+        status_agg: Default::default(),
+        drown_progress: 0.0,
+    };
+    if group.status_effect >= 0 {
+        crate::network::units::StatusContainer::apply_status(
+            &mut unit,
+            group.status_effect,
+            f32::MAX,
+        );
+    }
+    apply_wave_spawn_effect(&mut unit);
+    world.enemies.insert(id, unit);
+    world.register_unit_group(id);
+}
+
+fn apply_wave_spawn_effect(unit: &mut EnemyUnit) {
+    crate::network::units::StatusContainer::apply_status(
+        unit,
+        crate::game::status::STATUS_UNMOVING,
+        SPAWN_UNMOVING_TICKS,
+    );
+    crate::network::units::StatusContainer::apply_status(
+        unit,
+        crate::game::status::STATUS_INVINCIBLE,
+        SPAWN_INVINCIBLE_TICKS,
+    );
+}
+
+fn ground_spawn_jitter(unit_id: i32, wave: u32) -> (f32, f32) {
+    let mut rng = crate::network::combat::DetRand::new(
+        ((unit_id as u64) << 32) ^ u64::from(wave) ^ 0xA24B_A9D7,
+    );
+    let angle = rng.unit_f32() * std::f32::consts::TAU;
+    let len = rng.unit_f32() * WAVE_GROUND_SPREAD;
+    (angle.cos() * len, angle.sin() * len)
+}
+
+fn wave_spawn_points(world: &DynamicWorld) -> Vec<(i16, i16)> {
+    let mut points = world.enemy_spawns.read().clone();
+    let (at_cores, team) = {
+        let rules = world.wave_rules.read();
+        (rules.waves_spawn_at_cores, rules.wave_team)
+    };
+    if !at_cores {
+        return points;
+    }
+    if let Some(list) = world.team_core_lists.get(&team) {
+        for core in list.iter() {
+            let spawn = ((core.position >> 16) as i16, core.position as i16);
+            if !points.contains(&spawn) {
+                points.push(spawn);
+            }
+        }
+    }
+    points
+}
+
+fn payload_unit_for_wave(unit_type: i16, team: u8) -> Option<EnemyUnit> {
+    let spec = enemy_spec(unit_type)?;
+    Some(EnemyUnit {
+        id: 0,
+        unit_type: spec.unit_type,
+        entity_class: spec.entity_class,
+        team,
+        x: 0.0,
+        y: 0.0,
+        rotation: -90.0,
+        health: spec.health,
+        shield: 0.0,
+        status_effect: -1,
+        status_duration: f32::MAX,
+        statuses: Vec::new(),
+        velocity_x: 0.0,
+        velocity_y: 0.0,
+        elevation: if crate::game::content::unit_movement(spec.unit_type).flying {
+            1.0
+        } else {
+            0.0
+        },
+        payloads: Vec::new(),
+        flag: 0.0,
+        items: Vec::new(),
+        mine_progress: 0.0,
+        attack_reload: 0.0,
+        secondary_attack_reload: 0.0,
+        tertiary_attack_reload: 0.0,
+        quaternary_attack_reload: 0.0,
+        move_speed: spec.speed,
+        attack_damage: spec.attack_damage,
+        attack_reload_time: spec.attack_reload,
+        attack_range: spec.attack_range,
+        authority: UnitAuthority::DefaultAi,
+        build_plans: Vec::new(),
+        update_building: true,
+        missile_time: 0.0,
+        status_agg: Default::default(),
+        drown_progress: 0.0,
+    })
+}
+
+/// Official `UnitComp.updateDrowning`: deep liquid floors accumulate
+/// `drownTime` and kill the unit at 0.999 (audit H4).
+pub(crate) fn simulate_drowning(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta_ticks: f32,
+) -> bool {
+    let delta = delta_ticks.max(0.0);
+    if delta <= 0.0 {
+        return false;
+    }
+    let mut drowned = Vec::new();
+    let mut changed = false;
+    for mut unit in world.enemies.iter_mut() {
+        let movement = crate::game::content::unit_movement(unit.unit_type);
+        let flying = movement.flying || unit.elevation >= 0.09;
+        let can_drown = !flying && !movement.naval;
+        let floor = floor_at(world, unit.x, unit.y);
+        let drown_time = crate::game::content::floor_drown_time(floor);
+        if can_drown && drown_time > 0.0 {
+            let hit = movement.hit_size.max(0.0001);
+            let multiplier =
+                crate::game::content::drown_time_multiplier(unit.unit_type).max(0.0001);
+            unit.drown_progress += delta / (hit / 8.0 * drown_time * multiplier);
+            if unit.drown_progress >= 0.999 {
+                drowned.push(unit.id);
+            }
+            changed = true;
+        } else if unit.drown_progress > 0.0 {
+            unit.drown_progress = (unit.drown_progress - delta / 50.0).max(0.0);
+            changed = true;
+        }
+        unit.drown_progress = unit.drown_progress.clamp(0.0, 1.0);
+    }
+    for id in drowned {
+        crate::network::combat::kill_enemy(world, out, id);
+        changed = true;
+    }
+    // Core-alpha is flying; possessed grounded units drown via `enemies`.
+    // Any leftover grounded player avatar still accumulates drownTime (H4).
+    let mut drowned_players = Vec::new();
+    for session in world.player_sessions.iter() {
+        if matches!(session.controlled_unit, ControlledUnit::Standard(_)) {
+            continue;
+        }
+        if world.enemies.contains_key(&session.unit_id) {
+            continue;
+        }
+        let movement = crate::game::content::unit_movement(35);
+        let flying = movement.flying;
+        let floor = floor_at(world, session.x, session.y);
+        let drown_time = crate::game::content::floor_drown_time(floor);
+        let key = session.unit_id;
+        if !flying && drown_time > 0.0 {
+            let hit = movement.hit_size.max(0.0001);
+            let multiplier = crate::game::content::drown_time_multiplier(35).max(0.0001);
+            let mut progress = world
+                .game_state
+                .extras
+                .player_drown
+                .get(&key)
+                .map(|entry| *entry)
+                .unwrap_or(0.0);
+            progress += delta / (hit / 8.0 * drown_time * multiplier);
+            if progress >= 0.999 {
+                drowned_players.push(key);
+                world.game_state.extras.player_drown.remove(&key);
+            } else {
+                world
+                    .game_state
+                    .extras
+                    .player_drown
+                    .insert(key, progress.min(1.0));
+            }
+            changed = true;
+        } else if let Some(progress) = world.game_state.extras.player_drown.get(&key).map(|e| *e) {
+            let next = (progress - delta / 50.0).max(0.0);
+            if next <= 0.0 {
+                world.game_state.extras.player_drown.remove(&key);
+            } else {
+                world.game_state.extras.player_drown.insert(key, next);
+            }
+            changed = true;
+        }
+    }
+    for unit_id in drowned_players {
+        crate::network::combat::damage_player(world, out, unit_id, 9999.0, -1, 0.0);
+        changed = true;
+    }
+    changed
 }

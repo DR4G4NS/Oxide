@@ -72,6 +72,29 @@ pub(crate) fn apply_loaded_team_items(world: &DynamicWorld, loaded: &LoadedWorld
     }
 }
 
+/// ASTRA R02: restore live Rules after map + Gamemode resolution. Empty JSON
+/// (pre-revision-15 saves) keeps the map-derived `WaveRules`. Operator
+/// overrides still apply after this in `host_map` / listener start.
+pub(crate) fn apply_loaded_wave_rules(world: &DynamicWorld, loaded: &LoadedWorld) {
+    if loaded.rules_json.is_empty() {
+        return;
+    }
+    let parsed = parse_wave_rules(&loaded.rules_json);
+    world
+        .game_state
+        .infinite_resources
+        .store(parsed.infinite_resources, Ordering::Relaxed);
+    *world.wave_rules.write() = parsed;
+}
+
+pub(crate) fn checkpoint_rules_json(world: &DynamicWorld) -> String {
+    let rules = world.wave_rules.read();
+    let map_rules = crate::engine::world_stream::inspect_metadata(&world.network_template)
+        .map(|metadata| metadata.rules)
+        .unwrap_or_default();
+    crate::network::units::serialize_live_rules_json(&map_rules, &rules)
+}
+
 pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<LoadedWorld> {
     let (map_width, map_height) = map_size.unwrap_or((MAP_WIDTH, MAP_HEIGHT));
     let bytes = match std::fs::read(path) {
@@ -96,6 +119,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
                 logic_flags: Vec::new(),
                 game_stats: crate::state::game_state::GameStats::default(),
                 puddles: Vec::new(),
+                rules_json: String::new(),
             })
         }
         Err(err) => return Err(err),
@@ -121,9 +145,10 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
         saved_logic_flags,
         saved_game_stats,
         saved_puddles,
+        saved_rules_json,
     ) = match saved {
         PersistedWorldCompat::Current(mut saved) => {
-            if !matches!(saved.version, 1..=14)
+            if !matches!(saved.version, 1..=15)
                 || saved.core_items.len() > 256
                 || saved.core_items.iter().any(|amount| *amount < 0)
                 || saved.wave == 0
@@ -150,6 +175,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
                         || !(0..12).contains(&puddle.liquid)
                         || puddle.entity_id < 0
                 })
+                || saved.rules_json.len() > 1_048_576
             {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
@@ -212,6 +238,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
                 saved.logic_flags,
                 saved.game_stats,
                 saved.puddles,
+                saved.rules_json,
             )
         }
         PersistedWorldCompat::Legacy(tiles) => (
@@ -233,6 +260,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
             Vec::new(),
             crate::state::game_state::GameStats::default(),
             Vec::new(),
+            String::new(),
         ),
     };
     let tiles = DashMap::new();
@@ -244,6 +272,10 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
                 matches!(payload, CarriedPayload::Build(build)
                     if decode_constructor_recipe(tile.block, &tile.config)
                         == Some(build.tile.block))
+            } else if is_unit_payload_block(tile.block) {
+                // A save holds an existing input OR completed output. Incoming
+                // acceptPayload rejects factory output and upgraded units.
+                matches!(payload, CarriedPayload::Unit(_))
             } else {
                 payload_block_limit(tile.block)
                     .is_some_and(|limit| payload_fits_limit(payload, limit))
@@ -265,6 +297,15 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
                     })
                 },
             )
+        } else if is_unit_payload_block(tile.block) {
+            tile.payload_accum.is_empty()
+                || (tile.payload_accum.len() == 2
+                    && tile.payload_accum.iter().all(|value| {
+                        value.is_finite()
+                            && value.abs()
+                                <= f32::from(crate::game::content::block_size(tile.block)) * 4.0
+                                    + 0.5
+                    }))
         } else {
             tile.payload_accum.is_empty()
         };
@@ -279,7 +320,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
         };
         if (0..map_width).contains(&x)
             && (0..map_height).contains(&y)
-            && (0..446).contains(&tile.block)
+            && (0..447).contains(&tile.block)
             && tile.rotation < 4
             && (-1..22).contains(&tile.stored_item)
             && (0..=1_000_000).contains(&tile.stored_amount)
@@ -339,6 +380,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
             && payload_valid
             && payload_accum_valid
             && (matches!(tile.block, 398..=409)
+                || is_unit_payload_block(tile.block)
                 || (tile.payload.is_none() && tile.payload_progress == 0.0))
             && tile.health.is_finite()
             && (tile.health == 0.0
@@ -352,9 +394,33 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
             // capacity cap). Truncate to the official itemCapacity so a
             // loaded world starts bounded and the client never renders a
             // 300-item stack.
-            if matches!(tile.block, 259 | 279) && tile.conveyor_items.len() > 10 {
-                tile.conveyor_items.truncate(10);
-                tile.stored_amount = i32::try_from(tile.conveyor_items.len()).unwrap_or(i32::MAX);
+            if matches!(tile.block, 259 | 279) {
+                if tile.conveyor_items.is_empty() {
+                    if !tile.inventory.is_empty() {
+                        for &(item, count) in &tile.inventory {
+                            for _ in 0..count.min(10) {
+                                tile.conveyor_items.push((item, 0.0));
+                            }
+                        }
+                        tile.inventory.clear();
+                    } else if tile.stored_item >= 0 && tile.stored_amount > 0 {
+                        for _ in 0..tile.stored_amount.min(10) {
+                            tile.conveyor_items.push((tile.stored_item, 0.0));
+                        }
+                    }
+                }
+                if tile.conveyor_items.len() > 10 {
+                    tile.conveyor_items.truncate(10);
+                }
+                tile.stored_item = tile
+                    .conveyor_items
+                    .first()
+                    .map(|(item, _)| *item)
+                    .unwrap_or(-1);
+                tile.stored_amount = i32::try_from(tile.conveyor_items.len()).unwrap_or(0);
+                if !tile.conveyor_items.is_empty() && tile.stack_link == -1 {
+                    tile.stack_link = tile.position;
+                }
             }
             if tile.stored_amount == 0 {
                 tile.stored_item = -1;
@@ -386,8 +452,6 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
         let Some(spec) = enemy_spec(enemy.unit_type) else {
             continue;
         };
-        let (health_multiplier, speed_multiplier, damage_multiplier) =
-            status_multipliers_composite(enemy.status_effect, &enemy.statuses);
         let mut candidate_ids = enemy_ids.clone();
         let valid = enemy.id > 0
             && candidate_ids.insert(enemy.id)
@@ -397,7 +461,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
             && (-128.0..=(map_height as f32 * 8.0 + 128.0)).contains(&enemy.y)
             && enemy.rotation.is_finite()
             && enemy.health.is_finite()
-            && (0.0..=spec.health * health_multiplier).contains(&enemy.health)
+            && (0.0..=spec.health).contains(&enemy.health)
             && enemy.shield.is_finite()
             && (0.0..=1_000_000.0).contains(&enemy.shield)
             && enemy.elevation.is_finite()
@@ -408,7 +472,8 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
             && enemy.secondary_attack_reload >= 0.0
             && enemy.tertiary_attack_reload.is_finite()
             && enemy.tertiary_attack_reload >= 0.0
-            && matches!(enemy.status_effect, -1 | 1 | 10 | 13..=15 | 18)
+            && (enemy.status_effect == -1
+                || (0..=crate::game::status::STATUS_DYNAMIC).contains(&enemy.status_effect))
             && enemy.status_duration.is_finite()
             && enemy.status_duration >= 0.0
             && sanitize_unit_payloads(&mut enemy, &mut candidate_ids, 0);
@@ -420,8 +485,8 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
         enemy.entity_class = spec.entity_class;
         enemy.velocity_x = 0.0;
         enemy.velocity_y = 0.0;
-        enemy.move_speed = spec.speed * speed_multiplier;
-        enemy.attack_damage = spec.attack_damage * damage_multiplier;
+        enemy.move_speed = spec.speed;
+        enemy.attack_damage = spec.attack_damage;
         enemy.attack_reload_time = spec.attack_reload;
         enemy.attack_range = spec.attack_range;
         enemies.push(enemy);
@@ -478,11 +543,20 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
                 && command.target_y.is_finite()
         })
         .collect();
+    // Orders also belong to units held by buildings, not just live entities.
+    let mut ordered_unit_ids = enemy_ids.clone();
+    for tile in tiles.iter() {
+        if let Some(CarriedPayload::Unit(unit)) = tile.payload.as_deref() {
+            ordered_unit_ids.insert(unit.id);
+            let mut unit = unit.clone();
+            sanitize_unit_payloads(&mut unit, &mut ordered_unit_ids, 1);
+        }
+    }
     let unit_orders = saved_unit_orders
         .into_iter()
         .filter(|order| {
             order.unit_id > 0
-                && enemy_ids.contains(&order.unit_id)
+                && ordered_unit_ids.contains(&order.unit_id)
                 && order.command <= 9
                 && order.stances & !((1_u32 << 30) - 1) == 0
                 && order.payload_cooldown.is_finite()
@@ -550,6 +624,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
         logic_flags: saved_logic_flags,
         game_stats: saved_game_stats,
         puddles: saved_puddles,
+        rules_json: saved_rules_json,
     })
 }
 
@@ -697,6 +772,7 @@ pub fn snapshot_persisted_world(
     cores: impl CorePersistenceSource,
     logic_flags: &DashMap<String, f64>,
     puddles: &crate::network::buildings::puddles::PuddleSystem,
+    rules_json: String,
 ) -> PersistedWorld {
     let mut snapshot: Vec<_> = tiles.iter().map(|tile| tile.value().clone()).collect();
     snapshot.sort_unstable_by_key(|tile| tile.position);
@@ -762,7 +838,7 @@ pub fn snapshot_persisted_world(
         .collect();
     puddle_snapshot.sort_unstable_by_key(|puddle| puddle.position);
     let saved = PersistedWorld {
-        version: 14,
+        version: 15,
         map_name: state.map_name.read().clone(),
         tiles: snapshot,
         core_items: state.core_items.read().clone(),
@@ -783,6 +859,7 @@ pub fn snapshot_persisted_world(
         logic_flags,
         game_stats: state.game_stats.read().clone(),
         puddles: puddle_snapshot,
+        rules_json,
     };
     saved
 }
@@ -894,6 +971,7 @@ pub fn persist_tiles(
     cores: impl CorePersistenceSource,
     logic_flags: &DashMap<String, f64>,
     puddles: &crate::network::buildings::puddles::PuddleSystem,
+    rules_json: String,
 ) -> std::io::Result<()> {
     let saved = snapshot_persisted_world(
         tiles,
@@ -907,6 +985,7 @@ pub fn persist_tiles(
         cores,
         logic_flags,
         puddles,
+        rules_json,
     );
     persist_world_sync(path, &saved).map(|_| ())
 }
@@ -931,7 +1010,10 @@ pub(crate) fn encode_construct_finish(
     team: u8,
 ) -> std::io::Result<Vec<u8>> {
     encode_construct_finish_for_unit(
-        player.unit_id,
+        player
+            .controlled_unit
+            .standard_id()
+            .unwrap_or(player.unit_id),
         plan.position,
         plan.block,
         rotation,

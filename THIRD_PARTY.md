@@ -4,7 +4,7 @@ Read together with [LICENSE](LICENSE) and [NOTICE](NOTICE). Original implementat
 
 ## Mindustry reference
 
-[Anuken/Mindustry](https://github.com/Anuken/Mindustry) is authored by Anuken and licensed under GPLv3. The compatibility target in `compat/current.toml` is source tag `v159.7` at commit `c9686eb5d0ae5dd47ee02c40f99f7d5018ccbc8c`. The source tree, official JARs, and official Java tests are external compatibility references/oracles; they are not copied into this repository and are not relicensed here.
+[Anuken/Mindustry](https://github.com/Anuken/Mindustry) is authored by Anuken and licensed under GPLv3. The compatibility target in `compat/current.toml` is source tag `v160.5` at commit `067c720a8817c1c9fb586c03898a7d948caaed56`. The source tree, official JARs, and official Java tests are external compatibility references/oracles; they are not copied into this repository and are not relicensed here.
 
 Optional CI checks out that exact tag and fetches Arc (`archash` `208a754044`, Apache-2.0 upstream) into a temporary runner directory. Neither checkout is a vendored repository artifact.
 

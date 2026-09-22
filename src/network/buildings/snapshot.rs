@@ -24,7 +24,7 @@ use crate::network::protocol::*;
 use crate::network::units::controller::{controlling_session_for_building, write_carried_payload};
 use crate::network::wire::auth::player_team;
 use crate::network::wire::encode::frame_generated_packet;
-use crate::network::wire::tile_config::{configured_unit_command, unit_factory_plan};
+use crate::network::wire::tile_config::configured_unit_command;
 use crate::network::world::*;
 use dashmap::DashMap;
 use std::io::Error;
@@ -84,9 +84,9 @@ pub fn encode_dynamic_tile_sync(
     } else if tile.block == SHOCK_MINE_BLOCK {
         encode_shock_mine_sync(output, tile)
     } else if matches!(tile.block, 377..=379 | 386..=388) {
-        encode_unit_factory_sync(output, tile, power)
+        encode_unit_factory_sync_in_world(output, tile, power, world)
     } else if matches!(tile.block, 380..=383 | 389..=392) {
-        encode_reconstructor_sync(output, tile, power)
+        encode_reconstructor_sync_in_world(output, tile, power, world)
     } else if matches!(tile.block, 398..=401) {
         encode_payload_conveyor_sync(output, tile)
     } else if matches!(tile.block, 402 | 403) {
@@ -162,7 +162,7 @@ pub fn encode_dynamic_tile_sync(
     } else if tile.block == 305 {
         encode_simple_wall_sync(output, tile)
     } else if matches!(tile.block, 309..=312 | 315 | 316 | 320..=322) {
-        encode_power_generator_sync(output, tile)
+        encode_power_generator_sync(output, tile, power)
     } else if tile.block == 323 {
         encode_variable_reactor_sync(output, tile, power)
     } else if tile.block == 324 {
@@ -172,32 +172,32 @@ pub fn encode_dynamic_tile_sync(
     } else if matches!(tile.block, 356 | 359 | 384 | 385) {
         encode_turret_rotation_sync(output, tile, power, true, matches!(tile.block, 385))
     } else if matches!(tile.block, 393..=395) {
-        encode_unit_assembler_sync(output, tile, power)
+        encode_unit_assembler_sync(output, tile, world, power)
     } else if tile.block == 396 {
         encode_payload_block_base_sync(output, tile, power)
     } else if tile.block == 397 {
         encode_power_liquid_base_sync(output, tile, power)
-    } else if tile.block == 419 {
+    } else if tile.block == 420 {
         encode_light_sync(output, tile, power)
-    } else if matches!(tile.block, 425 | 426) {
+    } else if matches!(tile.block, 426 | 427) {
         encode_launch_pad_sync(output, tile, power)
-    } else if tile.block == 427 {
-        encode_campaign_pad_sync(output, tile, power)
     } else if tile.block == 428 {
+        encode_campaign_pad_sync(output, tile, power)
+    } else if tile.block == 429 {
         encode_accelerator_sync(output, tile, power)
-    } else if matches!(tile.block, 429 | 441 | 444) {
+    } else if matches!(tile.block, 430 | 442 | 445) {
         encode_message_sync(output, tile)
-    } else if matches!(tile.block, 430 | 445) {
+    } else if matches!(tile.block, 431 | 446) {
         encode_switch_sync(output, tile)
     } else if matches!(tile.block, 255 | 256) {
         encode_shield_sync(output, tile, power)
-    } else if matches!(tile.block, 431..=433 | 442) {
+    } else if matches!(tile.block, 432..=434 | 443) {
         encode_logic_processor_sync(output, tile)
-    } else if matches!(tile.block, 434 | 435 | 443) {
+    } else if matches!(tile.block, 435 | 436 | 444) {
         encode_memory_sync(output, tile)
-    } else if matches!(tile.block, 436..=438) {
+    } else if matches!(tile.block, 437..=439) {
         encode_logic_display_sync(output, tile)
-    } else if matches!(tile.block, 439 | 440) {
+    } else if matches!(tile.block, 440 | 441) {
         encode_canvas_sync(output, tile)
     } else if tile.block == 252 {
         encode_build_tower_sync(output, tile, power)
@@ -230,10 +230,12 @@ pub fn encode_dynamic_tile_sync(
             .filter(|world| storage_linked_to_core(world, tile))
             .map(|world| items_for_team(world, tile.team));
         encode_storage_sync(output, tile, core_items.as_deref())
+    } else if (5..=20).contains(&tile.block) {
+        encode_construct_build_sync(output, tile)
     } else if matches!(tile.block, 216..=227 | 230..=243) {
         encode_simple_wall_sync(output, tile)
     } else {
-        encode_power_generator_sync(output, tile)
+        encode_power_generator_sync(output, tile, power)
     }
 }
 
@@ -273,7 +275,7 @@ pub fn is_block_snapshot_supported(block: i16) -> bool {
         || matches!(block, 408 | 409)
         || matches!(block, 206..=208 | 317..=319)
         || matches!(block, 325..=331 | 333..=338)
-        || matches!(block, 193 | 194 | 252 | 281 | 426 | 427 | 433 | 436 | 440)
+        || matches!(block, 193 | 194 | 252 | 281 | 427 | 428 | 434 | 437 | 441)
         || storage_capacity(block).is_some()
         || block == 271
         || matches!(block, 306 | 307)
@@ -295,14 +297,39 @@ pub fn is_block_snapshot_supported(block: i16) -> bool {
         // RequestBlockSnapshot reply still covers them (see the handler).
         || matches!(block, 356 | 359 | 384 | 385 | 393..=397)
         || matches!(block, 410..=415 | 418)
-        || matches!(block, 419 | 425 | 428..=432 | 434 | 435 | 437..=439 | 441..=445)
+        || matches!(block, 420 | 426 | 429..=433 | 435 | 436 | 438..=440 | 442..=446)
+        // ConstructBlock.sync = true (build1..build16). writeSync carries
+        // ConstructBuild.progress/previous/current so other clients and a
+        // RequestBlockSnapshot keep BuilderComp.current == plan.block.
+        || (5..=20).contains(&block)
 }
 
 /// Official `BlockFlag.synced` membership for the periodic block-snapshot
-/// batch: cores are excluded, everything `is_block_snapshot_supported`
-/// accepts is included.
+/// batch: only blocks that Mindustry synchronizes periodically (crafters,
+/// turrets, power generators/reactors, mass drivers, storage blocks, payload
+/// blocks, unit factories/reconstructors/assemblers, water extractor).
+/// Client-predicted distribution and production blocks (conveyors, drills,
+/// conduits, walls, power nodes, menders, etc.) are excluded to prevent
+/// 6-second client prediction rollback / reset glitches.
 pub fn is_batch_snapshot_supported(block: i16) -> bool {
-    is_block_snapshot_supported(block) && !matches!(block, 339..=344)
+    (generic_crafter_time(block).is_some()
+        || is_snapshot_item_turret(block)
+        || matches!(block, 353 | 354 | 355 | 360 | 366 | 369 | 372 | 373 | 376)
+        || matches!(block, 308..=312 | 315 | 316 | 320..=324 | 329)
+        || matches!(block, 377..=383 | 386..=392)
+        || matches!(block, 398..=401)
+        || matches!(block, 402 | 403)
+        || matches!(block, 404 | 405)
+        || matches!(block, 406 | 407)
+        || matches!(block, 408 | 409)
+        || matches!(block, 193 | 194)
+        || block == 271
+        || matches!(block, 252 | 281 | 427 | 428)
+        || matches!(block, 384 | 385 | 393..=395)
+        || matches!(block, 426 | 435 | 437 | 438 | 439)
+        || storage_capacity(block).is_some()
+        || (5..=20).contains(&block))
+        && !is_core_block(block)
 }
 
 /// Core blocks (339-344): never in the periodic batch, but the individual
@@ -531,13 +558,27 @@ pub fn encode_simple_power_sync(
 pub fn encode_conveyor_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::Result<()> {
     use crate::network::codec::Writes;
 
-    encode_basic_modules_sync(
+    // Conveyor ItemModule in Java reflects all items travelling on the belt.
+    // Count distinct items and amounts from normalized_conveyor_items so
+    // inspecting or clicking a conveyor never zeroes the client's ItemModule.
+    let normalized = normalized_conveyor_items(tile);
+    let mut counts: std::collections::HashMap<i16, i32> = std::collections::HashMap::new();
+    for (item, _) in &normalized {
+        if (0..22).contains(item) {
+            *counts.entry(*item).or_insert(0) += 1;
+        }
+    }
+    let mut items_summary: Vec<(i16, i32)> = counts.into_iter().collect();
+    items_summary.sort_unstable_by_key(|(item, _)| *item);
+
+    encode_basic_modules_sync_with_items(
         output,
         tile,
         &std::collections::HashMap::new(),
         true,
         false,
         false,
+        Some(&items_summary),
     )?;
     // ConveyorBuild.write: i32 len, then per item: s16 item id, byte x*127,
     // byte y*255-128. Each item carries its own position along the belt; the
@@ -546,7 +587,7 @@ pub fn encode_conveyor_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io
     // Sanitize before encoding as well as during simulation: a world streamed
     // immediately after loading an old checkpoint must never expose the
     // client's ConveyorBuild to non-finite/overlapping offsets.
-    let items: Vec<(i16, f32)> = normalized_conveyor_items(tile)
+    let items: Vec<(i16, f32)> = normalized
         .into_iter()
         // Rust keeps the logical front at index 0 for FIFO/backpressure.
         // ConveyorBuild keeps the front at ids[len - 1], so translate the
@@ -579,21 +620,22 @@ pub fn encode_stack_conveyor_sync(
     // `inventory` left the client-side plastanium belt empty and made its
     // reel/reset state look broken on every correction snapshot.
     let stack: Vec<(i16, i32)> = {
-        let item = tile
-            .conveyor_items
-            .first()
-            .map(|(item, _)| *item)
-            .unwrap_or(-1);
-        // Round 74: clamp to the official itemCapacity (10). Legacy saves
-        // could hold 300+ items in one stretch (unbounded batch appends);
-        // advertising more than the module capacity made the client draw an
-        // enormous stack and its own machine jam.
-        let amount = if item >= 0 {
-            i32::try_from(tile.conveyor_items.len())
+        let (item, amount) = if !tile.conveyor_items.is_empty() {
+            let item = tile
+                .conveyor_items
+                .first()
+                .map(|(item, _)| *item)
+                .unwrap_or(-1);
+            let count = i32::try_from(tile.conveyor_items.len())
                 .unwrap_or(i32::MAX)
-                .min(10)
+                .min(10);
+            (item, count)
+        } else if let Some(&(item, count)) = tile.inventory.first() {
+            (item, count.min(10))
+        } else if tile.stored_item >= 0 && tile.stored_amount > 0 {
+            (tile.stored_item, tile.stored_amount.min(10))
         } else {
-            0
+            (-1, 0)
         };
         if item >= 0 && amount > 0 {
             vec![(item, amount)]
@@ -611,13 +653,21 @@ pub fn encode_stack_conveyor_sync(
         false,
         Some(&stack),
     )?;
-    // P1: StackConveyorBuild.write = i32 link + f32 cooldown. Both are
-    // RUNTIME state (the official machine reels from `link` and cools down
-    // after a transfer); the legacy port wrote link derived from config and
-    // cooldown 0. The client renders the crater from link and reels with
-    // cooldown, so the authoritative values must be sent.
-    output.write_i(tile.stack_link)?;
-    output.write_f(tile.stack_cooldown)?;
+    // P1: StackConveyorBuild.write = i32 link + f32 cooldown. In official
+    // Mindustry, StackConveyorBuild.draw() early-returns without rendering the
+    // stack package if link == -1. If items are present but tile.stack_link is
+    // unset (-1), default link to tile.position (matching official poofIn()).
+    let link = if !stack.is_empty() {
+        if tile.stack_link >= 0 {
+            tile.stack_link
+        } else {
+            tile.position
+        }
+    } else {
+        tile.stack_link
+    };
+    output.write_i(link)?;
+    output.write_f(tile.stack_cooldown.clamp(0.0, 2.0))?;
     Ok(())
 }
 
@@ -753,13 +803,23 @@ pub fn encode_radar_sync(
 pub fn encode_duct_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::Result<()> {
     use crate::network::codec::Writes;
     // DuctBuild.write: byte recDir.
-    encode_basic_modules_sync(
+    let items_summary = if tile.stored_item >= 0 && tile.stored_amount > 0 {
+        vec![(tile.stored_item, tile.stored_amount)]
+    } else if let Some(&(item, _)) = tile.conveyor_items.first() {
+        vec![(item, i32::try_from(tile.conveyor_items.len()).unwrap_or(1))]
+    } else if let Some(&(item, amount)) = tile.inventory.first() {
+        vec![(item, amount)]
+    } else {
+        Vec::new()
+    };
+    encode_basic_modules_sync_with_items(
         output,
         tile,
         &std::collections::HashMap::new(),
         true,
         false,
         false,
+        Some(&items_summary),
     )?;
     output.write_b(tile.duct_rec_dir % 4)?;
     Ok(())
@@ -1045,6 +1105,7 @@ pub fn encode_turret_rotation_sync(
 pub fn encode_unit_assembler_sync(
     output: &mut Vec<u8>,
     tile: &DynamicTile,
+    world: Option<&DynamicWorld>,
     power: &std::collections::HashMap<i32, f32>,
 ) -> std::io::Result<()> {
     use crate::network::codec::Writes;
@@ -1056,9 +1117,44 @@ pub fn encode_unit_assembler_sync(
     output.write_f(0.0)?; // payVector.y
     output.write_f(tile.payload_rotation)?;
     output.write_bool(false)?; // no carried payload entity
-    output.write_f(tile.production_progress.max(0.0))?; // progress
-    output.write_b(0)?; // units.size
-    output.write_s(0)?; // PayloadSeq: -size == 0 means empty in the new format
+                               // JAR progress is a 0..1 fraction of the active plan time
+                               // (progress += edelta * speed * eff / plan.time, UnitAssembler.java:527).
+                               // Tier 0 without a linked module (the only state reachable while the
+                               // world snapshot is unavailable) uses the base plan time.
+    let tier = world
+        .map(|w| crate::network::economy::assembler_tier(w, tile))
+        .unwrap_or(0)
+        .min(1);
+    let build_time = crate::network::economy::assembler_plan(tile.block, tier)
+        .map(|(_, time, _)| time)
+        .unwrap_or(1.0);
+    let fraction = (tile.production_progress / build_time).clamp(0.0, 1.0);
+    output.write_f(fraction)?;
+    // UnitAssemblerBuild.write: b units.size then each unit id. Empty when
+    // the world snapshot is unavailable (parallel encode path).
+    let drones = world
+        .map(|world| world.assembler_drone_ids(tile.position))
+        .unwrap_or_default();
+    let count = drones.len().min(4);
+    output.write_b(u8::try_from(count).unwrap_or(0))?;
+    for id in drones.iter().take(count) {
+        output.write_i(*id)?;
+    }
+    // PayloadSeq.write: s(-size), then per entry b(contentType ordinal),
+    // s(content id), i(amount). Empty inventory -> s(0) (legacy empty seq).
+    let entries: Vec<&(i16, i32)> = tile
+        .payload_inventory
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    #[allow(clippy::cast_possible_wrap)]
+    output.write_s(-(entries.len() as i16))?;
+    for (content, amount) in entries {
+        // Plan stacks are item payloads (ContentType.item.ordinal() == 1).
+        output.write_b(1)?;
+        output.write_s(*content)?;
+        output.write_i(*amount)?;
+    }
     output.write_f(f32::NAN)?; // commandPos x
     output.write_f(f32::NAN)?; // commandPos y
     Ok(())
@@ -1103,7 +1199,7 @@ pub fn encode_launch_pad_sync(
 ) -> std::io::Result<()> {
     use crate::network::codec::Writes;
     // LaunchPadBuild.write: f32 launchCounter.
-    encode_basic_modules_sync(output, tile, power, true, true, tile.block == 426)?;
+    encode_basic_modules_sync(output, tile, power, true, true, tile.block == 427)?;
     output.write_f(tile.production_progress.max(0.0))?;
     Ok(())
 }
@@ -1204,10 +1300,31 @@ pub fn encode_memory_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::
 
 pub fn encode_canvas_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::Result<()> {
     use crate::network::codec::Writes;
-    // CanvasBuild.write: i32 data.length + raw bytes.
+    // CanvasBuild.write: i32 data.length + raw bytes. The configured pixels
+    // arrive as a TypeIO byte[] object config (tag 14 + i32 length + data).
     encode_simple_wall_sync(output, tile)?;
-    output.write_i(0)?; // zero-length canvas; the client keeps its own buffer.
+    if let Some(data) = canvas_data(tile) {
+        output.write_i(data.len() as i32)?;
+        output.extend_from_slice(data);
+    } else {
+        output.write_i(0)?; // zero-length canvas; the client keeps its own buffer.
+    }
     Ok(())
+}
+
+/// The packed pixel buffer of a configured canvas block, if any.
+pub(crate) fn canvas_data(tile: &DynamicTile) -> Option<&[u8]> {
+    if !matches!(tile.block, 440 | 441) {
+        return None;
+    }
+    match tile.config.as_slice() {
+        [14, a, b, c, d, rest @ ..]
+            if rest.len() == i32::from_be_bytes([*a, *b, *c, *d]) as usize =>
+        {
+            Some(rest)
+        }
+        _ => None,
+    }
 }
 
 pub fn encode_payload_conveyor_sync(
@@ -1257,7 +1374,7 @@ pub fn is_pickup_payload_supported(block: i16) -> bool {
 
 pub fn build_payload_version(block: i16) -> u8 {
     match block {
-        433 => 4,
+        434 => 4,
         369 | 373 | 377..=383 | 386..=391 => 3,
         361..=365 | 367 | 368 | 370 | 371 | 374 => 2,
         193
@@ -1276,9 +1393,9 @@ pub fn build_payload_version(block: i16) -> u8 {
         | 401..=403
         | 408
         | 409
-        | 426
         | 427
-        | 436 => 1,
+        | 428
+        | 437 => 1,
         _ => 0,
     }
 }
@@ -1315,6 +1432,34 @@ pub fn encode_simple_wall_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std:
     output.write_b(8)?;
     output.write_b(255)?;
     output.write_b(255)?;
+    Ok(())
+}
+
+/// `ConstructBuild.write` after `Building.writeBase` (159.7 javap). Field
+/// mapping on `DynamicTile`: `production_progress` = progress, `stored_item`
+/// = previous id, `stored_amount` = current id, `payload_accum` = triples of
+/// (accumulator, totalAccumulator, itemsLeft).
+pub fn encode_construct_build_sync(
+    output: &mut Vec<u8>,
+    tile: &DynamicTile,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+
+    encode_simple_wall_sync(output, tile)?;
+    output.write_f(tile.production_progress.clamp(0.0, 1.0))?;
+    output.write_s(tile.stored_item.max(0))?;
+    output.write_s(i16::try_from(tile.stored_amount).unwrap_or(0))?;
+    if tile.payload_accum.is_empty() {
+        output.write_b(255)?;
+    } else {
+        let count = (tile.payload_accum.len() / 3).min(127);
+        output.write_b(u8::try_from(count).unwrap_or(0))?;
+        for chunk in tile.payload_accum.chunks(3).take(count) {
+            output.write_f(chunk.first().copied().unwrap_or(0.0))?;
+            output.write_f(chunk.get(1).copied().unwrap_or(0.0))?;
+            output.write_i(chunk.get(2).copied().unwrap_or(0.0) as i32)?;
+        }
+    }
     Ok(())
 }
 
@@ -1384,8 +1529,7 @@ pub fn encode_basic_modules_sync_with_items(
         }
     }
     if has_power {
-        output.write_s(0)?;
-        output.write_f(efficiency)?;
+        write_power_module(output, tile, efficiency)?;
     }
     if has_liquids {
         write_liquid_module(output, tile)?;
@@ -1457,7 +1601,7 @@ pub fn encode_campaign_pad_sync(
     power: &std::collections::HashMap<i32, f32>,
 ) -> std::io::Result<()> {
     use crate::network::codec::Writes;
-    if tile.block == 426 {
+    if tile.block == 427 {
         encode_basic_modules_sync(output, tile, power, true, true, true)?;
         output.write_f(tile.production_progress.max(0.0))?;
     } else {
@@ -1497,7 +1641,7 @@ pub fn encode_logic_processor_sync(
         &std::collections::HashMap::new(),
         false,
         false,
-        tile.block == 433,
+        tile.block == 434,
     )?;
     // LogicBuild.write serializes `i compressed.length + b compressed`, where
     // compressed is the client's TileConfig container (zlib of
@@ -1518,12 +1662,12 @@ pub fn encode_logic_processor_sync(
                         // Official LogicBuild.write() (158.1): ONLY privileged
                         // processors serialize instructionsPerTick between the
                         // memory count and the tag string (`if(privileged)
-                        // write.s(ipt)`). Hyper (433) is not privileged in the
+                        // write.s(ipt)`). Hyper (434) is not privileged in the
                         // content, so it must NOT write the field — writing it
                         // left 2 trailing bytes that VerifyProtocol158 rejects.
-                        // World processor (442) is privileged and writes its
+                        // World processor (443) is privileged and writes its
                         // configured 8 instructions per tick.
-    if tile.block == 442 {
+    if tile.block == 443 {
         output.write_s(8)?; // world-processor instructionsPerTick (official)
     }
     output.write_b(0)?; // nullable tag string
@@ -1536,7 +1680,7 @@ pub fn encode_logic_processor_sync(
 pub fn encode_logic_display_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::Result<()> {
     use crate::network::codec::Writes;
     encode_simple_wall_sync(output, tile)?;
-    if matches!(tile.block, 436..=438) {
+    if matches!(tile.block, 437..=439) {
         output.write_bool(false)?; // no transform matrix
     } else {
         output.write_i(0)?; // empty canvas data; the client retains its zero-filled buffer
@@ -1549,18 +1693,49 @@ pub fn encode_unit_factory_sync(
     tile: &DynamicTile,
     power: &std::collections::HashMap<i32, f32>,
 ) -> std::io::Result<()> {
+    encode_unit_factory_sync_in_world(output, tile, power, None)
+}
+
+fn unit_block_snapshot_efficiency(
+    tile: &DynamicTile,
+    power_status: f32,
+    world: Option<&DynamicWorld>,
+) -> f32 {
+    let ready = if let Some(world) = world {
+        unit_block_consumption_ready(
+            tile,
+            &world.wave_rules.read(),
+            *world.game_state.simulation_time.read(),
+        )
+    } else {
+        unit_block_consumption_ready(tile, &crate::network::units::WaveRules::default(), 0.0)
+    };
+    if ready {
+        power_status
+    } else {
+        0.0
+    }
+}
+
+fn encode_unit_factory_sync_in_world(
+    output: &mut Vec<u8>,
+    tile: &DynamicTile,
+    power: &std::collections::HashMap<i32, f32>,
+    world: Option<&DynamicWorld>,
+) -> std::io::Result<()> {
     use crate::network::codec::Writes;
 
-    let efficiency = power
+    let power_status = power
         .get(&tile.position)
         .copied()
         .unwrap_or(0.0)
         .clamp(0.0, 1.0);
+    let efficiency = unit_block_snapshot_efficiency(tile, power_status, world);
     output.write_f(dynamic_tile_health(tile))?;
     output.write_b(tile.rotation | 128)?;
     output.write_b(tile.team)?;
     output.write_b(3)?;
-    output.write_b(1)?;
+    output.write_b(u8::from(tile.enabled))?;
     output.write_b(11)?; // items(1)|power(2)|1<<3(8)
     let items: Vec<_> = tile
         .inventory
@@ -1573,27 +1748,27 @@ pub fn encode_unit_factory_sync(
         output.write_s(item)?;
         output.write_i(amount)?;
     }
-    output.write_s(0)?; // power links
-    output.write_f(efficiency)?;
+    write_power_module(output, tile, power_status)?;
     output.write_b((efficiency * 255.0) as u8)?;
     output.write_b(255)?; // optional efficiency
 
-    // PayloadBlockBuild.
-    output.write_f(0.0)?;
-    output.write_f(0.0)?;
-    output.write_f(f32::from(tile.rotation) * 90.0)?;
-    output.write_bool(false)?; // no completed payload yet
+    // PayloadBlockBuild.write: payVector, payRotation, Payload.write.
+    let (pay_x, pay_y) = crate::network::economy::unit_block_pay_vector(tile);
+    output.write_f(pay_x)?;
+    output.write_f(pay_y)?;
+    output.write_f(crate::network::economy::unit_block_pay_rotation(tile))?;
+    if let Some(payload) = tile.payload.as_deref() {
+        write_carried_payload(output, payload)?;
+    } else {
+        output.write_bool(false)?;
+    }
 
-    // UnitFactoryBuild revision 3.
+    // UnitFactoryBuild revision 3: progress, currentPlan, commandPos, command.
     output.write_f(tile.production_progress.max(0.0))?;
-    let plan = unit_factory_plan(tile.block, &tile.config)
-        .map(|(plan, _)| plan)
-        .or(if matches!(tile.block, 386..=388) {
-            Some(0)
-        } else {
-            None
-        })
-        .unwrap_or(-1);
+    let plan =
+        crate::network::wire::tile_config::resolved_unit_factory_plan(tile.block, &tile.config)
+            .map(|(plan, _)| plan)
+            .unwrap_or(-1);
     output.write_s(plan)?;
     output.write_f(f32::NAN)?;
     output.write_f(f32::NAN)?;
@@ -1606,43 +1781,34 @@ pub fn encode_reconstructor_sync(
     tile: &DynamicTile,
     power: &std::collections::HashMap<i32, f32>,
 ) -> std::io::Result<()> {
+    encode_reconstructor_sync_in_world(output, tile, power, None)
+}
+
+fn encode_reconstructor_sync_in_world(
+    output: &mut Vec<u8>,
+    tile: &DynamicTile,
+    power: &std::collections::HashMap<i32, f32>,
+    world: Option<&DynamicWorld>,
+) -> std::io::Result<()> {
     use crate::network::codec::Writes;
 
-    let (requirements, liquid_rate, has_liquid_module) =
-        if let Some(recipe) = reconstructor_recipe(tile.block) {
-            (
-                recipe.items,
-                recipe.liquid_rate,
-                matches!(tile.block, 382 | 383 | 389..=392),
-            )
-        } else {
-            match tile.block {
-                389 => (&[(9, 40), (17, 30)][..], 3.0 / 60.0, true),
-                390 => (&[(9, 60), (17, 40)][..], 3.0 / 60.0, true),
-                391 => (&[(9, 50), (17, 40)][..], 3.0 / 60.0, true),
-                392 => (&[(7, 80), (9, 100)][..], 10.0 / 60.0, true),
-                _ => return Err(Error::new(ErrorKind::InvalidInput, "not a reconstructor")),
-            }
-        };
-    let has_items = requirements
-        .iter()
-        .all(|(item, amount)| inventory_count(&tile.inventory, *item) >= *amount);
-    let required_liquid = if matches!(tile.block, 389..=391) {
-        5
-    } else if tile.block == 392 {
-        9
-    } else {
-        3
+    // The recipe table covers every Reconstructor-class block (Serpulo 380-383
+    // plus the Erekir refabricators 389-392).
+    let Some(_) = reconstructor_recipe(tile.block) else {
+        return Err(Error::new(ErrorKind::InvalidInput, "not a reconstructor"));
     };
-    let has_liquid = liquid_rate <= 0.0
-        || (tile.stored_liquid == required_liquid && tile.liquid_amount > 0.0001);
-    let efficiency = power.get(&tile.position).copied().unwrap_or(0.0)
-        * f32::from(tile.stored_amount > 0 && has_items && has_liquid);
+    let has_liquid_module = matches!(tile.block, 382 | 383 | 389..=392);
+    let power_status = power
+        .get(&tile.position)
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let efficiency = unit_block_snapshot_efficiency(tile, power_status, world);
     output.write_f(dynamic_tile_health(tile))?;
     output.write_b(tile.rotation | 128)?;
     output.write_b(tile.team)?;
     output.write_b(3)?;
-    output.write_b(1)?;
+    output.write_b(u8::from(tile.enabled))?;
     // moduleBitmask() official: items(1) | power(2) | liquids(4) | 1<<3 (8).
     output.write_b(if has_liquid_module { 15 } else { 11 })?;
     let items: Vec<_> = tile
@@ -1656,8 +1822,7 @@ pub fn encode_reconstructor_sync(
         output.write_s(item)?;
         output.write_i(amount)?;
     }
-    output.write_s(0)?;
-    output.write_f(efficiency)?;
+    write_power_module(output, tile, power_status)?;
     if has_liquid_module {
         write_liquid_module(output, tile)?;
     }
@@ -1672,10 +1837,15 @@ pub fn encode_reconstructor_sync(
     // command=null and a ~1% optionalEfficiency).
     output.write_b((efficiency.clamp(0.0, 1.0) * 255.0) as u8)?;
     output.write_b(255)?; // optionalEfficiency: nominal 1.0
-    output.write_f(0.0)?; // payVector.x
-    output.write_f(0.0)?; // payVector.y
-    output.write_f(f32::from(tile.rotation) * 90.0)?; // payRotation
-    output.write_bool(false)?; // Payload.write(null) -> b 0
+    let (pay_x, pay_y) = crate::network::economy::unit_block_pay_vector(tile);
+    output.write_f(pay_x)?;
+    output.write_f(pay_y)?;
+    output.write_f(crate::network::economy::unit_block_pay_rotation(tile))?;
+    if let Some(payload) = tile.payload.as_deref() {
+        write_carried_payload(output, payload)?;
+    } else {
+        output.write_bool(false)?;
+    }
     output.write_f(tile.production_progress.max(0.0))?; // progress
     output.write_f(f32::NAN)?; // commandPos.x (null)
     output.write_f(f32::NAN)?; // commandPos.y (null)
@@ -1716,6 +1886,26 @@ pub fn write_liquid_module(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io:
     Ok(())
 }
 
+/// PowerModule.write: s16 link count, i32 packed pos per link, f32 status.
+/// `writeSync` is `writeAll`, so BlockSnapshot uses this exact codec. An empty
+/// link list clears the client's `PowerModule.links` and splits the graph
+/// (`blockSyncTime` = 6 s).
+pub fn write_power_module(
+    output: &mut Vec<u8>,
+    tile: &DynamicTile,
+    status: f32,
+) -> std::io::Result<()> {
+    use crate::network::codec::Writes;
+
+    let count = i16::try_from(tile.power_links.len()).unwrap_or(i16::MAX);
+    output.write_s(count)?;
+    for link in tile.power_links.iter().take(count.max(0) as usize) {
+        output.write_i(*link)?;
+    }
+    output.write_f(status.clamp(0.0, 1.0))?;
+    Ok(())
+}
+
 /// Writes only the compatibility current-liquid state. Reactor heat/warmup
 /// also lives in `output_liquid_amount` for old saves, but it is a subclass
 /// field and must never be duplicated into LiquidModule as cryofluid.
@@ -1725,12 +1915,22 @@ pub fn write_primary_liquid_module(
 ) -> std::io::Result<()> {
     use crate::network::codec::Writes;
 
-    let present = tile.stored_liquid >= 0 && tile.liquid_amount > 0.0001;
-    output.write_s(i16::from(present))?;
-    if present {
-        output.write_s(tile.stored_liquid)?;
-        output.write_f(tile.liquid_amount)?;
-    }
+    let (liquid, amount) = if tile.stored_liquid >= 0 && tile.liquid_amount > 0.0001 {
+        (tile.stored_liquid, tile.liquid_amount)
+    } else if let Some((liquid, amount)) = tile
+        .liquid_inventory
+        .iter()
+        .copied()
+        .find(|(_, amount)| *amount > 0.0001)
+    {
+        (liquid, amount)
+    } else {
+        output.write_s(0)?;
+        return Ok(());
+    };
+    output.write_s(1)?;
+    output.write_s(liquid)?;
+    output.write_f(amount)?;
     Ok(())
 }
 
@@ -2072,7 +2272,7 @@ pub fn encode_item_logistics_sync(output: &mut Vec<u8>, tile: &DynamicTile) -> s
     output.write_b(tile.team)?;
     output.write_b(3)?;
     output.write_b(1)?;
-    output.write_b(u8::from(has_items))?;
+    output.write_b(u8::from(has_items) | 8)?;
     if has_items {
         if matches!(tile.block, 266 | 267) && tile.stored_item >= 0 && tile.stored_amount > 0 {
             output.write_s(1)?;
@@ -2103,7 +2303,7 @@ pub fn encode_junction_sync(
     output.write_b(tile.team)?;
     output.write_b(3)?;
     output.write_b(1)?;
-    output.write_b(0)?; // JunctionBuild has no ItemModule; it owns four directional buffers.
+    output.write_b(8)?; // JunctionBuild has no ItemModule; it owns four directional buffers. Consume bit 8 is set.
     output.write_b(255)?;
     output.write_b(255)?;
 
@@ -2419,6 +2619,7 @@ pub fn encode_generic_crafter_sync(
 pub fn encode_power_generator_sync(
     output: &mut Vec<u8>,
     tile: &DynamicTile,
+    power: &std::collections::HashMap<i32, f32>,
 ) -> std::io::Result<()> {
     use crate::network::codec::Writes;
 
@@ -2438,7 +2639,9 @@ pub fn encode_power_generator_sync(
         (inventory_count(&tile.inventory, reactor::THORIUM_ITEM).max(0) as f32
             / reactor::ITEM_CAPACITY as f32)
             .clamp(0.0, 1.0)
-    } else if matches!(tile.block, 309..=312 | 316 | 320..=322) {
+    } else if tile.block == 316 {
+        tile.output_liquid_amount.clamp(0.0, 1.0).powi(5)
+    } else if matches!(tile.block, 309..=312 | 320..=322) {
         // These generators run at nominal production in the simulation;
         // the official writes their real efficiency (visuals on the client).
         1.0
@@ -2463,20 +2666,31 @@ pub fn encode_power_generator_sync(
     output.write_b(1)?;
     output.write_b(module_bits)?;
     if has_items {
-        let items: Vec<_> = tile
+        let mut items: Vec<_> = tile
             .inventory
             .iter()
             .copied()
             .filter(|(item, amount)| (0..22).contains(item) && *amount > 0)
             .collect();
+        if tile.block == 316 && tile.stored_item == 14 && tile.production_progress > 0.0 {
+            if let Some((_, amount)) = items.iter_mut().find(|(item, _)| *item == 14) {
+                *amount = (*amount).max(1);
+            } else {
+                items.push((14, 1));
+            }
+        }
         output.write_s(i16::try_from(items.len()).unwrap_or(i16::MAX))?;
         for (item, amount) in items {
             output.write_s(item)?;
             output.write_i(amount)?;
         }
     }
-    output.write_s(0)?; // PowerModule links
-    output.write_f(1.0)?; // producer graph status
+    let status = power
+        .get(&tile.position)
+        .copied()
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    write_power_module(output, tile, status)?;
     if has_liquids {
         if matches!(tile.block, 315 | 316) {
             write_primary_liquid_module(output, tile)?;

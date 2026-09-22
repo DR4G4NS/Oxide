@@ -55,8 +55,51 @@ pub(crate) fn payload_fits_limit(payload: &CarriedPayload, limit: f32) -> bool {
     }
 }
 
+/// Official `UnitPayload.dump` world predicate (ASTRA F05): cap/ban are
+/// checked by the caller; this covers solidity, terrain and occupancy.
+pub(crate) fn payload_dump_world_clear(
+    world: &DynamicWorld,
+    unit: &EnemyUnit,
+    x: f32,
+    y: f32,
+) -> bool {
+    use crate::network::combat::unit_combat::{
+        collision_position_passable, unit_collision_layer, unit_hit_size,
+    };
+    if !collision_position_passable(world, unit, x, y) {
+        return false;
+    }
+    let movement = crate::game::content::unit_movement(unit.unit_type);
+    let tile_x = crate::network::combat::enemy::world_to_tile(x);
+    let tile_y = crate::network::combat::enemy::world_to_tile(y);
+    let floor_id = crate::network::combat::floor_at_tile(world, tile_x, tile_y);
+    let floor = crate::game::content::block_navigation(floor_id);
+    if movement.naval && !crate::game::content::floor_is_liquid(floor_id) {
+        return false;
+    }
+    if unit_collision_layer(unit) == 0 {
+        if floor.deep && !movement.naval {
+            return false;
+        }
+        let hit = unit_hit_size(unit.unit_type);
+        for other in world.enemies.iter() {
+            if other.id == unit.id || unit_collision_layer(&other) != 0 {
+                continue;
+            }
+            let other_hit = unit_hit_size(other.unit_type);
+            if (other.x - x).hypot(other.y - y) < (hit + other_hit) * 0.5 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 pub(crate) fn payload_block_limit(block: i16) -> Option<f32> {
     match block {
+        // UnitFactory / Reconstructor / Erekir fabricator+refabricator: the
+        // official payloadLimit is the block size (PayloadBlock default).
+        377..=383 | 386..=392 => Some(f32::from(crate::game::content::block_size(block))),
         398..=401 => Some(3.0),
         402 => Some(2.5),
         403 => Some(4.0),
@@ -66,8 +109,41 @@ pub(crate) fn payload_block_limit(block: i16) -> Option<f32> {
     }
 }
 
+/// Serpulo unit factories (377-379), reconstructors (380-383), Erekir
+/// fabricators (386-388) and refabricators (389-392). These are the
+/// `UnitBlock` descendants that hold a `UnitPayload` and slide it with
+/// `payVector` (see ARCHITECTURE legacy-field table).
+pub(crate) fn is_unit_payload_block(block: i16) -> bool {
+    matches!(block, 377..=383 | 386..=392)
+}
+
+/// Official `PayloadBlockBuild.payVector` stored as `payload_accum = [x, y]`.
+pub(crate) fn unit_block_pay_vector(tile: &DynamicTile) -> (f32, f32) {
+    match tile.payload_accum.as_slice() {
+        [x, y] => (*x, *y),
+        _ => (0.0, 0.0),
+    }
+}
+
+/// Official `payRotation`. `updatePayload` lerps this toward `rotdeg()` when
+/// empty; a held unit keeps the live heading (including 0). Unset empty
+/// tiles therefore write the block facing, matching a settled factory.
+pub(crate) fn unit_block_pay_rotation(tile: &DynamicTile) -> f32 {
+    if tile.payload.is_some() || tile.payload_rotation != 0.0 {
+        tile.payload_rotation
+    } else {
+        f32::from(tile.rotation) * 90.0
+    }
+}
+
 pub(crate) fn payload_block_accepts(block: i16, payload: &CarriedPayload) -> bool {
     match block {
+        // UnitFactoryBuild.acceptPayload is always false (ASTRA F04).
+        377..=379 | 386..=388 => false,
+        380..=383 | 389..=392 => match payload {
+            CarriedPayload::Unit(unit) => reconstructor_upgrade(block, unit.unit_type).is_some(),
+            CarriedPayload::Build(_) => false,
+        },
         404 | 405 => match payload {
             CarriedPayload::Unit(unit) => {
                 crate::game::content::unit_requirements(unit.unit_type).is_some()
@@ -98,6 +174,7 @@ pub(crate) fn insert_into_payload_conveyor(
         return false;
     };
     if tile.team != carrier.team
+        || !tile.enabled
         || tile.payload.is_some()
         || !payload_fits_limit(&payload, limit)
         || !payload_block_accepts(tile.block, &payload)
@@ -110,6 +187,9 @@ pub(crate) fn insert_into_payload_conveyor(
     live.payload = Some(Box::new(payload));
     live.payload_progress = 0.0;
     live.payload_rotation = carrier.rotation;
+    if is_unit_payload_block(live.block) {
+        initialize_received_unit_payload(&mut live, carrier.x, carrier.y, carrier.rotation);
+    }
     if matches!(live.block, 399 | 401) {
         live.stored_amount = i32::from(live.rotation) + 1;
     }
@@ -220,13 +300,18 @@ pub(crate) fn transfer_payload_forward(world: &DynamicWorld, source: &DynamicTil
     let Some(limit) = payload_block_limit(target.block) else {
         return false;
     };
-    if target.team != source.team || target.payload.is_some() {
+    if target.team != source.team || !target.enabled || target.payload.is_some() {
         return false;
     }
     let Some(payload) = source.payload.as_deref() else {
         return false;
     };
     if !payload_fits_limit(payload, limit) || !payload_block_accepts(target.block, payload) {
+        return false;
+    }
+    if reconstructor_recipe(target.block).is_some()
+        && !front_accepts_payload(world, &target, payload)
+    {
         return false;
     }
     let payload = world
@@ -241,6 +326,10 @@ pub(crate) fn transfer_payload_forward(world: &DynamicWorld, source: &DynamicTil
         receiver.payload_progress = 0.0;
         receiver.payload_rotation = f32::from(source.rotation) * 90.0;
         receiver.production_progress = 0.0;
+        if is_unit_payload_block(receiver.block) {
+            let (sx, sy) = building_center(source.position, source.block);
+            initialize_received_unit_payload(&mut receiver, sx, sy, source.payload_rotation);
+        }
     }
     if let Some(mut sender) = world.tiles.get_mut(&source.position) {
         sender.payload_progress = 0.0;
@@ -278,12 +367,12 @@ pub(crate) const LARGE_CONSTRUCTOR_RECIPES: &[i16] = &[
     252, 253, 254, 271, 281, 285, 291, 301, 307, 311, 314, 315, 316, 318, 319, 320, 321, 322, 327,
     328, 331, 332, 334, 336, 337, 346, 348, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370,
     371, 372, 373, 374, 377, 378, 379, 380, 386, 387, 388, 389, 390, 391, 398, 399, 400, 401, 402,
-    404, 406, 408, 409, 426, 427, 433, 436, 440,
+    404, 406, 408, 409, 427, 428, 434, 437, 441,
 ];
 pub(crate) const NEW_LARGE_CODEC_RECIPES: &[i16] = &[
     194, 199, 200, 201, 202, 204, 206, 208, 210, 212, 213, 214, 252, 281, 301, 311, 315, 316, 318,
     319, 320, 321, 322, 327, 328, 331, 332, 334, 336, 337, 367, 368, 369, 370, 371, 372, 373, 374,
-    386, 387, 388, 389, 390, 391, 426, 427, 433, 436, 440,
+    386, 387, 388, 389, 390, 391, 427, 428, 434, 437, 441,
 ];
 
 pub(crate) fn decode_constructor_recipe(block: i16, config: &[u8]) -> Option<i16> {
@@ -419,7 +508,7 @@ pub(crate) fn building_can_pickup(block: i16) -> bool {
     }
     // Storage, radar, logic/message/switch/memory — `Building.canPickup()` is
     // false in 158.1. Hidden/non-snapshot blocks are also rejected here.
-    if matches!(block, 251 | 345..=348 | 429..=435 | 441..=444) {
+    if matches!(block, 251 | 345..=348 | 430..=436 | 442..=445) {
         return false;
     }
     is_pickup_payload_supported(block)
@@ -647,6 +736,158 @@ pub(crate) fn apply_request_drop_payload(
         .ok()
         .into_iter()
         .collect()
+}
+
+/// ucontrol payDrop (desktop 159.7 LExecutor.java:404-410): drop the
+/// carrier's last payload at its feet (`Call.payloadDropped`). The executor
+/// transfer timeout is enforced by the caller. Returns the
+/// `payloadDropped` frame when a payload left the hold.
+pub(crate) fn logic_unit_drop_payload(world: &DynamicWorld, carrier_id: i32) -> Option<Vec<u8>> {
+    let carrier = world.enemies.get(&carrier_id)?.clone();
+    // Java: `unit instanceof Payloadc pay` — only payload units can drop.
+    if payload_capacity(carrier.unit_type) <= 0.0 || carrier.payloads.is_empty() {
+        return None;
+    }
+    let payload = carrier.payloads.last().cloned()?;
+    let (cx, cy) = (carrier.x, carrier.y);
+    let dropped = if insert_into_payload_conveyor(world, &carrier, payload.clone()) {
+        true
+    } else {
+        match payload {
+            CarriedPayload::Unit(mut unit) => {
+                unit.id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
+                let (jx, jy) = payload_unit_drop_jitter();
+                unit.x = cx + jx;
+                unit.y = cy + jy;
+                unit.authority = default_unit_authority(world, &unit);
+                world.register_unit_group(unit.id);
+                world.enemies.insert(unit.id, unit.clone());
+                world.unit_orders.insert(
+                    unit.id,
+                    crate::network::world::UnitOrder {
+                        unit_id: unit.id,
+                        command: crate::network::economy::default_unit_command(unit.unit_type),
+                        stances: 0,
+                        payload_cooldown: 0.0,
+                        target_kind: 0,
+                        target_id: -1,
+                        target_x: None,
+                        target_y: None,
+                        logic_control: 0,
+                        queue: Vec::new(),
+                    },
+                );
+                true
+            }
+            CarriedPayload::Build(build) => drop_carried_build_at(world, cx, cy, build).is_some(),
+        }
+    };
+    if !dropped {
+        return None;
+    }
+    if let Some(mut live) = world.enemies.get_mut(&carrier_id) {
+        live.payloads.pop();
+    }
+    encode_payload_dropped_frame(carrier_id, cx, cy).ok()
+}
+
+/// ucontrol payTake units branch (desktop 159.7 LExecutor.java:416-422):
+/// pick up the closest grounded same-team AI unit that fits the hold
+/// (`Units.closest(team, x, y, hitSize * 2, ...)` plus the predicate's own
+/// `u.within(unit, u.hitSize + unit.hitSize * 1.2f)` bound). Returns the
+/// `pickedUnitPayload` frame when a unit was picked up.
+pub(crate) fn logic_unit_pickup_unit(world: &DynamicWorld, carrier_id: i32) -> Option<Vec<u8>> {
+    let carrier = world.enemies.get(&carrier_id)?.clone();
+    let capacity = payload_capacity(carrier.unit_type);
+    if capacity <= 0.0 {
+        return None;
+    }
+    let search_range = unit_hit_size(carrier.unit_type) * 2.0;
+    let mut best: Option<(f32, i32)> = None;
+    for entry in world.enemies.iter() {
+        let target = entry.value();
+        if target.id == carrier_id
+            || target.team != carrier.team
+            || target.elevation > 0.001
+            || matches!(
+                target.authority,
+                crate::network::world::UnitAuthority::Player { .. }
+            )
+        {
+            continue;
+        }
+        let distance = (carrier.x - target.x).hypot(carrier.y - target.y);
+        if distance > search_range
+            || distance > unit_hit_size(target.unit_type) + unit_hit_size(carrier.unit_type) * 1.2
+        {
+            continue;
+        }
+        let area = unit_hit_size(target.unit_type).powi(2);
+        if payload_used(&carrier) + area > capacity + 0.001 {
+            continue;
+        }
+        if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+            best = Some((distance, target.id));
+        }
+    }
+    let target_id = best?.1;
+    let (_, taken) = world.enemies.remove(&target_id)?;
+    world.unregister_unit_group(target_id);
+    detach_unit_control(world, target_id);
+    if let Some(mut live) = world.enemies.get_mut(&carrier_id) {
+        live.payloads.push(CarriedPayload::Unit(taken));
+    }
+    encode_picked_unit_payload_frame(carrier_id, target_id).ok()
+}
+
+/// ucontrol payTake buildings branch (desktop 159.7 LExecutor.java:423-441):
+/// take the payload held by the same-team building under the unit, or pick
+/// up the whole building itself. Returns the `pickedBuildPayload` frame.
+pub(crate) fn logic_unit_pickup_building(world: &DynamicWorld, carrier_id: i32) -> Option<Vec<u8>> {
+    let carrier = world.enemies.get(&carrier_id)?.clone();
+    let capacity = payload_capacity(carrier.unit_type);
+    if capacity <= 0.0 {
+        return None;
+    }
+    let position =
+        (((carrier.x / 8.0).floor() as i32) << 16) | ((carrier.y / 8.0).floor() as i32 & 0xffff);
+    // Java requires `build.team == unit.team` strictly here (no derelict).
+    let tile = dynamic_at(world, position).filter(|tile| tile.team == carrier.team)?;
+    if let Some(inner) = tile.payload.clone() {
+        if payload_used(&carrier) + payload_used_of(&inner) <= capacity + 0.001 {
+            if let Some(mut live) = world.tiles.get_mut(&tile.position) {
+                live.payload = None;
+            }
+            if let Some(mut live) = world.enemies.get_mut(&carrier_id) {
+                live.payloads.push(*inner);
+            }
+            return encode_picked_build_payload_frame(carrier_id, tile.position, false).ok();
+        }
+    }
+    // Whole-building pickup: visible, `canPickup()`, same team, capacity.
+    if !building_can_pickup(tile.block) {
+        return None;
+    }
+    let area = f32::from(crate::game::content::block_size(tile.block) * 8).powi(2);
+    if area > capacity - payload_used(&carrier) + 0.001 {
+        return None;
+    }
+    let detached = building_placement::detach_building_from_world(world, tile.position)?;
+    let power = crate::network::economy::compute_power_efficiency(world);
+    let mut sync = Vec::new();
+    if encode_payload_build_sync(&mut sync, &detached, &power, world).is_err() {
+        let _ = building_placement::attach_building_to_world(world, detached, tile.position);
+        return None;
+    }
+    if let Some(mut live) = world.enemies.get_mut(&carrier_id) {
+        live.payloads
+            .push(CarriedPayload::Build(CarriedBuildPayload {
+                version: build_payload_version(detached.block),
+                tile: detached.clone(),
+                sync,
+            }));
+    }
+    encode_picked_build_payload_frame(carrier_id, detached.position, true).ok()
 }
 
 pub(crate) fn encode_payload_dropped_frame(

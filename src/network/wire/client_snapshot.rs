@@ -22,6 +22,50 @@ use crate::network::world::{core_position_for_team, core_world_for_team};
 /// offsets 868-893) a SetPositionCallPacket (110) correction is returned.
 /// Boosting is forced off for units that cannot boost (alpha: flying=false,
 /// canBoost=false; bytecode offsets 214-249).
+/// Official `NetServer.clientSnapshot` drops a packet only when
+/// `snapshotID < lastReceivedClientSnapshot`. Plans are copied onto
+/// `player.unit()` before the unit-id check; a mismatch only sets
+/// `ignorePosition` (JAR 808-882). `unit_id == -1` is the dead-unit
+/// wildcard from `NetClient.sync`.
+pub(crate) fn client_snapshot_id_is_new(player: &SessionPlayer, snapshot: &ClientSnapshot) -> bool {
+    snapshot.snapshot_id > player.last_snapshot
+}
+
+/// Whether this snapshot's unit is the one Player.writeSync currently
+/// exposes. Motion, mining and Alpha combat stay gated on this; build
+/// plans do not.
+pub(crate) fn client_snapshot_unit_matches(
+    player: &SessionPlayer,
+    snapshot: &ClientSnapshot,
+) -> bool {
+    match player.controlled_unit {
+        ControlledUnit::Core => snapshot.unit_id == player.unit_id || snapshot.unit_id == -1,
+        ControlledUnit::Standard(unit_id) => snapshot.unit_id == unit_id || snapshot.unit_id == -1,
+        ControlledUnit::Building(_) => true,
+    }
+}
+
+/// Motion/combat accept gate: a newer id **and** a matching unit.
+/// Build plans use [`client_snapshot_applies_build_plans`].
+pub(crate) fn client_snapshot_applies(player: &SessionPlayer, snapshot: &ClientSnapshot) -> bool {
+    client_snapshot_id_is_new(player, snapshot) && client_snapshot_unit_matches(player, snapshot)
+}
+
+/// Official `NetServer.clientSnapshot` copies `unit.plans` before the
+/// dead/position block (`player.isBuilder()`). A stuck `PlayerCombatState.dead`
+/// must not skip `BeginPlace`: the 159.7 client still draws local ghosts and
+/// fires the beam after a respawn the server has not accepted.
+pub(crate) fn client_snapshot_applies_build_plans(
+    player: &SessionPlayer,
+    snapshot: &ClientSnapshot,
+) -> bool {
+    client_snapshot_id_is_new(player, snapshot)
+        && matches!(
+            player.controlled_unit,
+            ControlledUnit::Core | ControlledUnit::Standard(_)
+        )
+}
+
 /// Returns the authoritative position to send via SetPosition, if any.
 pub(crate) fn apply_client_snapshot(
     player: &mut SessionPlayer,
@@ -74,11 +118,14 @@ pub(crate) fn apply_client_snapshot_with_speed(
     player.mouse_x = snapshot.mouse_x;
     player.mouse_y = snapshot.mouse_y;
     player.rotation = snapshot.rotation.rem_euclid(360.0);
+    player.velocity_x = snapshot.velocity_x;
+    player.velocity_y = snapshot.velocity_y;
     // Official: `if (!dead && (!type.flying || !type.canBoost)) boosting = 0`
     // — unconditional in clientSnapshot; alpha cannot boost (bytecode
     // offsets 214-249).
     player.boosting = !snapshot.dead && can_boost && snapshot.boosting;
     player.shooting = snapshot.shooting;
+    player.building = !snapshot.dead && snapshot.building;
     corrected
 }
 
@@ -93,20 +140,36 @@ pub(crate) fn apply_controlled_client_snapshot(
     elapsed_ms: u64,
 ) -> Option<(f32, f32)> {
     match player.controlled_unit {
-        ControlledUnit::Core => apply_client_snapshot(player, snapshot, strict, elapsed_ms),
+        ControlledUnit::Core => {
+            // H4: player core/unit movement uses Floor.speedMultiplier when
+            // the live unit is grounded (alpha itself is flying).
+            if let Some(unit) = world.enemies.get(&player.unit_id).map(|unit| unit.clone()) {
+                let floor = crate::network::combat::floor_at(world, unit.x, unit.y);
+                let speed =
+                    crate::network::combat::effective_unit_speed_on_floor(&unit, Some(floor))
+                        .max(0.05);
+                apply_client_snapshot_with_speed(player, snapshot, strict, elapsed_ms, speed, false)
+            } else {
+                let floor = crate::network::combat::floor_at(world, player.x, player.y);
+                let flying = crate::game::content::unit_movement(35).flying;
+                let speed = if flying {
+                    3.0
+                } else {
+                    3.0 * crate::game::content::floor_speed_multiplier(floor)
+                };
+                apply_client_snapshot_with_speed(player, snapshot, strict, elapsed_ms, speed, false)
+            }
+        }
         ControlledUnit::Standard(unit_id) => {
             // For possessed units this timestamp is the manual-input lease;
             // unlike Alpha, their reload is tick-driven in simulation.rs.
             player.last_shot = std::time::Instant::now();
             let unit = world.enemies.get(&unit_id)?.clone();
             let can_boost = matches!(unit.unit_type, 5..=8);
+            let floor = crate::network::combat::floor_at(world, unit.x, unit.y);
+            let speed = crate::network::combat::effective_unit_speed_on_floor(&unit, Some(floor));
             let correction = apply_client_snapshot_with_speed(
-                player,
-                snapshot,
-                strict,
-                elapsed_ms,
-                unit.move_speed,
-                can_boost,
+                player, snapshot, strict, elapsed_ms, speed, can_boost,
             );
             if !snapshot.dead {
                 if let Some(mut controlled) = world.enemies.get_mut(&unit_id) {
@@ -115,6 +178,7 @@ pub(crate) fn apply_controlled_client_snapshot(
                     controlled.rotation = player.rotation;
                     controlled.velocity_x = 0.0;
                     controlled.velocity_y = 0.0;
+                    controlled.update_building = player.building;
                 }
             }
             correction
@@ -127,6 +191,7 @@ pub(crate) fn apply_controlled_client_snapshot(
             player.rotation = snapshot.rotation.rem_euclid(360.0);
             player.boosting = false;
             player.shooting = !snapshot.dead && snapshot.shooting;
+            player.building = false;
             if let Some(tile) = dynamic_at(world, position) {
                 player.x = (tile.position >> 16) as i16 as f32 * 8.0;
                 player.y = tile.position as i16 as f32 * 8.0;
@@ -287,8 +352,7 @@ pub(crate) fn raw_mine_result(world: &DynamicWorld, position: i32) -> Option<(i1
     if x < 0 || y < 0 || x >= world.width || y >= world.height {
         return None;
     }
-    let index = (y * world.width + x) as usize;
-    match world.overlays[index] {
+    match crate::network::combat::overlay_at_tile(world, x, y) {
         167 => Some((0, 1)),       // copper
         168 => Some((1, 1)),       // lead
         169 => Some((8, 0)),       // scrap
@@ -297,7 +361,7 @@ pub(crate) fn raw_mine_result(world: &DynamicWorld, position: i32) -> Option<(i1
         172 | 175 => Some((7, 4)), // thorium
         173 => Some((16, 3)),      // beryllium
         174 => Some((17, 5)),      // tungsten
-        _ => match world.floors[index] {
+        _ => match crate::network::combat::floor_at_tile(world, x, y) {
             39 | 40 => Some((4, 0)), // sand / darksand
             _ => None,
         },

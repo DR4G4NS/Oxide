@@ -118,6 +118,39 @@ fn tracked_v11_int_chunk_is_not_a_short_chunk() {
     assert_eq!(section.save_version, 11);
 }
 
+fn official_archipelago() -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("third_party/mindustry-maps/archipelago.msav");
+    std::fs::read(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+}
+
+#[test]
+fn official_archipelago_msav_hosts_from_third_party_tree() {
+    // The verbatim official map (GPLv3, Anuken) is tracked in-tree, so this
+    // gate runs everywhere: it is the regression for host_map("archipelago")
+    // dying with UnexpectedEof when the reader consumed Save5 short chunks
+    // (u16 length) as i32-prefixed chunks.
+    let msav = official_archipelago();
+    assert_chunk_prefix_reproduces_old_bug(&msav, true);
+    let section = msav_world_entity_section(&msav).expect("world-entity section");
+    assert_eq!(section.save_version, 5);
+
+    let template =
+        replace_map_from_msav(embedded_template(), &msav).expect("replace_map_from_msav");
+    let world = fresh_world_from_template(
+        &GameState::new(),
+        template,
+        "archipelago".to_string(),
+        std::env::temp_dir().join("ci-archipelago-official.json"),
+    )
+    .expect("fresh world");
+    apply_msav_entities(&world, &msav).expect("apply world entities");
+    assert!(
+        !world.enemies().is_empty(),
+        "official archipelago must restore its enemy units"
+    );
+}
+
 #[test]
 fn tracked_archipelago_poly_short_chunk_hosts_without_core_tree() {
     // Same world-entity bytes as official archipelago.msav (Save5, class 18

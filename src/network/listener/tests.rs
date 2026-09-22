@@ -24,13 +24,13 @@ fn official_msav(name: &str) -> Option<Vec<u8>> {
 }
 
 #[test]
-fn desktop_159_client_noop_call_ids_and_payload_guards_are_verified() {
-    assert_eq!(DEBUG_STATUS_CLIENT_PACKET_ID, 39);
-    assert_eq!(DEBUG_STATUS_CLIENT_UNRELIABLE_PACKET_ID, 40);
-    assert_eq!(TILE_TAP_PACKET_ID, 140);
-    assert_eq!(REQUEST_DEBUG_STATUS_PACKET_ID, 89);
-    assert_eq!(MENU_CHOOSE_PACKET_ID, 71);
-    assert_eq!(TEXT_INPUT_RESULT_PACKET_ID, 138);
+fn desktop_160_client_noop_call_ids_and_payload_guards_are_verified() {
+    assert_eq!(DEBUG_STATUS_CLIENT_PACKET_ID, 40);
+    assert_eq!(DEBUG_STATUS_CLIENT_UNRELIABLE_PACKET_ID, 41);
+    assert_eq!(TILE_TAP_PACKET_ID, 148);
+    assert_eq!(REQUEST_DEBUG_STATUS_PACKET_ID, 97);
+    assert_eq!(MENU_CHOOSE_PACKET_ID, 79);
+    assert_eq!(TEXT_INPUT_RESULT_PACKET_ID, 146);
 
     // TileTap.write emits one packed tile position.
     assert!(valid_client_noop_payload(TILE_TAP_PACKET_ID, &[0; 4]));
@@ -145,7 +145,9 @@ fn allied_multi_mount_timers_match_official_volleys() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: None,
+        drown_progress: 0.0,
     };
     let mut antumbra = make(1, ANTUMBRA, ANTUMBRA.health);
     antumbra.team = 1;
@@ -162,7 +164,9 @@ fn allied_multi_mount_timers_match_official_volleys() {
             |fire| matches!(fire, AlliedWeaponFire::Projectile(volley) if volley.bullet_id == 34),
         )
         .count();
-    assert_eq!((missiles, cannons), (11, 11));
+    // Vanilla doubled cycles: missiles-mount pair fires every 40/70 ticks
+    // (3 + 2 bursts), the cannon pair every 48 (5 bursts) within 140 ticks.
+    assert_eq!((missiles, cannons), (5, 5));
 
     let mut risso = make(2, enemy_spec(25).unwrap(), 1_000.0);
     risso.team = 1;
@@ -171,7 +175,7 @@ fn allied_multi_mount_timers_match_official_volleys() {
         fire.iter()
             .filter(|fire| matches!(fire, AlliedWeaponFire::Projectile(volley) if volley.bullet_id == 41))
             .count(),
-        3
+        1 // mirrored gun pair fires every 26 ticks: one burst inside 50
     );
     assert_eq!(
         fire.iter()
@@ -187,7 +191,7 @@ fn allied_multi_mount_timers_match_official_volleys() {
         fire.iter()
             .filter(|fire| matches!(fire, AlliedWeaponFire::Projectile(volley) if volley.bullet_id == 51))
             .count(),
-        4
+        2 // mirrored retusa-weapon pair fires every 44 ticks
     );
     assert_eq!(
         fire.iter()
@@ -203,7 +207,7 @@ fn allied_multi_mount_timers_match_official_volleys() {
         fire.iter()
             .filter(|fire| matches!(fire, AlliedWeaponFire::Projectile(volley) if volley.bullet_id == 60))
             .count(),
-        2
+        1 // mirrored emp cannon pair fires every 130 ticks
     );
     assert_eq!(
         fire.iter()
@@ -215,7 +219,7 @@ fn allied_multi_mount_timers_match_official_volleys() {
     boosted_antumbra.team = 1;
     boosted_antumbra.status_effect = 14;
     boosted_antumbra.status_duration = 360.0;
-    let fire = collect_allied_weapon_fire(&mut boosted_antumbra, 20.0, 100.0).unwrap();
+    let fire = collect_allied_weapon_fire(&mut boosted_antumbra, 80.0, 100.0).unwrap();
     assert!(fire.iter().any(|fire| matches!(
         fire,
         AlliedWeaponFire::Projectile(volley)
@@ -312,7 +316,336 @@ fn pending_construction_snapshot_uses_construct_block_class() {
         assert!(input.read_s().unwrap() > 0);
         assert_eq!(input.read_i().unwrap(), (102 << 16) | 182);
         assert_eq!(input.read_s().unwrap(), expected_construct);
+        input.read_f().unwrap(); // health
+        input.read_b().unwrap(); // rotation | 0x80
+        input.read_b().unwrap(); // team
+        input.read_b().unwrap(); // version
+        input.read_b().unwrap(); // enabled
+        assert_eq!(input.read_b().unwrap(), 8); // moduleBitmask
+        input.read_b().unwrap();
+        input.read_b().unwrap();
+        assert_eq!(input.read_f().unwrap(), 0.0); // progress
+        assert_eq!(input.read_s().unwrap(), 0); // previous = air
+        assert_eq!(input.read_s().unwrap(), target); // current
+        let acc = input.read_b().unwrap();
+        let requirements = crate::game::content::block_requirements(target);
+        if requirements.is_empty() {
+            assert_eq!(acc, 255);
+        } else {
+            assert_eq!(acc as usize, requirements.len());
+            for (_item, amount) in requirements {
+                assert_eq!(input.read_f().unwrap(), 0.0);
+                assert_eq!(input.read_f().unwrap(), 0.0);
+                assert_eq!(input.read_i().unwrap(), *amount);
+            }
+        }
+        assert_eq!(
+            input.position() as usize,
+            packet.len() - 1,
+            "ConstructBuild.write tail must consume the snapshot"
+        );
     }
+}
+
+#[test]
+fn deconstruct_snapshot_writes_previous_equal_current() {
+    use crate::network::codec::Reads;
+
+    let target = 216i16;
+    let frame = encode_construct_block_snapshot_with_previous(
+        (102 << 16) | 182,
+        target,
+        0,
+        1,
+        target,
+        0.87,
+        1.0,
+    )
+    .unwrap();
+    let packet = read_packet(std::io::Cursor::new(&frame[2..])).unwrap();
+    assert_eq!(packet[0], BLOCK_SNAPSHOT_PACKET_ID);
+    let mut input = std::io::Cursor::new(&packet[1..]);
+    assert_eq!(input.read_s().unwrap(), 1);
+    assert!(input.read_s().unwrap() > 0);
+    assert_eq!(input.read_i().unwrap(), (102 << 16) | 182);
+    assert_eq!(input.read_s().unwrap(), 5); // build1
+    input.read_f().unwrap();
+    input.read_b().unwrap();
+    input.read_b().unwrap();
+    input.read_b().unwrap();
+    input.read_b().unwrap();
+    assert_eq!(input.read_b().unwrap(), 8);
+    input.read_b().unwrap();
+    input.read_b().unwrap();
+    let progress = input.read_f().unwrap();
+    assert!((progress - 0.87).abs() < 1e-5);
+    assert_eq!(input.read_s().unwrap(), target);
+    assert_eq!(input.read_s().unwrap(), target);
+    let acc = input.read_b().unwrap();
+    let requirements = crate::game::content::block_requirements(target);
+    assert_eq!(acc as usize, requirements.len());
+    let left = (1.0 - 0.87_f32).max(0.0);
+    for (_item, amount) in requirements {
+        assert_eq!(input.read_f().unwrap(), 0.0);
+        assert_eq!(input.read_f().unwrap(), 0.0);
+        let items_left = (*amount as f32 * left).round().max(0.0) as i32;
+        assert_eq!(input.read_i().unwrap(), items_left);
+    }
+    assert_eq!(
+        input.position() as usize,
+        packet.len() - 1,
+        "deconstruct ConstructBuild.write tail must consume the snapshot"
+    );
+}
+
+#[test]
+fn survival_begin_place_inserts_construct_block_tile() {
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = GameState::initial_core_items();
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    let tile = world
+        .tiles
+        .get(&position)
+        .expect("ConstructBlock after BeginPlace");
+    assert_eq!(
+        tile.block,
+        crate::network::buildings::construction::construct_block_id(216)
+    );
+    assert_eq!(tile.stored_item, 0);
+    assert_eq!(tile.stored_amount, 216);
+    assert_eq!(tile.production_progress, 0.0);
+    assert_eq!(tile.health, crate::game::content::block_health(5));
+    assert!(world.pending_builds.contains_key(&position));
+}
+
+#[test]
+fn set_mode_keeps_pending_and_sandbox_tick_finishes_it() {
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = GameState::initial_core_items();
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(world.pending_builds.contains_key(&position));
+    assert!(crate::network::buildings::construction::is_construct_block(
+        world.tiles.get(&position).unwrap().block
+    ));
+
+    let mut next_rules = world.wave_rules.read().clone();
+    next_rules.infinite_resources = true;
+    let spawns = world.enemy_spawns.read().clone();
+    crate::network::runtime::apply_mode_switch_world_state(
+        &world,
+        GameMode::Sandbox,
+        next_rules,
+        spawns,
+    );
+    assert!(
+        world.pending_builds.contains_key(&position),
+        "Call.setRules must not cancel ConstructBlocks"
+    );
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 1.0);
+    assert!(
+        world.pending_builds.get(&position).is_none(),
+        "vanilla construct() completes immediately once infiniteResources is true"
+    );
+    assert_eq!(world.tiles.get(&position).unwrap().block, 216);
+}
+
+#[test]
+fn construct_progress_crosses_block_snapshot_window() {
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = GameState::initial_core_items();
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 221,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    for _ in 0..361 {
+        if let Some(mut pending) = world.pending_builds.get_mut(&position) {
+            pending.last_seen = std::time::Instant::now();
+        }
+        simulate_constructions(&world, &connections, 1.0);
+    }
+    assert!(
+        world.pending_builds.contains_key(&position),
+        "plastanium-wall-large (456 ticks) must still be pending after 361 ticks"
+    );
+    let tile = world.tiles.get(&position).expect("construct tile").clone();
+    assert!(crate::network::buildings::construction::is_construct_block(
+        tile.block
+    ));
+    assert_eq!(
+        tile.block,
+        crate::network::buildings::construction::construct_block_id(221)
+    );
+    assert!(
+        tile.production_progress > 0.7,
+        "progress after 361/456 ticks: {}",
+        tile.production_progress
+    );
+    assert_eq!(tile.stored_amount, 221);
+    let mut payload = Vec::new();
+    crate::network::buildings::snapshot::encode_dynamic_tile_sync(
+        &mut payload,
+        &tile,
+        &std::collections::HashMap::new(),
+        None,
+    )
+    .expect("construct writeSync");
+    let mut cursor = std::io::Cursor::new(&payload);
+    use crate::network::codec::Reads;
+    cursor.read_f().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    let progress = cursor.read_f().unwrap();
+    assert!((progress - tile.production_progress).abs() < 1e-5);
+    assert_eq!(cursor.read_s().unwrap(), 0);
+    assert_eq!(cursor.read_s().unwrap(), 221);
+}
+
+#[test]
+fn periodic_block_snapshot_skips_live_block_while_breaking() {
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let position = (44 << 16) | 104;
+    world.tiles.insert(
+        position,
+        DynamicTile {
+            logic_control: None,
+            position,
+            block: 353,
+            team: 1,
+            occupied: vec![position],
+            health: crate::game::content::block_health(353),
+            ..DynamicTile::default()
+        },
+    );
+    world.pending_breaks.insert(
+        position,
+        PendingBreak {
+            position,
+            block: 353,
+            occupied: vec![position],
+            dynamic: true,
+            team: 1,
+            builder: player(),
+            last_seen: std::time::Instant::now(),
+            remaining_ticks: 80.0,
+        },
+    );
+    let frames = encode_block_snapshots(&world, &std::collections::HashMap::new()).unwrap();
+    assert!(
+        !frames.is_empty(),
+        "pending break must produce a ConstructBuild BlockSnapshot"
+    );
+    let mut saw_construct = false;
+    let pos = position.to_be_bytes();
+    let construct = crate::network::buildings::construction::construct_block_id(353).to_be_bytes();
+    let turret = 353i16.to_be_bytes();
+    for frame in &frames {
+        let packet = read_packet(std::io::Cursor::new(&frame[2..])).unwrap();
+        assert_eq!(packet[0], BLOCK_SNAPSHOT_PACKET_ID);
+        let data = &packet[1..];
+        for window in data.windows(6) {
+            if window[..4] != pos {
+                continue;
+            }
+            assert_ne!(
+                window[4..6],
+                turret,
+                "live turret must not snapshot during deconstruct"
+            );
+            if window[4..6] == construct {
+                saw_construct = true;
+            }
+        }
+    }
+    assert!(
+        saw_construct,
+        "pending break must emit ConstructBuild previous=current"
+    );
 }
 
 #[test]
@@ -327,16 +660,16 @@ fn parallel_block_snapshots_match_sequential_bytes_and_are_deterministic() {
         let position = (x << 16) | y;
         let mut tile = DynamicTile {
             position,
-            block: if index % 3 == 0 { 435 } else { 181 },
+            block: if index % 3 == 0 { 436 } else { 181 },
             rotation: (index % 4) as u8,
             team: 1,
             occupied: vec![position],
-            health: crate::game::content::block_health(if index % 3 == 0 { 435 } else { 181 }),
+            health: crate::game::content::block_health(if index % 3 == 0 { 436 } else { 181 }),
             production_progress: index as f32,
             inventory: vec![(0, index + 1)],
             ..DynamicTile::default()
         };
-        if tile.block == 435 {
+        if tile.block == 436 {
             tile.memory = (0..512).map(|cell| f64::from(index * 512 + cell)).collect();
         }
         power.insert(position, (index % 10) as f32 / 10.0);
@@ -397,7 +730,7 @@ fn unit_item_stack_never_serializes_a_null_item_with_contents() {
 use crate::network::codec::{Reads, Writes};
 
 #[test]
-fn generated_packet_ids_match_exact_desktop_159_registry() {
+fn generated_packet_ids_match_exact_desktop_160_registry() {
     assert_eq!(
         [
             CONNECT_CONFIRM_PACKET_ID,
@@ -418,6 +751,7 @@ fn generated_packet_ids_match_exact_desktop_159_registry() {
             UNIT_DEATH_PACKET_ID,
             UNIT_DESPAWN_PACKET_ID,
             UNIT_CLEAR_PACKET_ID,
+            UNIT_BLOCK_SPAWN_PACKET_ID,
             UNIT_SPAWN_PACKET_ID,
             PAYLOAD_DROPPED_PACKET_ID,
             PICKED_BUILD_PAYLOAD_PACKET_ID,
@@ -449,20 +783,20 @@ fn generated_packet_ids_match_exact_desktop_159_registry() {
             UNIT_CONTROL_PACKET_ID,
         ],
         [
-            33, 28, 29, 30, 76, 78, 80, 81, 97, 98, 128, 129, 133, 48, 36, 151, 152, 149, 157, 73,
-            74, 75, 154, 34, 12, 11, 13, 14, 15, 41, 84, 87, 91, 95, 135, 139, 142, 144, 60, 50,
-            16, 26, 27, 42, 44, 77, 150,
+            34, 29, 30, 31, 84, 86, 88, 89, 105, 106, 136, 137, 141, 49, 37, 159, 160, 157, 154,
+            165, 81, 82, 83, 162, 35, 13, 12, 14, 15, 16, 42, 92, 95, 99, 103, 143, 147, 150, 152,
+            65, 54, 17, 27, 28, 43, 45, 85, 158,
         ]
     );
 }
 
 #[test]
-fn rust_packet_ids_match_committed_159_7_packets_json() {
+fn rust_packet_ids_match_committed_160_5_packets_json() {
     let doc: serde_json::Value =
-        serde_json::from_str(include_str!("../../../compat/159.7/packets.json")).unwrap();
+        serde_json::from_str(include_str!("../../../compat/160.5/packets.json")).unwrap();
     assert_eq!(doc["schema_version"], 2);
     let packets = doc["packets"].as_array().unwrap();
-    assert_eq!(packets.len(), 165);
+    assert_eq!(packets.len(), 173);
     let by_name: std::collections::HashMap<&str, i64> = packets
         .iter()
         .map(|p| (p["name"].as_str().unwrap(), p["id"].as_i64().unwrap()))
@@ -471,8 +805,8 @@ fn rust_packet_ids_match_committed_159_7_packets_json() {
         by_name["ConnectConfirmCallPacket"],
         CONNECT_CONFIRM_PACKET_ID as i64
     );
-    assert_eq!(by_name["RequestAssetsCallPacket"], 86);
-    assert_eq!(by_name["RequestWorldCallPacket"], 93);
+    assert_eq!(by_name["RequestAssetsCallPacket"], 94);
+    assert_eq!(by_name["RequestWorldCallPacket"], 101);
     assert_eq!(
         by_name["WorldDataBeginCallPacket"],
         WORLD_DATA_BEGIN_PACKET_ID as i64
@@ -480,6 +814,10 @@ fn rust_packet_ids_match_committed_159_7_packets_json() {
     assert_eq!(by_name["AssetRequirementStream"], 4);
     assert_eq!(by_name["AssetStream"], 5);
     assert_eq!(by_name["WorldStream"], 2);
+    assert_eq!(
+        by_name["UnitBlockSpawnCallPacket"],
+        UNIT_BLOCK_SPAWN_PACKET_ID as i64
+    );
 }
 
 #[test]
@@ -684,9 +1022,13 @@ fn tile_config_uses_exact_typeio_object_and_server_forward_layout() {
         mouse_x: 360.0,
         mouse_y: 800.0,
         rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
+        building: true,
         last_command: None,
+        docked_type: None,
         active_plans: HashSet::new(),
         mining_position: None,
         mining_progress: 0.0,
@@ -777,9 +1119,13 @@ fn rotate_block_uses_exact_client_and_server_layout() {
         mouse_x: 360.0,
         mouse_y: 800.0,
         rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
+        building: true,
         last_command: None,
+        docked_type: None,
         active_plans: HashSet::new(),
         mining_position: None,
         mining_progress: 0.0,
@@ -942,6 +1288,70 @@ fn set_unit_stance_uses_exact_layout_and_official_compatibility() {
 }
 
 #[test]
+fn plastanium_withdrawal_keeps_remainder_and_snapshots_do_not_remove_items() {
+    use crate::network::buildings::snapshot::encode_dynamic_tile_sync;
+    for legacy in 0..3 {
+        let (world, _, _, _) = legacy_weapons_test_world();
+        let pos = (45 << 16) | 100;
+        let mut tile = erekir_like_tile(pos, 259);
+        tile.health = crate::game::content::block_health(259);
+        tile.stack_link = pos;
+        tile.stack_cooldown = 0.5;
+        match legacy {
+            0 => tile.conveyor_items = vec![(9, 0.0); 10],
+            1 => tile.inventory = vec![(9, 10)],
+            _ => {
+                tile.stored_item = 9;
+                tile.stored_amount = 10;
+            }
+        }
+        world.tiles.insert(pos, tile);
+        let mut actor = player();
+        actor.x = 360.0;
+        actor.y = 800.0;
+        let read_count = || {
+            let tile = world.tiles.get(&pos).unwrap().clone();
+            let mut bytes = Vec::new();
+            encode_dynamic_tile_sync(&mut bytes, &tile, &HashMap::new(), Some(&world)).unwrap();
+            let mut input = std::io::Cursor::new(bytes);
+            input.read_f().unwrap();
+            for _ in 0..5 {
+                input.read_b().unwrap();
+            }
+            let count = input.read_s().unwrap();
+            if count == 0 {
+                0
+            } else {
+                assert_eq!(count, 1);
+                assert_eq!(input.read_s().unwrap(), 9);
+                input.read_i().unwrap()
+            }
+        };
+        assert_eq!(read_count(), 10);
+        assert_eq!(read_count(), 10, "opening the inventory is read-only");
+        assert_eq!(
+            withdraw_items_to_player(&mut actor, &world, pos, 9, 3),
+            Some((pos, 3))
+        );
+        assert_eq!(actor.carried_amount, 3);
+        assert_eq!(
+            read_count(),
+            7,
+            "partial withdrawal must keep all remaining items"
+        );
+        assert_eq!(world.tiles.get(&pos).unwrap().stack_link, pos);
+        assert_eq!(
+            withdraw_items_to_player(&mut actor, &world, pos, 9, 30),
+            Some((pos, 7))
+        );
+        assert_eq!(actor.carried_amount, 10);
+        assert_eq!(read_count(), 0);
+        assert_eq!(world.tiles.get(&pos).unwrap().stack_link, -1);
+        assert!(withdraw_items_to_player(&mut actor, &world, pos, 9, 1).is_none());
+    }
+}
+
+#[test]
 fn item_transfer_packets_match_exact_desktop_158_layouts() {
     let core: i32 = (40 << 16) | 100;
     let unit = 2_000_001;
@@ -1060,7 +1470,9 @@ fn export_desktop_158_post_join_fixtures() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         };
         if unit_type == 22 {
             unit.payloads.push(CarriedPayload::Unit(EnemyUnit {
@@ -1094,7 +1506,9 @@ fn export_desktop_158_post_join_fixtures() {
                 authority: UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
                 update_building: true,
+                missile_time: 0.0,
                 status_agg: None,
+                drown_progress: 0.0,
             }));
             let wall_position = (42 << 16) | 100;
             let mut wall = base_building_tombstone(&BaseBuildingState {
@@ -1487,17 +1901,17 @@ fn export_desktop_158_post_join_fixtures() {
     recon_payload.extend_from_slice(&recon_data);
     std::fs::write(output.join("reconstructor-380.bin"), recon_payload).unwrap();
 
-    // Memory cell (434) fixture: full 64-cell array, values at 0 and 3.
+    // Memory cell (435) fixture: full 64-cell array, values at 0 and 3.
     let mem_position = (52 << 16) | 100;
     let mut mem = base_building_tombstone(&BaseBuildingState {
         position: mem_position,
-        block: 434,
+        block: 435,
         team: 1,
-        health: crate::game::content::block_health(434),
+        health: crate::game::content::block_health(435),
         occupied: vec![mem_position],
         inventory: Vec::new(),
     });
-    mem.block = 434;
+    mem.block = 435;
     mem.team = 1;
     let mut memory = vec![0.0f64; 64];
     memory[0] = 1.5;
@@ -1507,13 +1921,13 @@ fn export_desktop_158_post_join_fixtures() {
     mem_payload.write_s(1).unwrap();
     let mut mem_data = Vec::new();
     mem_data.write_i(mem_position).unwrap();
-    mem_data.write_s(434).unwrap();
+    mem_data.write_s(435).unwrap();
     encode_memory_sync(&mut mem_data, &mem).unwrap();
     mem_payload
         .write_s(i16::try_from(mem_data.len()).unwrap())
         .unwrap();
     mem_payload.extend_from_slice(&mem_data);
-    std::fs::write(output.join("memory-cell-434.bin"), mem_payload).unwrap();
+    std::fs::write(output.join("memory-cell-435.bin"), mem_payload).unwrap();
 
     // Chat SendMessageCallPacket2 (92) fixture: frame payload after the
     // packet id (u16 len + id + u16 payload len + compress byte stripped
@@ -1542,9 +1956,13 @@ fn player() -> SessionPlayer {
         mouse_x: 0.0,
         mouse_y: 0.0,
         rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
+        building: true,
         last_command: None,
+        docked_type: None,
         active_plans: HashSet::new(),
         mining_position: None,
         mining_progress: 0.0,
@@ -1613,6 +2031,8 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let position = (20 << 16) | 30;
     let tile = DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position,
         block: 181,
         rotation: 2,
@@ -1688,6 +2108,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     assert_eq!(input.position() as usize, packet.len() - 1);
 
     let mut generator = DynamicTile {
+        logic_control: None,
         block: 308,
         stored_item: 15,
         production_progress: 342.0,
@@ -1701,7 +2122,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     };
     generator.position = (21 << 16) | 30;
     let mut sync = Vec::new();
-    encode_power_generator_sync(&mut sync, &generator).unwrap();
+    encode_power_generator_sync(&mut sync, &generator, &std::collections::HashMap::new()).unwrap();
     let mut input = std::io::Cursor::new(sync);
     assert_eq!(
         input.read_f().unwrap(),
@@ -1723,6 +2144,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     assert!((input.read_f().unwrap() - 0.95).abs() < 0.0001);
 
     let battery = DynamicTile {
+        logic_control: None,
         block: 306,
         power_stored: 2_000.0,
         power_links: Vec::new(),
@@ -1746,6 +2168,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let mender_position = (23 << 16) | 30;
     let mender = DynamicTile {
+        logic_control: None,
         position: mender_position,
         block: 245,
         transport_progress: 0.4,
@@ -1785,6 +2208,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let projector_position = (24 << 16) | 30;
     let projector = DynamicTile {
+        logic_control: None,
         position: projector_position,
         block: 247,
         transport_progress: 0.75,
@@ -1817,6 +2241,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let pump_position = (22 << 16) | 30;
     let pump = DynamicTile {
+        logic_control: None,
         position: pump_position,
         block: 284,
         stored_liquid: 0,
@@ -1845,6 +2270,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let bridge_position = (24 << 16) | 30;
     let bridge = DynamicTile {
+        logic_control: None,
         position: bridge_position,
         block: 293,
         config: vec![7, 0, 0, 0, 3, 0, 0, 0, 0],
@@ -1876,6 +2302,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let phase_position = (25 << 16) | 30;
     let phase_bridge = DynamicTile {
+        logic_control: None,
         position: phase_position,
         block: 263,
         config: vec![7, 0, 0, 0, 6, 0, 0, 0, 0],
@@ -1910,6 +2337,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     assert_eq!(input.position() as usize, input.get_ref().len());
 
     let buffered_bridge = DynamicTile {
+        logic_control: None,
         block: 262,
         config: vec![0],
         enabled: true,
@@ -1960,6 +2388,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     assert_eq!(input.position() as usize, input.get_ref().len());
 
     let junction = DynamicTile {
+        logic_control: None,
         block: 261,
         junction_items: vec![(0, 3, 13.0), (2, 0, 26.0)],
         factory_command: None,
@@ -1995,6 +2424,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     assert_eq!(input.position() as usize, input.get_ref().len());
 
     let duo = DynamicTile {
+        logic_control: None,
         block: 349,
         stored_item: 0,
         stored_amount: 3,
@@ -2025,6 +2455,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let lancer_position = (98 << 16) | 30;
     let lancer = DynamicTile {
+        logic_control: None,
         position: lancer_position,
         block: 354,
         production_progress: 20.0,
@@ -2053,6 +2484,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let meltdown_position = (99 << 16) | 30;
     let meltdown = DynamicTile {
+        logic_control: None,
         position: meltdown_position,
         block: 366,
         production_progress: 60.0,
@@ -2080,6 +2512,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     assert_eq!(input.position() as usize, input.get_ref().len());
 
     let wave = DynamicTile {
+        logic_control: None,
         block: 353,
         stored_liquid: 0,
         liquid_amount: 7.5,
@@ -2105,6 +2538,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
     assert_eq!(input.position() as usize, input.get_ref().len());
 
     let router = DynamicTile {
+        logic_control: None,
         block: 266,
         stored_item: 3,
         stored_amount: 1,
@@ -2154,6 +2588,7 @@ fn generic_crafter_block_snapshot_matches_official_layout() {
 
     let driver_position = (30 << 16) | 30;
     let mut driver = DynamicTile {
+        logic_control: None,
         position: driver_position,
         block: 271,
         rotation: 0,
@@ -2228,6 +2663,11 @@ fn active_projectile_replay_uses_remaining_position_and_lifetime() {
         pierce_buildings: 0,
         spawn_reign_frags: false,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         enemy_target_position: None,
         enemy_target_core: false,
         apply_direct_on_impact: false,
@@ -2242,6 +2682,7 @@ fn active_projectile_replay_uses_remaining_position_and_lifetime() {
         source_position: None,
         damage_interval: None,
         damage_timer: 0.0,
+        collided: Vec::new(),
     };
     let payload = encode_projectile_replay_payload(&projectile, Some((100.0, 10.0))).unwrap();
     let mut input = std::io::Cursor::new(payload);
@@ -2329,6 +2770,8 @@ fn dynamic_tiles_survive_a_save_and_load_cycle() {
     tiles.insert(
         position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position,
             block: 261,
             rotation: 2,
@@ -2374,6 +2817,8 @@ fn dynamic_tiles_survive_a_save_and_load_cycle() {
     );
     let rebuild_position = (42 << 16) | 100;
     let rebuild_source = DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position: rebuild_position,
         block: 216,
         rotation: 3,
@@ -2424,6 +2869,8 @@ fn dynamic_tiles_survive_a_save_and_load_cycle() {
     tiles.insert(
         driver_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: driver_position,
             block: 271,
             rotation: 0,
@@ -2504,7 +2951,9 @@ fn dynamic_tiles_survive_a_save_and_load_cycle() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     let base_buildings = DashMap::new();
@@ -2590,6 +3039,7 @@ fn dynamic_tiles_survive_a_save_and_load_cycle() {
         &cores,
         &logic_flags,
         &crate::network::buildings::puddles::PuddleSystem::new(),
+        String::new(),
     )
     .unwrap();
     let restored = load_tiles(&path, None).unwrap();
@@ -2640,7 +3090,7 @@ fn dynamic_tiles_survive_a_save_and_load_cycle() {
     assert_eq!(enemy.secondary_attack_reload, 7.0);
     assert_eq!(enemy.tertiary_attack_reload, 11.0);
     assert_eq!(enemy.elevation, 0.75);
-    assert_eq!(enemy.move_speed, FLARE.speed * 1.15);
+    assert_eq!(enemy.move_speed, FLARE.speed);
     assert_eq!(restored.base_building_health.len(), 1);
     assert_eq!(restored.base_building_health[0].position, base_position);
     assert_eq!(restored.base_building_health[0].health, 123.0);
@@ -2730,7 +3180,84 @@ fn cave_survival_hosted_as_sandbox_overrides_map_rules() {
     assert!(world.wave_rules.read().infinite_resources);
     assert!(world.wave_rules.read().waves_enabled);
     assert!(!world.wave_rules.read().wave_timer);
+    assert!(world.wave_rules.read().allow_edit_rules);
+    assert!(!world.wave_rules.read().pvp);
     assert!(state.infinite_resources.load(Ordering::Relaxed));
+    // Gamemode.sandbox does not set instantBuild — that is Gamemode.editor.
+    assert!(!world.wave_rules.read().instant_build);
+
+    // The client only ever learns the rules from the world stream
+    // (NetworkIO.loadWorld), so the preset must reach the streamed template:
+    // ConstructBlock.construct/deconstruct short-circuit on
+    // `state.rules.infiniteResources`, which is what makes sandbox placement
+    // and demolition instant on the client.
+    let streamed = network_template_with_plans(&world).unwrap();
+    let streamed_metadata = crate::engine::world_stream::inspect_metadata(&streamed).unwrap();
+    let streamed_rules = crate::network::units::parse_wave_rules(&streamed_metadata.rules);
+    assert!(
+        streamed_rules.infinite_resources,
+        "streamed rules must carry the sandbox preset: {}",
+        streamed_metadata.rules
+    );
+    assert!(!streamed_rules.wave_timer, "streamed waveTimer");
+    assert!(streamed_rules.waves_enabled, "streamed waves");
+    // Map data outside the preset survives the splice.
+    assert_eq!(
+        streamed_rules.spawn_groups.len(),
+        map_rules.spawn_groups.len(),
+        "spawn groups must be preserved verbatim"
+    );
+    assert_eq!(streamed_rules.wave_team, map_rules.wave_team);
+    assert_eq!(streamed_rules.default_team, map_rules.default_team);
+    // The template itself stays pristine so a switch back to Survival can
+    // re-derive the map's own rules (mode_transition_rules).
+    let base = crate::engine::world_stream::inspect_metadata(&world.network_template).unwrap();
+    assert!(
+        !crate::network::units::parse_wave_rules(&base.rules).infinite_resources,
+        "base template must keep the map rules"
+    );
+
+    // Personalisation used to be a second rules authority that force-set
+    // instantBuild:true for sandbox. Assert on the bytes a joining client
+    // actually receives — after replace_rules AND personalise.
+    let received = crate::engine::world_stream::personalize_current_with_state_mode_and_rand(
+        &streamed,
+        1_000_001,
+        "sandbox-joiner",
+        0x11223344,
+        (320.0, 800.0),
+        world.game_state.wave.load(Ordering::Relaxed),
+        *world.game_state.wave_time.read(),
+        f64::from(*world.game_state.simulation_time.read()),
+        world.game_state.extras.rand_seeds(),
+    )
+    .unwrap();
+    let received_metadata = crate::engine::world_stream::inspect_metadata(&received).unwrap();
+    let received_rules = crate::network::units::parse_wave_rules(&received_metadata.rules);
+    assert!(
+        received_rules.infinite_resources,
+        "personalized rules must keep infiniteResources: {}",
+        received_metadata.rules
+    );
+    assert!(
+        received_rules.allow_edit_rules,
+        "personalized rules must keep allowEditRules: {}",
+        received_metadata.rules
+    );
+    assert!(received_rules.waves_enabled, "personalized waves");
+    assert!(!received_rules.wave_timer, "personalized waveTimer");
+    assert!(
+        !received_rules.instant_build,
+        "Gamemode.sandbox must not set instantBuild: {}",
+        received_metadata.rules
+    );
+    assert!(
+        !received_metadata.rules.contains("instantBuild:true")
+            && !received_metadata.rules.contains("\"instantBuild\":true"),
+        "client must not see instantBuild:true: {}",
+        received_metadata.rules
+    );
+    assert!(!received_rules.pvp, "sandbox must not enable pvp");
 }
 
 #[test]
@@ -2748,6 +3275,7 @@ fn sandbox_build_and_break_are_immediate_and_resource_free() {
     let pending = PendingBuild {
         position,
         block: 257,
+        previous_block: 0,
         rotation: 0,
         config: vec![0],
         occupied: vec![position],
@@ -2801,6 +3329,1431 @@ fn sandbox_build_and_break_are_immediate_and_resource_free() {
 }
 
 #[test]
+fn instant_deconstruct_emits_finish_in_the_same_apply_build_plans_call() {
+    // With construction_is_instant, BeginBreak and DeconstructFinish must
+    // both leave the same apply_build_plans call, in that order: the client
+    // needs a ConstructBuild before it can complete the break.
+    crate::network::buildings::reset_break_timing();
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Sandbox;
+    apply_game_mode_to_wave_rules(&mut world.wave_rules.write(), GameMode::Sandbox);
+    world
+        .game_state
+        .infinite_resources
+        .store(true, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+    let connections = DashMap::new();
+    connections.insert(
+        1,
+        PendingConnection {
+            ip: "127.0.0.1".parse().unwrap(),
+            outbound: tx,
+            udp_inbound: tokio::sync::mpsc::unbounded_channel().0,
+            udp_endpoint: Arc::new(parking_lot::RwLock::new(None)),
+            udp_socket: None,
+            player_name: Arc::new(parking_lot::RwLock::new(Some("builder".into()))),
+            outbound_drops: Arc::new(AtomicU64::new(0)),
+            critical_drops: Arc::new(AtomicU64::new(0)),
+            last_keepalive_rtt_ms: Arc::new(AtomicU64::new(0)),
+            last_packet_epoch_ms: Arc::new(AtomicU64::new(0)),
+            outbound_queued: Arc::new(AtomicU64::new(0)),
+        },
+    );
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    while rx.try_recv().is_ok() {}
+
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: true,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    let mut ids = Vec::new();
+    while let Ok(frame) = rx.try_recv() {
+        ids.push(generated_packet_id(&frame));
+    }
+    let begin = ids
+        .iter()
+        .position(|&id| id == BEGIN_BREAK_PACKET_ID)
+        .expect("BeginBreak from the accepting apply_build_plans");
+    let finish = ids
+        .iter()
+        .position(|&id| id == DECONSTRUCT_FINISH_PACKET_ID)
+        .expect("DeconstructFinish from the same apply_build_plans");
+    assert!(
+        begin < finish,
+        "BeginBreak must precede DeconstructFinish: {ids:?}"
+    );
+    assert!(
+        world.pending_breaks.is_empty(),
+        "instant break must not wait for the tick loop"
+    );
+    assert!(
+        world.tiles.get(&position).is_none(),
+        "tile must be gone after the same call"
+    );
+    let timing = crate::network::buildings::last_break_timing();
+    let seen = timing.plan_seen.expect("plan_seen probe");
+    let entered = timing.finish_entered.expect("finish_entered probe");
+    let enqueued = timing.finish_enqueued.expect("finish_enqueued probe");
+    assert!(
+        entered.duration_since(seen).as_millis() < 5,
+        "finish_pending_break must run in the same accept: {:?}",
+        entered.duration_since(seen)
+    );
+    assert!(
+        enqueued.duration_since(entered).as_millis() < 5,
+        "DeconstructFinish must be enqueued before finish_pending_break returns: {:?}",
+        enqueued.duration_since(entered)
+    );
+}
+
+fn generated_packet_id(frame: &[u8]) -> u8 {
+    frame[2]
+}
+
+fn snapshot_with_break(snapshot_id: i32, unit_id: i32, position: i32) -> ClientSnapshot {
+    ClientSnapshot {
+        snapshot_id,
+        unit_id,
+        dead: false,
+        x: (position >> 16) as i16 as f32 * 8.0,
+        y: position as i16 as f32 * 8.0,
+        mouse_x: 0.0,
+        mouse_y: 0.0,
+        rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
+        boosting: false,
+        shooting: false,
+        building: true,
+        mining_position: None,
+        plans: vec![BuildPlan {
+            breaking: true,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+    }
+}
+
+#[test]
+fn stale_client_snapshot_does_not_apply_break_plans() {
+    crate::network::buildings::reset_break_timing();
+    let mut actor = player();
+    actor.last_snapshot = 10;
+    actor.unit_id = 2;
+    let position = (44 << 16) | 104;
+    assert!(
+        !client_snapshot_applies(&actor, &snapshot_with_break(10, 2, position)),
+        "equal snapshot_id is stale"
+    );
+    assert!(
+        !client_snapshot_applies(&actor, &snapshot_with_break(5, 2, position)),
+        "older snapshot_id is stale"
+    );
+    let mismatched = snapshot_with_break(11, 99, position);
+    assert!(
+        client_snapshot_id_is_new(&actor, &mismatched),
+        "NetServer still copies plans when unit id mismatches"
+    );
+    assert!(
+        !client_snapshot_unit_matches(&actor, &mismatched),
+        "motion stays gated on the session unit"
+    );
+    assert!(
+        !client_snapshot_applies(&actor, &mismatched),
+        "motion/combat still require a matching unit"
+    );
+    assert!(client_snapshot_applies(
+        &actor,
+        &snapshot_with_break(11, 2, position)
+    ));
+    assert!(
+        client_snapshot_applies(&actor, &snapshot_with_break(12, -1, position)),
+        "unit_id -1 is the official wildcard"
+    );
+}
+
+#[test]
+fn mismatched_unit_snapshot_still_begins_a_survival_place() {
+    // NetServer.clientSnapshot copies plans onto player.unit() before
+    // `ignorePosition`. A Core session whose ClientSnapshot reports a Mono
+    // must still emit BeginPlace or the client never creates ConstructBlock.
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+    let connections = DashMap::new();
+    connections.insert(
+        1,
+        PendingConnection {
+            ip: "127.0.0.1".parse().unwrap(),
+            outbound: tx,
+            udp_inbound: tokio::sync::mpsc::unbounded_channel().0,
+            udp_endpoint: Arc::new(parking_lot::RwLock::new(None)),
+            udp_socket: None,
+            player_name: Arc::new(parking_lot::RwLock::new(Some("builder".into()))),
+            outbound_drops: Arc::new(AtomicU64::new(0)),
+            critical_drops: Arc::new(AtomicU64::new(0)),
+            last_keepalive_rtt_ms: Arc::new(AtomicU64::new(0)),
+            last_packet_epoch_ms: Arc::new(AtomicU64::new(0)),
+            outbound_queued: Arc::new(AtomicU64::new(0)),
+        },
+    );
+    let mut builder = player();
+    builder.last_snapshot = 10;
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    let snapshot = ClientSnapshot {
+        snapshot_id: 11,
+        unit_id: 20_000_020,
+        dead: false,
+        x: builder.x,
+        y: builder.y,
+        mouse_x: 0.0,
+        mouse_y: 0.0,
+        rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
+        boosting: false,
+        shooting: false,
+        building: true,
+        mining_position: None,
+        plans: vec![BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+    };
+    assert!(client_snapshot_id_is_new(&builder, &snapshot));
+    assert!(!client_snapshot_unit_matches(&builder, &snapshot));
+    assert!(!client_snapshot_applies(&builder, &snapshot));
+    apply_build_plans(
+        &mut builder,
+        &snapshot.plans,
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    let mut ids = Vec::new();
+    while let Ok(frame) = rx.try_recv() {
+        ids.push(generated_packet_id(&frame));
+    }
+    assert!(
+        ids.contains(&BEGIN_PLACE_PACKET_ID),
+        "BeginPlace must leave even when the snapshot unit is not Alpha: {ids:?}"
+    );
+    assert!(
+        world.pending_builds.contains_key(&position),
+        "timed survival place must remain pending"
+    );
+    let ghost = world
+        .tiles
+        .get(&position)
+        .expect("BeginPlace must insert a ConstructBlock tile");
+    assert!(crate::network::buildings::construction::is_construct_block(
+        ghost.block
+    ));
+    assert_eq!(ghost.stored_amount, 257);
+}
+
+#[test]
+fn live_session_with_empty_active_plans_still_accrues_survival_work() {
+    // The connection task always inserts player_sessions. Skipping work
+    // when that row's active_plans is empty (Q leftover / 744-before-776)
+    // froze survival ConstructBlock with a healthy ping.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    builder.building = true;
+    builder.active_plans.clear();
+    world.pending_builds.insert(
+        position,
+        PendingBuild {
+            position,
+            block: 257,
+            previous_block: 0,
+            rotation: 0,
+            config: vec![0],
+            occupied: vec![position],
+            team: 1,
+            builder: builder.clone(),
+            last_seen: std::time::Instant::now(),
+            assist_progress: 0.0,
+            remaining_ticks: 6.0,
+            applied_assist: 0.0,
+        },
+    );
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 1.0);
+    let remaining = world
+        .pending_builds
+        .get(&position)
+        .expect("one tick must not finish 6 remaining")
+        .remaining_ticks;
+    assert!(
+        remaining < 6.0,
+        "live session must accrue work even with empty active_plans: {remaining}"
+    );
+}
+
+#[test]
+fn live_session_with_building_false_still_accrues_when_last_seen_is_fresh() {
+    // ClientSnapshot.isBuilding can decode false while the Alpha beam is
+    // still on a survival ghost. The connection task always has a
+    // player_sessions row; that used to zero player_work. last_seen is
+    // refreshed by the same snapshot that still carries the plan.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    builder.building = false;
+    world.pending_builds.insert(
+        position,
+        PendingBuild {
+            position,
+            block: 257,
+            previous_block: 0,
+            rotation: 0,
+            config: vec![0],
+            occupied: vec![position],
+            team: 1,
+            builder: builder.clone(),
+            last_seen: std::time::Instant::now(),
+            assist_progress: 0.0,
+            remaining_ticks: 6.0,
+            applied_assist: 0.0,
+        },
+    );
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 1.0);
+    let remaining = world
+        .pending_builds
+        .get(&position)
+        .expect("one tick must not finish 6 remaining")
+        .remaining_ticks;
+    assert!(
+        remaining < 6.0,
+        "fresh last_seen must accrue even when session.building is false: {remaining}"
+    );
+}
+
+#[test]
+fn stale_last_seen_without_building_does_not_accrue() {
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    builder.building = false;
+    world.pending_builds.insert(
+        position,
+        PendingBuild {
+            position,
+            block: 257,
+            previous_block: 0,
+            rotation: 0,
+            config: vec![0],
+            occupied: vec![position],
+            team: 1,
+            builder: builder.clone(),
+            last_seen: std::time::Instant::now() - std::time::Duration::from_secs(6),
+            assist_progress: 0.0,
+            remaining_ticks: 6.0,
+            applied_assist: 0.0,
+        },
+    );
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 1.0);
+    let remaining = world
+        .pending_builds
+        .get(&position)
+        .expect("stale unpaid construct must stay pending")
+        .remaining_ticks;
+    assert!(
+        (remaining - 6.0).abs() < f32::EPSILON,
+        "stale last_seen with building=false must not accrue: {remaining}"
+    );
+}
+
+#[test]
+fn dead_combat_state_still_applies_survival_build_plans() {
+    // NetServer.clientSnapshot copies plans before the dead/position gate.
+    // Skipping apply_build_plans when combat.dead left conveyor ghosts with
+    // the beam on after a respawn the client had already predicted.
+    let mut actor = player();
+    actor.last_snapshot = 10;
+    let position = (44 << 16) | 104;
+    let snapshot = ClientSnapshot {
+        snapshot_id: 11,
+        unit_id: actor.unit_id,
+        dead: false,
+        x: (position >> 16) as i16 as f32 * 8.0,
+        y: (position as i16 as f32) * 8.0,
+        mouse_x: 0.0,
+        mouse_y: 0.0,
+        rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
+        boosting: false,
+        shooting: false,
+        building: true,
+        mining_position: None,
+        plans: vec![BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+    };
+    assert!(client_snapshot_applies_build_plans(&actor, &snapshot));
+    assert!(client_snapshot_applies(&actor, &snapshot));
+}
+
+#[test]
+fn failed_consume_keeps_the_construct_pending() {
+    // Official ConstructBuild.construct sets canFinish=false when the core
+    // cannot pay; it does not RemoveTile. Oxide used to broadcast REMOVE_TILE
+    // and drop the pending, so a 1-tick conveyor flickered and never landed.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![0; 22];
+    let position = (44 << 16) | 104;
+    let pending = PendingBuild {
+        position,
+        block: 257,
+        previous_block: 0,
+        rotation: 0,
+        config: vec![0],
+        occupied: vec![position],
+        team: 1,
+        builder: player(),
+        last_seen: std::time::Instant::now(),
+        assist_progress: 0.0,
+        remaining_ticks: 0.0,
+        applied_assist: 0.0,
+    };
+    world.pending_builds.insert(position, pending.clone());
+    finish_pending_build(&world, &connections, pending).unwrap();
+    assert!(
+        world.pending_builds.contains_key(&position),
+        "unpaid construct must stay pending"
+    );
+    assert!(world.tiles.get(&position).is_none());
+}
+
+#[test]
+fn survival_break_plan_removes_stuck_constructblock() {
+    // Vanilla BuilderComp: a breaking plan on an existing ConstructBuild
+    // calls deconstruct(), and at progress <= deconstructThreshold (0) that
+    // is Call.deconstructFinish → tile.remove(). Oxide used to skip any
+    // break that overlapped a pending_build, so the official client's red
+    // deconstruct beam could not clear a survival plan that lacked items.
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![0; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+    let connections = DashMap::new();
+    connections.insert(
+        1,
+        PendingConnection {
+            ip: "127.0.0.1".parse().unwrap(),
+            outbound: tx,
+            udp_inbound: tokio::sync::mpsc::unbounded_channel().0,
+            udp_endpoint: Arc::new(parking_lot::RwLock::new(None)),
+            udp_socket: None,
+            player_name: Arc::new(parking_lot::RwLock::new(Some("builder".into()))),
+            outbound_drops: Arc::new(AtomicU64::new(0)),
+            critical_drops: Arc::new(AtomicU64::new(0)),
+            last_keepalive_rtt_ms: Arc::new(AtomicU64::new(0)),
+            last_packet_epoch_ms: Arc::new(AtomicU64::new(0)),
+            outbound_queued: Arc::new(AtomicU64::new(0)),
+        },
+    );
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(
+        world.pending_builds.contains_key(&position),
+        "unpaid conveyor must stay a ConstructBlock"
+    );
+    while rx.try_recv().is_ok() {}
+
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: true,
+            position,
+            block: -1,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    let mut ids = Vec::new();
+    while let Ok(frame) = rx.try_recv() {
+        ids.push(generated_packet_id(&frame));
+    }
+    assert!(
+        !world.pending_builds.contains_key(&position),
+        "breaking plan must abort the stuck ConstructBlock"
+    );
+    assert!(
+        world.pending_breaks.is_empty(),
+        "aborting a construct must not start a building break"
+    );
+    assert!(
+        world.tiles.get(&position).is_none(),
+        "server tile was never the conveyor; abort must not invent one"
+    );
+    assert_eq!(
+        world.game_state.core_items.read()[0],
+        0,
+        "unpaid construct must not refund"
+    );
+    assert!(
+        ids.contains(&DECONSTRUCT_FINISH_PACKET_ID),
+        "vanilla ConstructBuild.deconstruct at progress 0 emits DeconstructFinish: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&BEGIN_BREAK_PACKET_ID),
+        "beginBreak on an existing ConstructBlock would wrap it: {ids:?}"
+    );
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 400.0);
+    assert!(
+        world.tiles.get(&position).is_none(),
+        "aborted construct must not ConstructFinish after the break plan"
+    );
+}
+
+#[test]
+fn survival_break_plan_leaves_previous_block_standing() {
+    // Aborting a stuck overlay must not run finish_pending_break on a live
+    // previous building (that would demolish a wall the player was not
+    // breaking). `remove_construct_tile` only drops ids 5..=20.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![0; 22];
+    let position = (44 << 16) | 104;
+    world.tiles.insert(
+        position,
+        DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
+            position,
+            block: 216,
+            rotation: 0,
+            team: 1,
+            config: vec![0],
+            enabled: true,
+            message: None,
+            occupied: vec![position],
+            stored_item: -1,
+            stored_amount: 0,
+            production_progress: 0.0,
+            transport_progress: 0.0,
+            ammo_units: 0.0,
+            inventory: Vec::new(),
+            power_stored: 0.0,
+            power_links: Vec::new(),
+            liquid_inventory: Vec::new(),
+            stored_liquid: -1,
+            liquid_amount: 0.0,
+            output_liquid_amount: 0.0,
+            junction_items: Vec::new(),
+            mass_driver_incoming: Vec::new(),
+            mass_driver_rotation: 90.0,
+            mass_driver_waiting: Vec::new(),
+            payload: None,
+            payload_progress: 0.0,
+            payload_rotation: 0.0,
+            payload_accum: Vec::new(),
+            health: crate::game::content::block_health(216),
+            door_open: false,
+            shield: 0.0,
+            light_color: -1_900_545,
+            memory: Vec::new(),
+            duct_rec_dir: 0,
+            unloader_offset: 0,
+            conveyor_items: Vec::new(),
+            factory_command: None,
+            stack_state: 0,
+            stack_link: -1,
+            stack_cooldown: 0.0,
+            generation: 1,
+        },
+    );
+    let world = std::sync::Arc::new(world);
+    world.pending_builds.insert(
+        position,
+        PendingBuild {
+            position,
+            block: 257,
+            previous_block: 216,
+            rotation: 0,
+            config: vec![0],
+            occupied: vec![position],
+            team: 1,
+            builder: player(),
+            last_seen: std::time::Instant::now(),
+            assist_progress: 0.0,
+            remaining_ticks: 0.0,
+            applied_assist: 0.0,
+        },
+    );
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: true,
+            position,
+            block: -1,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(
+        !world.pending_builds.contains_key(&position),
+        "breaking plan must drop the overlay construct"
+    );
+    assert_eq!(
+        world.tiles.get(&position).unwrap().block,
+        216,
+        "previous wall must survive aborting the unpaid overlay"
+    );
+    assert!(
+        world.pending_breaks.is_empty(),
+        "must not enqueue a break of the standing wall"
+    );
+}
+
+#[test]
+fn rejected_snapshots_delay_only_until_a_valid_break_plan_arrives() {
+    // Stale snapshot ids drop the packet. A unit-id mismatch still
+    // copies plans (NetServer.clientSnapshot before ignorePosition); this
+    // loop only checks the motion gate, which stays closed for unit 99.
+    crate::network::buildings::reset_break_timing();
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Sandbox;
+    apply_game_mode_to_wave_rules(&mut world.wave_rules.write(), GameMode::Sandbox);
+    world
+        .game_state
+        .infinite_resources
+        .store(true, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+    let connections = DashMap::new();
+    connections.insert(
+        1,
+        PendingConnection {
+            ip: "127.0.0.1".parse().unwrap(),
+            outbound: tx,
+            udp_inbound: tokio::sync::mpsc::unbounded_channel().0,
+            udp_endpoint: Arc::new(parking_lot::RwLock::new(None)),
+            udp_socket: None,
+            player_name: Arc::new(parking_lot::RwLock::new(Some("builder".into()))),
+            outbound_drops: Arc::new(AtomicU64::new(0)),
+            critical_drops: Arc::new(AtomicU64::new(0)),
+            last_keepalive_rtt_ms: Arc::new(AtomicU64::new(0)),
+            last_packet_epoch_ms: Arc::new(AtomicU64::new(0)),
+            outbound_queued: Arc::new(AtomicU64::new(0)),
+        },
+    );
+    let mut builder = player();
+    builder.last_snapshot = 20;
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    while rx.try_recv().is_ok() {}
+    crate::network::buildings::reset_break_timing();
+
+    for snapshot in [
+        snapshot_with_break(20, builder.unit_id, position),
+        snapshot_with_break(19, builder.unit_id, position),
+        snapshot_with_break(21, 99, position),
+        snapshot_with_break(8, builder.unit_id, position),
+    ] {
+        assert!(!client_snapshot_applies(&builder, &snapshot));
+        crate::network::buildings::record_snapshot_rejected();
+    }
+    assert_eq!(
+        crate::network::buildings::last_break_timing().rejected_snapshots,
+        4
+    );
+    assert!(
+        world.tiles.get(&position).is_some(),
+        "rejected snapshots must not deconstruct"
+    );
+    assert!(rx.try_recv().is_err(), "no finish frame while rejected");
+
+    let accepted = snapshot_with_break(21, builder.unit_id, position);
+    assert!(client_snapshot_applies(&builder, &accepted));
+    crate::network::buildings::record_break_plan_seen();
+    apply_build_plans(
+        &mut builder,
+        &accepted.plans,
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    let mut ids = Vec::new();
+    while let Ok(frame) = rx.try_recv() {
+        ids.push(generated_packet_id(&frame));
+    }
+    let begin = ids
+        .iter()
+        .position(|&id| id == BEGIN_BREAK_PACKET_ID)
+        .expect("BeginBreak after the first accepted snapshot");
+    let finish = ids
+        .iter()
+        .position(|&id| id == DECONSTRUCT_FINISH_PACKET_ID)
+        .expect("DeconstructFinish in that same accept");
+    assert!(begin < finish, "order: {ids:?}");
+    let timing = crate::network::buildings::last_break_timing();
+    let seen_to_enqueue = timing
+        .finish_enqueued
+        .unwrap()
+        .duration_since(timing.plan_seen.unwrap());
+    assert!(
+        seen_to_enqueue.as_millis() < 5,
+        "accept-to-enqueue is not a 480 ms server wait: {seen_to_enqueue:?}"
+    );
+    assert_eq!(timing.rejected_snapshots, 4);
+}
+
+#[test]
+fn sandbox_mode_without_infinite_resources_leaves_a_timed_build() {
+    // GameMode::Sandbox is not itself a ConstructBlock short-circuit.
+    // Without infiniteResources the plan accrues over block_build_time.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Sandbox;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    let remaining = world
+        .pending_builds
+        .get(&position)
+        .expect("timed ConstructBlock must remain")
+        .remaining_ticks;
+    let expected = crate::game::content::block_build_time(216) / 0.5;
+    assert!(
+        (remaining - expected).abs() < 1.0,
+        "remaining {remaining} vs block_build_time {expected}"
+    );
+    let ghost = world
+        .tiles
+        .get(&position)
+        .expect("timed ConstructBlock must occupy the tile");
+    assert!(crate::network::buildings::construction::is_construct_block(
+        ghost.block
+    ));
+    assert_eq!(ghost.stored_amount, 216);
+    assert_eq!(ghost.production_progress, 0.0);
+}
+
+#[test]
+fn cancelled_snapshot_plan_does_not_finish_the_previous_block() {
+    // NetServer.clientSnapshot clears the unit's plan queue then copies the
+    // snapshot. A timed build/break that left the queue must abort, not
+    // complete after the player already pressed Q.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(
+        world.pending_builds.contains_key(&position),
+        "timed place must still be pending"
+    );
+    apply_build_plans(&mut builder, &[], &world, &connections, &test_admin(), true).unwrap();
+    assert!(
+        !world.pending_builds.contains_key(&position),
+        "Q / empty snapshot must drop the pending place"
+    );
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 400.0);
+    assert!(
+        world.tiles.get(&position).is_none(),
+        "cancelled place must not finish after the plan left the queue"
+    );
+
+    apply_game_mode_to_wave_rules(&mut world.wave_rules.write(), GameMode::Sandbox);
+    world
+        .game_state
+        .infinite_resources
+        .store(true, Ordering::Relaxed);
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(world.tiles.get(&position).unwrap().block, 216);
+
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.mode.write() = GameMode::Survival;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: true,
+            position,
+            block: -1,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(
+        world.pending_breaks.contains_key(&position),
+        "timed break must still be pending"
+    );
+    apply_build_plans(&mut builder, &[], &world, &connections, &test_admin(), true).unwrap();
+    assert!(
+        !world.pending_breaks.contains_key(&position),
+        "Q / empty snapshot must drop the pending break"
+    );
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_breaks(&world, &connections, 400.0);
+    assert_eq!(
+        world.tiles.get(&position).map(|tile| tile.block),
+        Some(216),
+        "cancelled break must leave the building standing"
+    );
+}
+
+#[test]
+fn non_empty_snapshot_does_not_abort_plans_outside_the_20_window() {
+    // ClientSnapshot sends at most 20 plans. A long conveyor line rotates
+    // that window; aborting every pending not in the new set RemoveTile+
+    // BeginPlace storms the outbound queue (ping spikes) and never finishes.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let first = (44 << 16) | 104;
+    let second = (45 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (first >> 16) as i16 as f32 * 8.0;
+    builder.y = (first as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position: first,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position: second,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(
+        world.pending_builds.contains_key(&first),
+        "rotating the snapshot window must not abort the earlier pending"
+    );
+    assert!(world.pending_builds.contains_key(&second));
+}
+
+#[test]
+fn sandbox_admin_clears_infinite_resources_accrues_build_time() {
+    // A sandbox host with allowEditRules can turn infiniteResources off
+    // through the admin `rules` path; ConstructBlock must then accrue
+    // over block_build_time instead of finishing on the next tick.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Sandbox;
+    apply_game_mode_to_wave_rules(&mut world.wave_rules.write(), GameMode::Sandbox);
+    world
+        .game_state
+        .infinite_resources
+        .store(true, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let admin = test_admin();
+    admin
+        .apply_rules_override("infiniteResources", serde_json::json!(false))
+        .unwrap();
+    apply_wave_rules_overrides(&world, &admin);
+    assert!(
+        !world.wave_rules.read().infinite_resources,
+        "admin override must reach WaveRules"
+    );
+    assert!(
+        !world.game_state.infinite_resources.load(Ordering::Relaxed),
+        "admin override must reach the mirrored atomic"
+    );
+
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &admin,
+        true,
+    )
+    .unwrap();
+    let remaining_after_place = world
+        .pending_builds
+        .get(&position)
+        .expect("admin-cleared sandbox must leave a timed ConstructBlock")
+        .remaining_ticks;
+    let expected = crate::game::content::block_build_time(216) / 0.5;
+    assert!(
+        remaining_after_place > 1.0,
+        "must accrue over block_build_time, not finish immediately: {remaining_after_place}"
+    );
+    assert!(
+        (remaining_after_place - expected).abs() < 1.0,
+        "remaining {remaining_after_place} vs {expected}"
+    );
+    {
+        let ghost = world
+            .tiles
+            .get(&position)
+            .expect("timed ConstructBlock must occupy the tile");
+        assert!(crate::network::buildings::construction::is_construct_block(
+            ghost.block
+        ));
+        assert_eq!(ghost.stored_amount, 216);
+    }
+
+    simulate_constructions(&world, &connections, 1.0);
+    let remaining_after_tick = world
+        .pending_builds
+        .get(&position)
+        .expect("one tick must not finish the build")
+        .remaining_ticks;
+    assert!(
+        remaining_after_tick < remaining_after_place,
+        "progress must accrue: {remaining_after_tick} vs {remaining_after_place}"
+    );
+    assert!(
+        remaining_after_tick > 0.0,
+        "one tick must not complete block_build_time"
+    );
+    let ghost = world
+        .tiles
+        .get(&position)
+        .expect("ConstructBlock remains until ConstructFinish");
+    assert!(crate::network::buildings::construction::is_construct_block(
+        ghost.block
+    ));
+    assert!(ghost.production_progress > 0.0);
+}
+
+#[test]
+fn survival_place_finishes_through_a_live_player_session() {
+    // World-loop simulate_constructions always sees player_sessions. A
+    // timed conveyor must still ConstructFinish when that row has the
+    // plan, building=true, and the builder is in range.
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(world.pending_builds.contains_key(&position));
+    {
+        let ghost = world
+            .tiles
+            .get(&position)
+            .expect("survival BeginPlace inserts ConstructBlock");
+        assert_eq!(
+            ghost.block,
+            crate::network::buildings::construction::construct_block_id(257)
+        );
+        assert_eq!(ghost.stored_amount, 257);
+    }
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 8.0);
+    assert!(
+        world.pending_builds.get(&position).is_none(),
+        "survival conveyor must finish"
+    );
+    assert_eq!(world.tiles.get(&position).unwrap().block, 257);
+}
+
+#[test]
+fn survival_copper_wall_finishes_from_the_alpha_without_a_poly() {
+    // ClientSnapshot plans belong to the player's Alpha (not a Poly).
+    // A copper wall (216, 6 copper, 18 ticks) must ConstructFinish from
+    // that unit's last_seen work with the default loadout (copper x100).
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = GameState::initial_core_items();
+    assert!(world.enemies.is_empty(), "no builder units in this fixture");
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.controlled_unit = ControlledUnit::Core;
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 216,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(world.pending_builds.contains_key(&position));
+    world
+        .player_sessions
+        .insert(builder.unit_id, builder.clone());
+    simulate_constructions(&world, &connections, 40.0);
+    assert!(
+        world.pending_builds.get(&position).is_none(),
+        "Alpha must finish a copper wall without a Poly"
+    );
+    assert_eq!(world.tiles.get(&position).unwrap().block, 216);
+    assert_eq!(world.game_state.core_items.read()[0], 94);
+}
+
+#[test]
+fn infinite_resources_rule_finishes_build_without_core_items() {
+    // ConstructBlock finishes when state.rules.infiniteResources is set,
+    // even outside the Sandbox enum. consume_requirements must match that
+    // gate or instant finish broadcasts REMOVE_TILE and the beam stays.
+    let (world, _, _, _) = legacy_weapons_test_world();
+    world.wave_rules.write().infinite_resources = true;
+    world.wave_rules.write().instant_build = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![0; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &DashMap::new(),
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(world.tiles.get(&position).unwrap().block, 257);
+    assert!(world.pending_builds.get(&position).is_none());
+}
+
+#[test]
+fn alpha_entity_snapshot_writes_pause_building_flag() {
+    let mut session = player();
+    session.building = false;
+    let payload = encode_initial_entity_snapshot(&session, None).unwrap();
+    let mut input = std::io::Cursor::new(payload);
+    let count = input.read_s().unwrap();
+    let data_len = input.read_s().unwrap() as usize;
+    assert_eq!(count, 2);
+    let pos = input.position() as usize;
+    let body = &input.get_ref()[pos..pos + data_len];
+    // UnitEntity writeSync: after team + type id, updateBuilding is the
+    // @SyncLocal pauseBuilding flag (Binding.pauseBuilding = E).
+    let mut cursor = std::io::Cursor::new(body);
+    cursor.read_i().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_i().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_l().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_bool().unwrap();
+    cursor.read_i().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_i().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_bool().unwrap();
+    cursor.read_s().unwrap();
+    cursor.read_i().unwrap();
+    let statuses = cursor.read_i().unwrap();
+    for _ in 0..statuses {
+        cursor.read_s().unwrap();
+        cursor.read_f().unwrap();
+    }
+    cursor.read_b().unwrap();
+    cursor.read_s().unwrap();
+    assert!(
+        !cursor.read_bool().unwrap(),
+        "paused building must survive Alpha writeSync"
+    );
+}
+
+#[test]
+fn alpha_entity_snapshot_writes_pending_builder_plans() {
+    // UnitEntity.writeSync uses writePlansQueueNet. Writing count 0 while
+    // the Alpha has a survival pending would wipe the client queue if
+    // isLocal() is false for a tick, so the next ClientSnapshot never
+    // BeginPlace and the beam stays on a ghost.
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world.wave_rules.write().instant_build = false;
+    world.wave_rules.write().infinite_resources = false;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    *world.game_state.core_items.write() = vec![100; 22];
+    let position = (44 << 16) | 104;
+    let world = std::sync::Arc::new(world);
+    let mut builder = player();
+    builder.x = (position >> 16) as i16 as f32 * 8.0;
+    builder.y = (position as i16 as f32) * 8.0;
+    apply_build_plans(
+        &mut builder,
+        &[BuildPlan {
+            breaking: false,
+            position,
+            block: 257,
+            rotation: 0,
+            config: vec![0],
+        }],
+        &world,
+        &DashMap::new(),
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    let payload = encode_initial_entity_snapshot_in(&builder, None, Some(world.as_ref())).unwrap();
+    let mut input = std::io::Cursor::new(payload);
+    let data_len = {
+        assert_eq!(input.read_s().unwrap(), 2);
+        input.read_s().unwrap() as usize
+    };
+    let pos = input.position() as usize;
+    let body = &input.get_ref()[pos..pos + data_len];
+    let mut cursor = std::io::Cursor::new(body);
+    cursor.read_i().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_i().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_l().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_bool().unwrap();
+    cursor.read_i().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_b().unwrap();
+    cursor.read_f().unwrap();
+    cursor.read_f().unwrap();
+    let plan_count = cursor.read_i().unwrap();
+    assert_eq!(
+        plan_count, 1,
+        "Alpha writeSync must carry the pending place"
+    );
+    assert_eq!(cursor.read_b().unwrap(), 0);
+    assert_eq!(cursor.read_i().unwrap(), position);
+    assert_eq!(cursor.read_s().unwrap(), 257);
+}
+
+#[test]
 fn block_health_multiplier_reduces_building_damage() {
     // Official Building.damage divides incoming damage by
     // Rules.blockHealthMultiplier; a multiplier of 2 makes buildings
@@ -2813,6 +4766,8 @@ fn block_health_multiplier_reduces_building_damage() {
     world.tiles.insert(
         pos,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: pos,
             block,
             team: 1,
@@ -2899,16 +4854,41 @@ fn initial_wave_composition_matches_bundled_rules() {
     assert!(wave_fifty_one
         .iter()
         .any(|group| { group.spec.unit_type == FLARE.unit_type && group.shield >= 100.0 }));
-    let wave_one_thirty_two = initial_official_wave_groups(131);
-    assert!(wave_one_thirty_two
+    let wave_one_sixty = initial_official_wave_groups(160);
+    assert!(wave_one_sixty
         .iter()
         .any(|group| group.spec.unit_type == ANTUMBRA.unit_type));
     assert!(initial_official_wave_groups(45)
         .iter()
         .any(|group| group.spec.unit_type == SPIROCT.unit_type && group.status_effect == 13));
-    assert!(initial_official_wave_groups(41)
+    // pulsar@41 carries 640 flat shields and NO status (Waves.java:117-123);
+    // the old table wrongly gave it the "shielded" status with no shields.
+    let wave_forty_one = initial_official_wave_groups(41);
+    let pulsar_group = wave_forty_one
         .iter()
-        .any(|group| group.spec.unit_type == PULSAR.unit_type && group.status_effect == 15));
+        .find(|group| group.spec.unit_type == PULSAR.unit_type)
+        .expect("pulsar@41 group");
+    assert_eq!(pulsar_group.status_effect, -1);
+    assert!(pulsar_group.shield >= 640.0);
+    // Wave-table parity vs Waves.get(): corvus@145 exists, toxopid@210
+    // replaces the old atrax@210 typo, pulsar overdrive replaces the old
+    // mace@120 typo.
+    assert!(initial_official_wave_groups(145)
+        .iter()
+        .any(|group| group.spec.unit_type == CORVUS.unit_type));
+    assert!(initial_official_wave_groups(210)
+        .iter()
+        .any(|group| group.spec.unit_type == TOXOPID.unit_type && group.shield >= 1000.0));
+    assert!(!initial_official_wave_groups(210)
+        .iter()
+        .any(|group| group.spec.unit_type == ATRAX.unit_type));
+    let wave_one_twenty = initial_official_wave_groups(120);
+    assert!(wave_one_twenty
+        .iter()
+        .any(|group| group.spec.unit_type == PULSAR.unit_type && group.status_effect == 13));
+    assert!(!wave_one_twenty
+        .iter()
+        .any(|group| group.spec.unit_type == MACE.unit_type && group.status_effect == 13));
 }
 
 #[test]
@@ -2933,13 +4913,19 @@ fn reconstructor_upgrade_chains_and_desktop_mount_counts_are_complete() {
     // Campaign mechs have specs so late Serpulo spawn groups (gamma
     // waves) are not skipped by parse_spawn_group (SOL-009).
     assert_eq!(enemy_spec(35).unwrap().health, 150.0);
+    assert_eq!(enemy_spec(35).unwrap().speed, 3.0);
     assert_eq!(enemy_spec(36).unwrap().health, 170.0);
+    assert_eq!(enemy_spec(36).unwrap().speed, 3.3);
     assert_eq!(enemy_spec(37).unwrap().health, 220.0);
+    assert_eq!(enemy_spec(37).unwrap().speed, 3.55);
+    // Post-init counts (Weapon.mirror defaults TRUE, so every mirrored
+    // weapon doubles): scepter 3 weapons -> 6 mounts, arkyid 4 -> 8,
+    // navanax 3 -> 6 (desktop.jar UnitType.init dump).
     assert_eq!(enemy_weapon_mount_count(20), 0);
     assert_eq!(enemy_weapon_mount_count(24), 0);
-    assert_eq!(enemy_weapon_mount_count(3), 3);
-    assert_eq!(enemy_weapon_mount_count(13), 4);
-    assert_eq!(enemy_weapon_mount_count(34), 5);
+    assert_eq!(enemy_weapon_mount_count(3), 6);
+    assert_eq!(enemy_weapon_mount_count(13), 8);
+    assert_eq!(enemy_weapon_mount_count(34), 6);
     assert_eq!(reconstructor_recipe(380).unwrap().build_time, 600.0);
     assert_eq!(reconstructor_recipe(383).unwrap().liquid_rate, 3.0);
 }
@@ -2989,7 +4975,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     let state = GameState::new();
     state.start_hosting("unit-factory-test".into(), GameMode::Sandbox);
     let enemy_spawns = map.enemy_spawns();
-    let world = DynamicWorld {
+    let mut world = DynamicWorld {
         game_state: state,
         width: i32::from(map.width),
         height: i32::from(map.height),
@@ -3005,7 +4991,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -3015,6 +5001,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -3025,10 +5012,12 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-unit-factory-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -3041,17 +5030,26 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                unit_cap: 8,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let position = (i32::from(SPAWN_X) << 16) | (i32::from(SPAWN_Y) + 10);
     world.tiles.insert(
         position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position,
             block: 377,
             rotation: 0,
@@ -3102,6 +5100,12 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         &world,
         &DashMap::new(),
         900.0,
+        &power
+    ));
+    assert!(simulate_unit_factories(
+        &world,
+        &DashMap::new(),
+        20.0,
         &power
     ));
     let factory = world.tiles.get(&position).unwrap();
@@ -3165,6 +5169,9 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     assert!(apply_set_unit_stance(&world, &[ally.id], 3, false));
     ally = world.enemies.get(&ally.id).unwrap().clone();
 
+    // Isolate this firing assertion from projectiles emitted during the
+    // preceding movement/stance scenario, before the target existed.
+    world.projectiles.clear();
     world.enemies.insert(
         3_000_001,
         EnemyUnit {
@@ -3198,7 +5205,9 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     assert!(apply_command_units(
@@ -3219,11 +5228,18 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     assert_eq!(world.enemies.get(&3_000_001).unwrap().health, 150.0);
     assert!(apply_set_unit_stance(&world, &[ally.id], 1, false));
     let combat_connections = DashMap::new();
-    assert!(simulate_allied_units(&world, &combat_connections, 13.0));
+    assert!(simulate_allied_units(&world, &combat_connections, 26.0));
     assert_eq!(world.enemies.get(&3_000_001).unwrap().health, 150.0);
     assert_eq!(world.projectiles.iter().next().unwrap().bullet_id, 6);
+    assert!(world.projectiles.iter().all(|p| {
+        world
+            .enemies
+            .get(&p.shooter_id)
+            .is_some_and(|shooter| shooter.team == p.team)
+    }));
     assert!(simulate_projectiles(&world, &combat_connections, 100.0));
-    assert_eq!(world.enemies.get(&3_000_001).unwrap().health, 141.0);
+    // Both mirrored daggers' bolts connect: 2 x 9 damage.
+    assert_eq!(world.enemies.get(&3_000_001).unwrap().health, 132.0);
     {
         let mut target = world.enemies.get_mut(&3_000_001).unwrap();
         target.x = ally.x + ally.attack_range / 2.0;
@@ -3232,7 +5248,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     assert!(apply_set_unit_stance(&world, &[ally.id], 4, true));
     let ram_x = world.enemies.get(&ally.id).unwrap().x;
     let ram_target_health = world.enemies.get(&3_000_001).unwrap().health;
-    assert!(simulate_allied_units(&world, &combat_connections, 13.0));
+    assert!(simulate_allied_units(&world, &combat_connections, 26.0));
     assert!(world.enemies.get(&ally.id).unwrap().x > ram_x);
     assert!(simulate_projectiles(&world, &combat_connections, 100.0));
     assert!(world.enemies.get(&3_000_001).unwrap().health < ram_target_health);
@@ -3268,11 +5284,11 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
             final_batch: true,
         }
     ));
-    assert!(simulate_allied_units(&world, &combat_connections, 13.0));
+    assert!(simulate_allied_units(&world, &combat_connections, 26.0));
     assert_eq!(world.tiles.get(&enemy_wall_position).unwrap().health, 320.0);
     assert_eq!(world.projectiles.iter().next().unwrap().bullet_id, 6);
     assert!(simulate_projectiles(&world, &combat_connections, 100.0));
-    assert_eq!(world.tiles.get(&enemy_wall_position).unwrap().health, 311.0);
+    assert_eq!(world.tiles.get(&enemy_wall_position).unwrap().health, 302.0);
     world.tiles.remove(&enemy_wall_position);
     let reconstructor_position = ((i32::from(SPAWN_X) + 3) << 16) | (i32::from(SPAWN_Y) + 10);
     {
@@ -3283,6 +5299,8 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     world.tiles.insert(
         reconstructor_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: reconstructor_position,
             block: 380,
             rotation: 0,
@@ -3296,7 +5314,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
             production_progress: 0.0,
             transport_progress: 0.0,
             ammo_units: 0.0,
-            inventory: vec![(9, 40), (4, 40)],
+            inventory: vec![(9, 40), (3, 40)],
             power_stored: 0.0,
             power_links: Vec::new(),
             liquid_inventory: Vec::new(),
@@ -3357,6 +5375,12 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         600.0,
         &power
     ));
+    assert!(simulate_reconstructors(
+        &world,
+        &DashMap::new(),
+        20.0,
+        &power
+    ));
     let upgraded = world.enemies.get(&3_000_001).unwrap();
     assert_eq!(upgraded.team, 1);
     assert_eq!(upgraded.unit_type, MACE.unit_type);
@@ -3364,7 +5388,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     let reconstructor = world.tiles.get(&reconstructor_position).unwrap();
     assert_eq!(reconstructor.stored_amount, 0);
     assert_eq!(inventory_count(&reconstructor.inventory, 9), 0);
-    assert_eq!(inventory_count(&reconstructor.inventory, 4), 0);
+    assert_eq!(inventory_count(&reconstructor.inventory, 3), 0);
     drop(reconstructor);
 
     let wall_position = ((i32::from(SPAWN_X) + 4) << 16) | (i32::from(SPAWN_Y) + 10);
@@ -3466,6 +5490,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         PendingBuild {
             position: assist_position,
             block: 216,
+            previous_block: 0,
             rotation: 0,
             config: vec![0],
             occupied: vec![assist_position],
@@ -3490,7 +5515,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
             .get(&assist_position)
             .unwrap()
             .assist_progress,
-        5.0
+        4.0
     );
     world.pending_builds.remove(&assist_position);
 
@@ -3529,7 +5554,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     assert!(simulate_assist_units(&world, 10.0));
     assert_eq!(
         world.tiles.get(&wall_position).unwrap().production_progress,
-        5.5
+        4.4
     );
     let rebuild_ticks = crate::game::content::block_build_time(216) / 0.5;
     assert!(simulate_builder_units(
@@ -3612,6 +5637,13 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
     let conveyor_a = ((i32::from(SPAWN_X) + 20) << 16) | (i32::from(SPAWN_Y) + 20);
     let conveyor_b = ((i32::from(SPAWN_X) + 23) << 16) | (i32::from(SPAWN_Y) + 20);
     let conveyor_c = ((i32::from(SPAWN_X) + 26) << 16) | (i32::from(SPAWN_Y) + 20);
+    let dump = crate::network::economy::payload::offset_position_by(conveyor_c, 0, 3);
+    let dump_x = (dump >> 16) as i16 as i32;
+    let dump_y = dump as i16 as i32;
+    let dump_index = (dump_y * world.width + dump_x) as usize;
+    world.base_blocks[dump_index] = 0;
+    world.floors[dump_index] = 1;
+    world.overlays[dump_index] = 0;
     for (position, block) in [(conveyor_a, 398), (conveyor_b, 399), (conveyor_c, 400)] {
         let mut tile = base_building_tombstone(&BaseBuildingState {
             position,
@@ -4051,9 +6083,8 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         mining_ticks
     ));
     let mut mono = world.enemies.get_mut(&3_000_011).unwrap();
-    assert_eq!(mono.secondary_attack_reload, 1.0);
-    assert_eq!(mono.tertiary_attack_reload, f32::from(ore_item + 1));
-    mono.secondary_attack_reload = 30.0;
+    assert_eq!(mono.items, vec![(ore_item, 1)]);
+    mono.items = vec![(ore_item, 30)];
     mono.x = core_x;
     mono.y = core_y;
     drop(mono);
@@ -4076,16 +6107,43 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         factory.production_progress = 0.0;
     }
     assert!(!can_create_unit(&world, 1, DAGGER.unit_type));
-    assert!(!simulate_unit_factories(
+    let enemies_at_cap = world.enemies.len();
+    // Official UnitFactory still completes into a payload at cap;
+    // UnitPayload.dump / Units.canCreate blocks the world spawn.
+    assert!(simulate_unit_factories(
         &world,
         &DashMap::new(),
         900.0,
         &power
     ));
     let factory = world.tiles.get(&position).unwrap();
-    assert_eq!(inventory_count(&factory.inventory, 9), 10);
-    assert_eq!(inventory_count(&factory.inventory, 1), 10);
-    assert_eq!(factory.production_progress, 0.0);
+    assert_eq!(inventory_count(&factory.inventory, 9), 0);
+    assert_eq!(inventory_count(&factory.inventory, 1), 0);
+    assert!(
+        factory.payload.is_some(),
+        "cap must not prevent payload creation"
+    );
+    assert!(
+        factory.production_progress < 1.0,
+        "completion remainder is progress %= 1f: {}",
+        factory.production_progress
+    );
+    drop(factory);
+    assert!(simulate_unit_factories(
+        &world,
+        &DashMap::new(),
+        20.0,
+        &power
+    ));
+    assert_eq!(
+        world.enemies.len(),
+        enemies_at_cap,
+        "cap still blocks the dump"
+    );
+    assert!(
+        world.tiles.get(&position).unwrap().payload.is_some(),
+        "payload stays held while dump fails"
+    );
 }
 
 #[test]
@@ -4114,7 +6172,7 @@ fn live_team_plans_are_spliced_into_the_personalized_world_stream() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -4124,6 +6182,7 @@ fn live_team_plans_are_spliced_into_the_personalized_world_stream() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -4134,10 +6193,12 @@ fn live_team_plans_are_spliced_into_the_personalized_world_stream() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-team-plans-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -4150,12 +6211,19 @@ fn live_team_plans_are_spliced_into_the_personalized_world_stream() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
 
     // Simulate a construction the server mirrored into the live plans.
@@ -4299,7 +6367,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -4309,6 +6377,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_100),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -4319,10 +6388,12 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-enemy-role-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -4335,12 +6406,19 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let connections = DashMap::new();
     let make_enemy = |id: i32, spec: EnemySpec, x: f32, y: f32, health: f32| EnemyUnit {
@@ -4374,7 +6452,9 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: None,
+        drown_progress: 0.0,
     };
     let core_x = SPAWN_X as f32 * 8.0;
     let core_y = SPAWN_Y as f32 * 8.0;
@@ -4526,6 +6606,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         1.0,
         18,
         60.0,
+        1.0,
     ));
     assert!(world.players.get(&2_000_001).unwrap().dead);
     {
@@ -4587,11 +6668,13 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
     world.enemies.clear();
     world.base_buildings.clear();
     world.projectiles.clear();
+    // Every one of these weapons is mirrored in the 159.7 JAR: both mounts
+    // fire every declared*2 ticks, so bursts carry twice the bullets.
     for (id, spec, shots, bullet_id, volley_damage) in [
-        (19, MACE, 1, 7, 74.0),
-        (20, FORTRESS, 1, 8, 100.0),
-        (21, REIGN, 1, 12, 98.0),
-        (22, ZENITH, 2, 32, 58.0),
+        (19, MACE, 2, 7, 74.0),
+        (20, FORTRESS, 2, 8, 100.0),
+        (21, REIGN, 2, 12, 98.0),
+        (22, ZENITH, 4, 32, 58.0),
     ] {
         *world.game_state.core_health.write() = 6000.0;
         if spec.unit_type == MACE.unit_type {
@@ -4621,8 +6704,11 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
                     uuid: "reign-pierce".into(),
                     player_id: 1_600_000,
                     unit_id: 2_600_000,
+                    // Offset half a beam-gap above the axis: the upper
+                    // mirrored mount's beam passes within 8 wu here, the
+                    // lower one 21+ wu away, so exactly one beam connects.
                     x: core_x + 50.0,
-                    y: core_y,
+                    y: core_y + 10.0,
                     health: 150.0,
                     shield: 0.0,
                     status_effect: -1,
@@ -4649,7 +6735,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
                 spec.health,
             ),
         );
-        simulate_waves_and_enemies(&world, &connections, spec.attack_reload);
+        simulate_waves_and_enemies(&world, &connections, spec.attack_reload * 2.0);
         assert_eq!(world.projectiles.len(), shots);
         assert!(world
             .projectiles
@@ -4658,7 +6744,12 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         if spec.unit_type == MACE.unit_type {
             let flame = world.projectiles.iter().next().unwrap();
             assert_eq!(flame.damage, 74.0);
-            assert_eq!(flame.total_ticks, 40.0 / 4.2);
+            // Muzzle offset shifts the flight distance slightly. Audit H12:
+            // the in-range player unit (core+40,+50/+10 geometry puts the
+            // mace 10,10 away from the player) now outranks the core as the
+            // aim target, so flight time reflects the player distance.
+            // Muzzle offset adds ~1.5 ticks of travel on this short hop.
+            assert!((flame.total_ticks - 10f32.hypot(10.0) / 4.2).abs() < 2.0);
             assert_eq!(flame.status_effect, 1);
             assert_eq!(flame.status_duration, 300.0);
             assert_eq!(flame.pierce_units, 2);
@@ -4671,7 +6762,12 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
                 .map(|projectile| projectile.total_ticks)
                 .collect();
             lifetimes.sort_unstable_by(f32::total_cmp);
-            assert_ne!(lifetimes[0], lifetimes[1]);
+            // Two mirrored mounts x two shots: each mount fires one bullet per
+            // velocity_random slot, so lifetimes come in duplicate pairs.
+            assert_eq!(lifetimes.len(), 4);
+            assert_eq!(lifetimes[0], lifetimes[1]);
+            assert_ne!(lifetimes[1], lifetimes[2]);
+            assert_eq!(lifetimes[2], lifetimes[3]);
             assert!(world
                 .projectiles
                 .iter()
@@ -4680,20 +6776,26 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         assert!(simulate_projectiles(&world, &connections, 200.0));
         if spec.unit_type == MACE.unit_type {
             let player = world.players.get(&2_599_999).unwrap();
-            assert_eq!(player.health, 76.0);
+            // Both mirrored flame mounts hit the target ahead: 2 x 74.
+            assert_eq!(player.health, 2.0);
             assert_eq!(player.status_effect, 1);
             assert_eq!(player.status_duration, 300.0);
             drop(player);
             assert!(simulate_player_combat(&world, &connections, 10.0));
             let player = world.players.get(&2_599_999).unwrap();
-            assert!((player.health - 74.33).abs() < 0.001);
+            assert!((player.health - 0.33).abs() < 0.01);
             assert_eq!(player.status_duration, 290.0);
             drop(player);
             world.players.remove(&2_599_999);
         }
         if spec.unit_type == REIGN.unit_type {
-            assert_eq!(world.players.get(&2_600_000).unwrap().health, 70.0);
-            assert_eq!(world.projectiles.len(), 3);
+            // Audit H12: the in-range player unit is now the reign's primary
+            // aim, so both launcher volleys connect directly (frags included)
+            // and the 70 HP buffer is consumed down to the floor.
+            assert_eq!(world.players.get(&2_600_000).unwrap().health, 0.0);
+            // Both launchers emit fragments on the swept player collision
+            // and terminal impact (2 mounts x 2 impacts x 3 fragments).
+            assert_eq!(world.projectiles.len(), 12);
             assert!(world.projectiles.iter().all(|projectile| {
                 projectile.bullet_id == 13
                     && projectile.pierce_units == 3
@@ -4703,7 +6805,22 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             world.players.remove(&2_600_000);
         }
         assert!(world.projectiles.is_empty());
-        assert_eq!(*world.game_state.core_health.read(), 6000.0 - volley_damage);
+        // Both mirrored mounts carry their damage into the core — except for
+        // the reign, whose in-range player target (audit H12) now absorbs the
+        // launcher volleys; only pierced-building segments still reach it.
+        let core_after = *world.game_state.core_health.read();
+        if spec.unit_type == MACE.unit_type {
+            // The flame's simulated segment ends at the player, before the
+            // core. A stale target_core flag must not inflict remote damage.
+            assert_eq!(core_after, 6000.0);
+        } else if spec.unit_type == REIGN.unit_type {
+            assert!(
+                core_after > 6000.0 - volley_damage * 2.0,
+                "in-range player unit must absorb reign volleys"
+            );
+        } else {
+            assert_eq!(core_after, 6000.0 - volley_damage * 2.0);
+        }
         world.enemies.clear();
     }
 
@@ -4768,7 +6885,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             player_id: 1_600_001,
             unit_id: 2_600_001,
             x: core_x,
-            y: core_y + 18.0,
+            // Enter the blast area after firing so the core remains the aim.
+            y: core_y + 1000.0,
             health: 150.0,
             shield: 0.0,
             status_effect: -1,
@@ -4784,21 +6902,17 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         make_enemy(23, ANTUMBRA, core_x + 100.0, core_y, ANTUMBRA.health),
     );
     *world.game_state.core_health.write() = 6000.0;
-    assert_eq!(enemy_weapon_mount_count(ANTUMBRA.unit_type), 3);
-    simulate_waves_and_enemies(&world, &connections, 12.0);
-    assert_eq!(world.projectiles.len(), 1);
-    assert_eq!(world.projectiles.iter().next().unwrap().bullet_id, 34);
-    simulate_waves_and_enemies(&world, &connections, 8.0);
+    assert_eq!(enemy_weapon_mount_count(ANTUMBRA.unit_type), 6);
+    // Vanilla doubled mount cycles: the cannon pair fires every 24 ticks,
+    // each missiles-mount pair every 40 / 70; every burst carries one bullet
+    // PER MOUNT (two for each mirrored weapon).
+    simulate_waves_and_enemies(&world, &connections, 24.0);
     assert_eq!(world.projectiles.len(), 2);
-    assert_eq!(
-        world
-            .projectiles
-            .iter()
-            .filter(|projectile| projectile.bullet_id == 33)
-            .count(),
-        1
-    );
-    simulate_waves_and_enemies(&world, &connections, 15.0);
+    assert!(world
+        .projectiles
+        .iter()
+        .all(|projectile| projectile.bullet_id == 34 && projectile.damage == 55.0));
+    simulate_waves_and_enemies(&world, &connections, 16.0);
     assert_eq!(world.projectiles.len(), 4);
     assert_eq!(
         world
@@ -4823,12 +6937,14 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             .count(),
         2
     );
+    world.players.get_mut(&2_600_001).unwrap().y = core_y + 10.0;
     assert!(simulate_projectiles(&world, &connections, 200.0));
     assert!(world.projectiles.is_empty());
     assert_eq!(*world.game_state.core_health.read(), 6000.0 - 220.0);
     {
         let player = world.players.get(&2_600_001).unwrap();
         assert_eq!(player.health, 76.0);
+        // Blasted is an instantaneous reaction, not a retained status.
         assert_eq!(player.status_effect, -1);
         assert_eq!(player.status_duration, 0.0);
     }
@@ -4840,29 +6956,44 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         24,
         make_enemy(24, RISSO, core_x + 100.0, core_y, RISSO.health),
     );
-    assert_eq!(enemy_weapon_mount_count(RISSO.unit_type), 2);
-    simulate_waves_and_enemies(&world, &connections, 25.0);
-    assert_eq!(world.projectiles.len(), 2);
+    // Post-init risso has 3 mounts: the gun is mirrored (2 mounts) plus one
+    // missile launcher. Both weapon groups fire within 50 ticks: the gun
+    // pair every 26 ticks (2 bullets per burst), the unmirrored missile
+    // launcher every 25.
+    assert_eq!(enemy_weapon_mount_count(RISSO.unit_type), 3);
+    simulate_waves_and_enemies(&world, &connections, 50.0);
+    assert_eq!(world.projectiles.len(), 4);
+    let count = |bullet_id: i16| {
+        world
+            .projectiles
+            .iter()
+            .filter(|projectile| projectile.bullet_id == bullet_id)
+            .count()
+    };
+    assert_eq!(count(41), 2);
     assert!(world.projectiles.iter().any(|projectile| {
         projectile.bullet_id == 41 && projectile.damage == 9.0 && projectile.splash_damage == 0.0
     }));
-    assert!(world.projectiles.iter().any(|projectile| {
-        projectile.bullet_id == 42
-            && projectile.damage == 12.0
-            && projectile.splash_damage == 10.0
-            && projectile.splash_radius == 25.0
+    assert_eq!(count(42), 2);
+    assert!(world.projectiles.iter().all(|projectile| {
+        projectile.bullet_id != 42
+            || (projectile.damage == 12.0
+                && projectile.splash_damage == 10.0
+                && projectile.splash_radius == 25.0)
     }));
     let risso = world.enemies.get(&24).unwrap();
-    assert_eq!(risso.attack_reload, 12.0);
+    assert_eq!(risso.attack_reload, 24.0);
     assert_eq!(risso.secondary_attack_reload, 0.0);
     drop(risso);
     world.enemies.clear();
     world.projectiles.clear();
 
+    // Mirrored weapons double their per-mount cycle and their burst size;
+    // unmirrored ones keep the declared cadence.
     for (unit_type, delta, expected) in [
-        (26, 30.0, vec![(43, 3), (44, 1)]),
-        (27, 65.0, vec![(45, 1), (46, 6)]),
-        (28, 60.0, vec![(47, 6), (48, 3)]),
+        (26, 30.0, vec![(43, 2)]),
+        (27, 65.0, vec![(45, 1), (46, 4)]),
+        (28, 60.0, vec![(47, 6)]),
     ] {
         let spec = enemy_spec(unit_type).unwrap();
         world.enemies.insert(
@@ -4942,12 +7073,18 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
     let rail = world.projectiles.iter().next().unwrap();
     assert_eq!(rail.bullet_id, 49);
     assert_eq!(rail.damage, 1250.0);
-    assert_eq!(rail.target_x, core_x);
+    // Audit H12: the nearest in-range player unit (core_x + 300) outranks
+    // the core as the railgun's aim point.
+    assert_eq!(rail.target_x, core_x + 300.0);
     drop(rail);
     assert!(simulate_projectiles(&world, &connections, 1.0));
+    // Audit H12: the rail now terminates at its unit aim point (nearest
+    // in-range player): that player is pierced for 1250, the second segment
+    // (halved falloff, 625) lands on the core behind it, and the far player
+    // is never reached.
     assert_eq!(world.players.get(&2_700_001).unwrap().health, 750.0);
-    assert_eq!(world.players.get(&2_700_002).unwrap().health, 1375.0);
-    assert_eq!(*world.game_state.core_health.read(), 5687.5);
+    assert_eq!(world.players.get(&2_700_002).unwrap().health, 2000.0);
+    assert_eq!(*world.game_state.core_health.read(), 5375.0);
     world.players.clear();
     world.enemies.clear();
     world.projectiles.clear();
@@ -4973,6 +7110,11 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: false,
             apply_direct_on_impact: true,
@@ -4987,13 +7129,15 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             source_position: None,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     assert!(simulate_enemy_point_defense(&world, 9.0));
     assert_eq!(world.projectiles.get(&4_990_001).unwrap().damage, 13.0);
     assert!(simulate_enemy_point_defense(&world, 9.0));
     assert!(!world.projectiles.contains_key(&4_990_001));
-    simulate_waves_and_enemies(&world, &connections, 5.0);
+    // Mirrored plasma-mount pair fires every declared*2 ticks.
+    simulate_waves_and_enemies(&world, &connections, 10.0);
     let plasma = world
         .projectiles
         .iter()
@@ -5028,6 +7172,11 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
                 pierce_buildings: 0,
                 spawn_reign_frags: false,
                 homing_range: 0.0,
+                homing_power: 0.0,
+                homing_delay: -1.0,
+                collides_air: true,
+                collides_ground: true,
+                heals: false,
                 enemy_target_position: None,
                 enemy_target_core: false,
                 apply_direct_on_impact: true,
@@ -5042,6 +7191,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
                 source_position: None,
                 damage_interval: None,
                 damage_timer: 0.0,
+                collided: Vec::new(),
             },
         );
     }
@@ -5183,7 +7333,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         .insert(65, make_enemy(65, DAGGER, core_x + 105.0, core_y, 100.0));
     apply_enemy_support_abilities(&world, &connections, 10.0);
     assert_eq!(world.enemies.get(&65).unwrap().health, 107.0);
-    simulate_waves_and_enemies(&world, &connections, 60.0);
+    // Mirrored missile mount: cycle is the declared reload doubled.
+    simulate_waves_and_enemies(&world, &connections, 120.0);
     let missile = world
         .projectiles
         .iter()
@@ -5201,7 +7352,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             .iter()
             .filter(|projectile| projectile.bullet_id == 57)
             .count(),
-        7
+        // Both mirrored launchers shed their frag ring: 2 x 7.
+        14
     );
     assert!(world
         .projectiles
@@ -5508,22 +7660,26 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
     assert!((effective_unit_reload_delta(&boosted, 4.0) - 5.0).abs() < 0.001);
     drop(boosted);
     assert!(simulate_allied_units(&world, &connections, 5.0));
+    // One burst of the mirrored plasma-mount pair: two bullets.
     assert_eq!(
         world
             .projectiles
             .iter()
             .filter(|projectile| projectile.team == 1 && projectile.bullet_id == 53)
             .count(),
-        1
+        2
     );
     assert!(simulate_projectiles(&world, &connections, 100.0));
-    assert_eq!(
-        world
-            .base_buildings
-            .get(&projectile_building_position)
-            .unwrap()
-            .health,
-        (100.0 + repair_maximum * 0.015).min(repair_maximum)
+    let healed = world
+        .base_buildings
+        .get(&projectile_building_position)
+        .unwrap()
+        .health;
+    // Both mirrored mounts' splash-heals reach the building.
+    let expected = (100.0 + repair_maximum * 0.03).min(repair_maximum);
+    assert!(
+        (healed - expected).abs() < 0.01,
+        "building health {healed} vs expected {expected}"
     );
     world.enemies.remove(&84);
     world.enemies.remove(&85);
@@ -5590,14 +7746,32 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
     world
         .enemies
         .insert(91, make_enemy(91, DAGGER, core_x + 40.0, core_y, 20_000.0));
-    assert!(simulate_allied_units(&world, &connections, 140.0));
+    {
+        let mut antumbra = world.enemies.get_mut(&90).unwrap();
+        let fire = collect_allied_weapon_fire(&mut antumbra, 140.0, 40.0).unwrap();
+        drop(antumbra);
+        spawn_allied_weapon_fire(
+            &world,
+            &connections,
+            &fire,
+            90,
+            91,
+            None,
+            core_x,
+            core_y,
+            core_x + 40.0,
+            core_y,
+        );
+    }
     assert_eq!(
         world
             .projectiles
             .iter()
             .filter(|projectile| projectile.team == 1 && projectile.bullet_id == 33)
             .count(),
-        11
+        // Missiles-mount pair: bursts at t=40/80/120 and t=70/140 -> five
+        // two-bullet salvos within 140 ticks.
+        10
     );
     assert_eq!(
         world
@@ -5605,7 +7779,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             .iter()
             .filter(|projectile| projectile.team == 1 && projectile.bullet_id == 34)
             .count(),
-        11
+        // Cannon pair cycle 24 over a 140-tick window: five two-bullet salvos.
+        10
     );
     world.enemies.clear();
     world.projectiles.clear();
@@ -5637,6 +7812,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         core_y,
         core_x + 16.0,
         core_y,
+        0.0,
         0,
     );
     world.base_buildings.remove(&original_target);
@@ -5685,6 +7861,11 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: true,
             apply_direct_on_impact: true,
@@ -5699,6 +7880,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             source_position: None,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     assert!(simulate_projectiles(&world, &connections, 20.0));
@@ -5751,6 +7933,11 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: true,
             apply_direct_on_impact: true,
@@ -5765,6 +7952,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             source_position: None,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     let mut shockwave_power = std::collections::HashMap::new();
@@ -5833,7 +8021,7 @@ fn navanax_suppression_blocks_allied_healing() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -5843,6 +8031,7 @@ fn navanax_suppression_blocks_allied_healing() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_100),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -5853,10 +8042,12 @@ fn navanax_suppression_blocks_allied_healing() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-enemy-role-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -5869,12 +8060,19 @@ fn navanax_suppression_blocks_allied_healing() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let core_x = (i32::from(SPAWN_X) as f32) * 8.0;
     let core_y = (i32::from(SPAWN_Y) as f32) * 8.0;
@@ -5909,7 +8107,9 @@ fn navanax_suppression_blocks_allied_healing() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: None,
+        drown_progress: 0.0,
     };
     let suppressible = |position: i32, block: i16, team: u8, health: f32| {
         let mut tile = base_building_tombstone(&BaseBuildingState {
@@ -5994,7 +8194,7 @@ fn emp_bullet_heals_boosts_and_strikes_power_buildings() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -6004,6 +8204,7 @@ fn emp_bullet_heals_boosts_and_strikes_power_buildings() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_100),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -6014,10 +8215,12 @@ fn emp_bullet_heals_boosts_and_strikes_power_buildings() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-enemy-role-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -6030,12 +8233,19 @@ fn emp_bullet_heals_boosts_and_strikes_power_buildings() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let core_x = (i32::from(SPAWN_X) as f32) * 8.0;
     let core_y = (i32::from(SPAWN_Y) as f32) * 8.0;
@@ -6126,7 +8336,7 @@ fn ground_enemies_damage_and_remove_route_buildings() {
         base_buildings: DashMap::new(),
         floors: vec![0; total],
         overlays: vec![0; total],
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -6136,6 +8346,7 @@ fn ground_enemies_damage_and_remove_route_buildings() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_100),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -6146,10 +8357,12 @@ fn ground_enemies_damage_and_remove_route_buildings() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-building-target-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -6162,12 +8375,19 @@ fn ground_enemies_damage_and_remove_route_buildings() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let core_x = SPAWN_X as f32 * 8.0;
     let core_y = SPAWN_Y as f32 * 8.0;
@@ -6177,6 +8397,8 @@ fn ground_enemies_damage_and_remove_route_buildings() {
         world.tiles.insert(
             wall_position,
             DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
                 position: wall_position,
                 block: 216, // copper wall: 320 health in the official manifest
                 rotation: 0,
@@ -6254,15 +8476,17 @@ fn ground_enemies_damage_and_remove_route_buildings() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
 
     let (_, destroyed, health_updates) =
-        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload);
+        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload * 2.0);
     assert!(destroyed.is_empty());
     assert!(health_updates.is_empty());
-    assert_eq!(world.projectiles.len(), 1);
+    assert_eq!(world.projectiles.len(), 2);
     let projectile = world.projectiles.iter().next().unwrap();
     assert_eq!(projectile.bullet_id, 6);
     let attacked_position = projectile.enemy_target_position.unwrap();
@@ -6309,19 +8533,21 @@ fn ground_enemies_damage_and_remove_route_buildings() {
     );
     assert_eq!(
         f32::from_bits(crate::network::codec::Reads::read_i(&mut payload).unwrap() as u32),
-        311.0
+        hit_health
     );
-    // Official in-flight collision (STATUS round 24): the dagger's bullet
-    // (slight inaccuracy) hits the first wall of the column its segment
-    // crosses — the originally-targeted wall OR a neighbour. When the
-    // segment lands on a neighbour, the targeted wall stays at full
-    // health (320) and the 9-damage hit lands on the neighbour (311).
-    // This is nondeterministic at HEAD (DashMap shard order in the
-    // building-collision scan), so accept either outcome.
+    let total_wall_damage: f32 = (0..world.height)
+        .map(|wall_y| (wall_x << 16) | wall_y)
+        .filter_map(|pos| world.tiles.get(&pos).map(|tile| 320.0 - tile.health))
+        .sum();
+    assert_eq!(
+        total_wall_damage, 18.0,
+        "both mirrored bolts hit the column"
+    );
+    // Either mirrored bolt can hit this wall or its neighbour. The total
+    // above must remain exactly two hits regardless of the chosen target.
     assert!(
-        world.tiles.get(&attacked_position).unwrap().health == 311.0
-            || world.tiles.get(&attacked_position).unwrap().health == 320.0,
-        "targeted wall {} must be hit (311) or skipped (320), got {}",
+        [302.0, 311.0, 320.0].contains(&world.tiles.get(&attacked_position).unwrap().health),
+        "targeted wall {} must receive zero, one or two bolts, got {}",
         attacked_position,
         world.tiles.get(&attacked_position).unwrap().health
     );
@@ -6334,10 +8560,10 @@ fn ground_enemies_damage_and_remove_route_buildings() {
     world.tiles.get_mut(&hit_pos).unwrap().health = 5.0;
     world.navigation_revision.fetch_add(1, Ordering::Relaxed);
     let (_, destroyed, health_updates) =
-        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload);
+        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload * 2.0);
     assert!(destroyed.is_empty());
     assert!(health_updates.is_empty());
-    assert_eq!(world.projectiles.len(), 1);
+    assert_eq!(world.projectiles.len(), 2);
     assert!(simulate_projectiles(&world, &DashMap::new(), 26.0));
     assert!(!world
         .projectiles
@@ -6356,7 +8582,7 @@ fn ground_enemies_damage_and_remove_route_buildings() {
     drop(tombstone);
     assert_eq!(*world.game_state.core_health.read(), 6000.0);
     let avoidance = unit_avoidance_requests(&world);
-    let enemy = world.enemies.get(&1).unwrap();
+    let enemy = world.enemies.get(&1).unwrap().clone();
     let navigation = enemy_navigation_target(&world, &enemy, core_x, core_y, &avoidance);
     assert!(
         navigation.building.is_none(),
@@ -6387,7 +8613,7 @@ fn ground_enemies_damage_and_remove_route_buildings() {
     }
     world.navigation_revision.fetch_add(1, Ordering::Relaxed);
     let (_, destroyed, health_updates) =
-        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload);
+        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload * 2.0);
     assert!(destroyed.is_empty());
     assert!(health_updates.is_empty());
     let base_position = world
@@ -6409,16 +8635,16 @@ fn ground_enemies_damage_and_remove_route_buildings() {
                 .is_some_and(|building| building.health < 320.0)
         })
         .unwrap();
-    assert_eq!(world.base_buildings.get(&base_hit).unwrap().health, 311.0);
+    assert_eq!(world.base_buildings.get(&base_hit).unwrap().health, 302.0);
     assert!(
-        world.base_buildings.get(&base_position).unwrap().health == 311.0
+        world.base_buildings.get(&base_position).unwrap().health == 302.0
             || world.base_buildings.get(&base_position).unwrap().health == 320.0
     );
 
     world.base_buildings.get_mut(&base_position).unwrap().health = 5.0;
     world.navigation_revision.fetch_add(1, Ordering::Relaxed);
     let (_, destroyed, _) =
-        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload);
+        simulate_waves_and_enemies(&world, &DashMap::new(), DAGGER.attack_reload * 2.0);
     assert!(destroyed.is_empty());
     assert!(simulate_projectiles(&world, &DashMap::new(), 26.0));
     assert!(!world.base_buildings.contains_key(&base_position));
@@ -6441,14 +8667,14 @@ fn ground_enemies_damage_and_remove_route_buildings() {
     }
     world.navigation_revision.fetch_add(1, Ordering::Relaxed);
     let avoidance = unit_avoidance_requests(&world);
-    let enemy = world.enemies.get(&1).unwrap();
+    let enemy = world.enemies.get(&1).unwrap().clone();
     let blocked_x = enemy.x;
     let blocked_y = enemy.y;
     let navigation = enemy_navigation_target(&world, &enemy, core_x, core_y, &avoidance);
     assert_eq!(navigation.movement, (blocked_x, blocked_y));
     drop(enemy);
     simulate_waves_and_enemies(&world, &DashMap::new(), 60.0);
-    let enemy = world.enemies.get(&1).unwrap();
+    let enemy = world.enemies.get(&1).unwrap().clone();
     assert_eq!((enemy.x, enemy.y), (blocked_x, blocked_y));
     drop(enemy);
     world.base_buildings.clear();
@@ -6528,7 +8754,7 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -6538,6 +8764,7 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_001),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -6548,10 +8775,12 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-power-turret-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -6564,17 +8793,26 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let arc_position = (10 << 16) | 10;
     world.tiles.insert(
         arc_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: arc_position,
             block: 355,
             rotation: 0,
@@ -6652,7 +8890,9 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     let connections = DashMap::new();
@@ -6688,6 +8928,8 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
     world.tiles.insert(
         solar_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: solar_position,
             block: 314,
             rotation: 0,
@@ -6758,6 +9000,8 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
     world.tiles.insert(
         arc_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: arc_position,
             block: 366,
             rotation: 0,
@@ -6857,7 +9101,7 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -6867,6 +9111,7 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -6877,10 +9122,12 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-logistics-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -6893,17 +9140,26 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let drill_position = (35 << 16) | 100;
     world.tiles.insert(
         drill_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: drill_position,
             block: 325,
             rotation: 0,
@@ -6951,6 +9207,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         conveyor_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: conveyor_position,
             block: 257,
             rotation: 0,
@@ -7035,11 +9293,13 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
-    simulate_waves_and_enemies(&world, &DashMap::new(), 13.0);
-    assert_eq!(world.projectiles.len(), 1);
+    simulate_waves_and_enemies(&world, &DashMap::new(), 26.0);
+    assert_eq!(world.projectiles.len(), 2);
     simulate_projectiles(&world, &DashMap::new(), 0.0);
     assert!(state.game_over.load(Ordering::Relaxed));
     world.enemies.remove(&3_000_001);
@@ -7048,6 +9308,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         duo_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: duo_position,
             block: 349,
             rotation: 0,
@@ -7118,10 +9380,10 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     assert!(!turret_can_target(352, FLARE.unit_type));
     // The shared registry covers Serpulo/Erekir/core/missile flyers and
     // does not confuse hovering ground units with flying units.
-    for unit in [15, 19, 20, 23, 35, 37, 46, 50, 55, 58, 60, 62, 67] {
+    for unit in [15, 19, 20, 23, 35, 37, 46, 50, 55, 58, 60, 62, 67, 68] {
         assert!(unit_type_is_flying(unit), "unit {unit} must be flying");
     }
-    for unit in [0, 14, 25, 34, 38, 49, 56, 57, 61, 68] {
+    for unit in [0, 14, 25, 34, 38, 49, 56, 57, 61, 69] {
         assert!(!unit_type_is_flying(unit), "unit {unit} must be grounded");
     }
     assert!(turret_can_target(350, 50)); // scatter -> avert
@@ -7129,6 +9391,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     assert!(turret_can_target(362, 49)); // ripple -> hovering elude
 
     let transport_tile = |position: i32, block: i16, config: Vec<u8>| DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         enabled: true,
         message: None,
         position,
@@ -7412,7 +9676,9 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     let connections = DashMap::new();
@@ -7484,7 +9750,9 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     let mut shooter = player();
@@ -7513,6 +9781,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         world.tiles.insert(
             position,
             DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
                 position,
                 block,
                 rotation: 0,
@@ -7567,6 +9837,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         combustion,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: combustion,
             block: 308,
             rotation: 0,
@@ -7622,6 +9894,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         battery,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: battery,
             block: 306,
             rotation: 0,
@@ -7682,6 +9956,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         world.tiles.insert(
             position,
             DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
                 position,
                 block,
                 rotation: 0,
@@ -7743,6 +10019,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         tsunami,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: tsunami,
             block: 360,
             rotation: 0,
@@ -7828,7 +10106,9 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     let power = compute_power_efficiency(&world);
@@ -7857,6 +10137,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         world.tiles.insert(
             position,
             DynamicTile {
+                logic_control: None,
+                payload_inventory: Vec::new(),
                 position,
                 block,
                 rotation: 0,
@@ -7974,6 +10256,7 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     let replacement = PendingBuild {
         position: replacement_position,
         block: 261,
+        previous_block: 0,
         rotation: 0,
         config: vec![0],
         occupied: vec![replacement_position],
@@ -7998,6 +10281,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         press,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: press,
             block: 181,
             rotation: 0,
@@ -8054,6 +10339,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         smelter,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: smelter,
             block: 183,
             rotation: 0,
@@ -8108,6 +10395,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
     world.tiles.insert(
         cryofluid_mixer,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: cryofluid_mixer,
             block: 189,
             rotation: 0,
@@ -8225,6 +10514,7 @@ fn puddles_survive_the_json_checkpoint_round_trip() {
         (&world.cores, &world.team_core_lists),
         &world.logic_flags,
         &world.puddles,
+        checkpoint_rules_json(&world),
     )
     .unwrap();
     let loaded = load_tiles(&path, Some((world.width, world.height))).unwrap();
@@ -8265,6 +10555,227 @@ fn test_admin() -> crate::state::administration::Administration {
     crate::state::administration::Administration::with_file(path)
 }
 
+/// Erekir evoke-class builder-repair: deterministic point-repair of damaged
+/// own-team standing buildings at the desktop.jar 159.7 RepairBeamWeapon
+/// rates (flat + fraction of max health per tick).
+#[test]
+fn erekir_builder_repair_heals_nearest_own_team_building_per_tick() {
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let sx = i32::from(SPAWN_X);
+    let sy = i32::from(SPAWN_Y);
+    // Two equally distant damaged own-team walls; the distance tie resolves
+    // to the lowest tile position.
+    let low = ((sx + 2) << 16) | (sy + 10);
+    let high = ((sx + 6) << 16) | (sy + 10);
+    for position in [low, high] {
+        world.tiles.insert(position, {
+            let mut tile = base_building_tombstone(&BaseBuildingState {
+                position,
+                block: 216,
+                team: 2,
+                health: 100.0,
+                occupied: vec![position],
+                inventory: Vec::new(),
+            });
+            tile.block = 216;
+            tile.team = 2;
+            tile.health = 100.0;
+            tile
+        });
+    }
+    let unit_id = 3_000_200;
+    world.enemies.insert(
+        unit_id,
+        legacy_weapons_make_enemy(
+            unit_id,
+            enemy_spec(58).unwrap(),
+            (sx + 4) as f32 * 8.0,
+            (sy + 10) as f32 * 8.0,
+            300.0,
+        ),
+    );
+    assert!(crate::network::simulation::simulate_erekir_builder_repair(
+        &world,
+        &DashMap::new(),
+        1.0
+    ));
+    // First active tick: strength ramps 0 -> lerpDelta(0, 1, 0.2) = 0.2 and
+    // feeds this tick's heal (official RepairBeamWeapon.update order).
+    let maximum = crate::game::content::block_health(216);
+    let per_tick = (3.1 + maximum * 0.06 / 100.0) * 0.2;
+    assert!((world.tiles.get(&low).unwrap().health - (100.0 + per_tick)).abs() < 0.001);
+    assert_eq!(world.tiles.get(&high).unwrap().health, 100.0);
+}
+
+#[test]
+fn erekir_builder_repair_scales_down_recently_damaged_buildings() {
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let sx = i32::from(SPAWN_X);
+    let sy = i32::from(SPAWN_Y);
+    let position = ((sx + 4) << 16) | (sy + 10);
+    world.tiles.insert(position, {
+        let mut tile = base_building_tombstone(&BaseBuildingState {
+            position,
+            block: 216,
+            team: 2,
+            health: 320.0,
+            occupied: vec![position],
+            inventory: Vec::new(),
+        });
+        tile.block = 216;
+        tile.team = 2;
+        tile.health = 100.0;
+        tile
+    });
+    // Official BuildingComp.damage path stamps lastDamageTime; within the
+    // 300-tick window the beam heals at x0.1 (recentDamageMultiplier).
+    let (_, damaged_health) =
+        crate::network::combat::damage_building(&world, position, 10.0).unwrap();
+    let unit_id = 3_000_204;
+    world.enemies.insert(
+        unit_id,
+        legacy_weapons_make_enemy(
+            unit_id,
+            enemy_spec(58).unwrap(),
+            (sx + 4) as f32 * 8.0,
+            (sy + 10) as f32 * 8.0,
+            300.0,
+        ),
+    );
+    assert!(crate::network::simulation::simulate_erekir_builder_repair(
+        &world,
+        &DashMap::new(),
+        1.0
+    ));
+    let maximum = crate::game::content::block_health(216);
+    let per_tick = (3.1 + maximum * 0.06 / 100.0) * 0.2 * 0.1;
+    let healed = world.tiles.get(&position).unwrap().health;
+    assert!((healed - (damaged_health + per_tick)).abs() < 0.0005);
+}
+
+#[test]
+fn erekir_builder_repair_never_heals_across_teams() {
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let sx = i32::from(SPAWN_X);
+    let sy = i32::from(SPAWN_Y);
+    let position = ((sx + 4) << 16) | (sy + 10);
+    world.tiles.insert(position, {
+        let mut tile = base_building_tombstone(&BaseBuildingState {
+            position,
+            block: 216,
+            team: 1,
+            health: 100.0,
+            occupied: vec![position],
+            inventory: Vec::new(),
+        });
+        tile.block = 216;
+        tile.team = 1;
+        tile.health = 100.0;
+        tile
+    });
+    let unit_id = 3_000_201;
+    world.enemies.insert(
+        unit_id,
+        legacy_weapons_make_enemy(
+            unit_id,
+            enemy_spec(59).unwrap(),
+            (sx + 4) as f32 * 8.0,
+            (sy + 10) as f32 * 8.0,
+            500.0,
+        ),
+    );
+    // Team 2 evoke-class versus a team 1 building: nothing is in reach.
+    assert!(!crate::network::simulation::simulate_erekir_builder_repair(
+        &world,
+        &DashMap::new(),
+        1.0
+    ));
+    assert_eq!(world.tiles.get(&position).unwrap().health, 100.0);
+}
+
+#[test]
+fn erekir_builder_repair_skips_out_of_range_and_approaches() {
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let sx = i32::from(SPAWN_X);
+    let sy = i32::from(SPAWN_Y);
+    let position = ((sx + 4) << 16) | (sy + 10);
+    world.tiles.insert(position, {
+        let mut tile = base_building_tombstone(&BaseBuildingState {
+            position,
+            block: 216,
+            team: 2,
+            health: 100.0,
+            occupied: vec![position],
+            inventory: Vec::new(),
+        });
+        tile.block = 216;
+        tile.team = 2;
+        tile.health = 100.0;
+        tile
+    });
+    let unit_id = 3_000_202;
+    // 30 tiles below the wall: beyond the 220 build range.
+    let start_y = (sy + 40) as f32 * 8.0;
+    world.enemies.insert(
+        unit_id,
+        legacy_weapons_make_enemy(
+            unit_id,
+            enemy_spec(60).unwrap(),
+            (sx + 4) as f32 * 8.0,
+            start_y,
+            700.0,
+        ),
+    );
+    assert!(crate::network::simulation::simulate_erekir_builder_repair(
+        &world,
+        &DashMap::new(),
+        1.0
+    ));
+    assert_eq!(world.tiles.get(&position).unwrap().health, 100.0);
+    let moved = world.enemies.get(&unit_id).unwrap();
+    assert!(moved.y < start_y && moved.y > (sy + 10) as f32 * 8.0);
+}
+
+#[test]
+fn erekir_builder_repair_caps_at_max_health() {
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let sx = i32::from(SPAWN_X);
+    let sy = i32::from(SPAWN_Y);
+    let position = ((sx + 4) << 16) | (sy + 10);
+    let maximum = crate::game::content::block_health(216);
+    world.tiles.insert(position, {
+        let mut tile = base_building_tombstone(&BaseBuildingState {
+            position,
+            block: 216,
+            team: 2,
+            health: maximum - 0.5,
+            occupied: vec![position],
+            inventory: Vec::new(),
+        });
+        tile.block = 216;
+        tile.team = 2;
+        tile.health = maximum - 0.5;
+        tile
+    });
+    let unit_id = 3_000_203;
+    world.enemies.insert(
+        unit_id,
+        legacy_weapons_make_enemy(
+            unit_id,
+            enemy_spec(58).unwrap(),
+            (sx + 4) as f32 * 8.0,
+            (sy + 10) as f32 * 8.0,
+            300.0,
+        ),
+    );
+    assert!(crate::network::simulation::simulate_erekir_builder_repair(
+        &world,
+        &DashMap::new(),
+        1.0
+    ));
+    assert_eq!(world.tiles.get(&position).unwrap().health, maximum);
+}
+
 fn legacy_weapons_test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>, f32, f32) {
     let map =
         crate::engine::world_stream::inspect_map(include_bytes!("../../dummy_world.dat")).unwrap();
@@ -8291,7 +10802,7 @@ fn legacy_weapons_test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -8301,6 +10812,7 @@ fn legacy_weapons_test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_100),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -8311,10 +10823,12 @@ fn legacy_weapons_test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-legacy-weapons-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -8327,12 +10841,19 @@ fn legacy_weapons_test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     (world, DashMap::new(), core_x, core_y)
 }
@@ -8369,8 +10890,387 @@ fn legacy_weapons_make_enemy(id: i32, spec: EnemySpec, x: f32, y: f32, health: f
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: None,
+        drown_progress: 0.0,
     }
+}
+
+/// v159.7 snapshot layouts for the newly supported entity classes,
+/// disassembled from desktop.jar 159.7:
+/// - TimedKillUnit (39, all MissileUnitType content) writes `f lifetime`
+///   after isShooting and `f time` after the team byte;
+/// - BuildingTetherPayloadUnit (36, manifold/assembly-drone) writes a TypeIO
+///   building reference between aimY and the controller plus the payload
+///   collection;
+/// - BlockUnitUnit (2) matches the base UnitEntity layout exactly.
+#[test]
+fn missile_and_tether_unit_sync_layouts_match_v1597_classes() {
+    use crate::network::codec::Reads;
+    use std::io::Cursor;
+
+    // --- TimedKillUnit (class 39): anthicus-missile ---------------------
+    let spec = enemy_spec(46).unwrap();
+    let unit = legacy_weapons_make_enemy(7_001, spec, 100.0, 200.0, spec.health);
+    let mut body = Vec::new();
+    write_unit_sync(&mut body, None, &unit, 110.0, 210.0, None, None).unwrap();
+
+    let mut r = Cursor::new(body.clone());
+    assert_eq!(r.read_b().unwrap(), 0); // abilities
+    assert_eq!(r.read_f().unwrap(), 110.0); // aimX
+    assert_eq!(r.read_f().unwrap(), 210.0); // aimY
+    assert_eq!(r.read_b().unwrap(), 2); // AI controller (no building ref)
+    assert!((0.0..=1.0).contains(&r.read_f().unwrap())); // elevation
+    assert_eq!(r.read_l().unwrap(), 0); // flag (double)
+    assert_eq!(r.read_f().unwrap(), spec.health);
+    assert!(r.read_bool().unwrap()); // attacking: 14.1 px < range 25
+                                     // TimedKillUnit.lifetime (60f * 1.66f).
+    assert!((r.read_f().unwrap() - 99.6).abs() < 0.001);
+    assert_eq!(r.read_i().unwrap(), -1); // mineTile
+    assert_eq!(r.read_b().unwrap(), 1); // one shootOnDeath mount
+    assert_eq!(r.read_b().unwrap(), 3); // shoot + rotate
+    assert_eq!(r.read_f().unwrap(), 110.0);
+    assert_eq!(r.read_f().unwrap(), 210.0);
+    assert_eq!(r.read_i().unwrap(), 0); // plans queue
+    assert_eq!(r.read_f().unwrap(), 0.0); // rotation
+    assert_eq!(r.read_f().unwrap(), 0.0); // shield
+    assert!(!r.read_bool().unwrap()); // spawnedByCore
+                                      // Port convention: non-mono units carry no items and emit item id 0
+                                      // with amount 0 (same as every existing unit sync).
+    assert_eq!(r.read_s().unwrap(), 0); // carried item
+    assert_eq!(r.read_i().unwrap(), 0);
+    assert_eq!(r.read_i().unwrap(), 0); // statuses
+    assert_eq!(r.read_b().unwrap(), 2); // team
+                                        // TimedKillUnit.time mirrors lifetime
+                                        // (the port does not age missiles yet).
+    assert!((r.read_f().unwrap() - 99.6).abs() < 0.001);
+    assert_eq!(r.read_s().unwrap(), 46); // type id
+    assert!(!r.read_bool().unwrap()); // updateBuilding
+    assert_eq!(r.read_f().unwrap(), 0.0); // vel.x
+    assert_eq!(r.read_f().unwrap(), 0.0); // vel.y
+    assert_eq!(r.read_f().unwrap(), 100.0); // x
+    assert_eq!(r.read_f().unwrap(), 200.0); // y
+    assert_eq!(
+        r.position() as usize,
+        body.len(),
+        "no trailing bytes in the TimedKillUnit sync"
+    );
+
+    // --- BuildingTetherPayloadUnit (class 36): manifold -----------------
+    let spec = enemy_spec(62).unwrap();
+    let unit = legacy_weapons_make_enemy(7_002, spec, 100.0, 200.0, spec.health);
+    let mut body = Vec::new();
+    write_unit_sync(&mut body, None, &unit, 110.0, 210.0, None, None).unwrap();
+
+    let mut r = Cursor::new(body.clone());
+    assert_eq!(r.read_b().unwrap(), 0); // abilities
+    assert_eq!(r.read_f().unwrap(), 110.0);
+    assert_eq!(r.read_f().unwrap(), 210.0);
+    // TypeIO.writeBuilding: null tether reference.
+    assert_eq!(r.read_i().unwrap(), -1);
+    assert_eq!(r.read_b().unwrap(), 2); // AI controller
+    assert!((0.0..=1.0).contains(&r.read_f().unwrap()));
+    assert_eq!(r.read_l().unwrap(), 0);
+    assert_eq!(r.read_f().unwrap(), spec.health);
+    assert!(!r.read_bool().unwrap()); // attack_damage 0 -> never attacking
+    assert_eq!(r.read_i().unwrap(), -1); // mineTile (no lifetime float)
+    assert_eq!(r.read_b().unwrap(), 0); // weaponless
+    assert_eq!(r.read_i().unwrap(), 0); // payload collection present
+    assert_eq!(r.read_i().unwrap(), 0); // plans queue
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert!(!r.read_bool().unwrap());
+    assert_eq!(r.read_s().unwrap(), 0); // carried item
+    assert_eq!(r.read_i().unwrap(), 0);
+    assert_eq!(r.read_i().unwrap(), 0); // statuses
+    assert_eq!(r.read_b().unwrap(), 2);
+    assert_eq!(r.read_s().unwrap(), 62); // type id straight after team
+    assert!(!r.read_bool().unwrap());
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert_eq!(r.read_f().unwrap(), 100.0);
+    assert_eq!(r.read_f().unwrap(), 200.0);
+    assert_eq!(
+        r.position() as usize,
+        body.len(),
+        "no trailing bytes in the BuildingTetherPayloadUnit sync"
+    );
+
+    // --- BlockUnitUnit (class 2): hidden `block` / build-tower ----------
+    // Same shape as the base UnitEntity: no building ref, no lifetime/time,
+    // no payload collection.
+    for unit_type in [61i16, 69] {
+        let spec = enemy_spec(unit_type).unwrap();
+        let unit = legacy_weapons_make_enemy(7_100 + i32::from(unit_type), spec, 0.0, 0.0, 1.0);
+        let mut body = Vec::new();
+        write_unit_sync(&mut body, None, &unit, 8.0, 8.0, None, None).unwrap();
+
+        let mut r = Cursor::new(body.clone());
+        assert_eq!(r.read_b().unwrap(), 0); // abilities
+        assert_eq!(r.read_f().unwrap(), 8.0);
+        assert_eq!(r.read_f().unwrap(), 8.0);
+        assert_eq!(r.read_b().unwrap(), 2); // controller directly: no building ref
+        assert!((0.0..=1.0).contains(&r.read_f().unwrap()));
+        assert_eq!(r.read_l().unwrap(), 0);
+        assert_eq!(r.read_f().unwrap(), 1.0);
+        assert!(!r.read_bool().unwrap());
+        assert_eq!(r.read_i().unwrap(), -1); // mineTile directly: no lifetime
+        assert_eq!(r.read_b().unwrap(), 0); // weaponless
+        assert_eq!(r.read_i().unwrap(), 0); // plans queue (no payload block)
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert!(!r.read_bool().unwrap());
+        assert_eq!(r.read_s().unwrap(), 0); // carried item
+        assert_eq!(r.read_i().unwrap(), 0);
+        assert_eq!(r.read_i().unwrap(), 0); // statuses
+        assert_eq!(r.read_b().unwrap(), 2);
+        assert_eq!(r.read_s().unwrap(), unit_type); // no time float
+        assert!(!r.read_bool().unwrap());
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(
+            r.position() as usize,
+            body.len(),
+            "no trailing bytes in the BlockUnitUnit sync ({unit_type})"
+        );
+    }
+}
+
+/// v159.7 snapshot closure for the remaining Erekir entity classes,
+/// disassembled field-by-field from desktop.jar 159.7: CrawlUnit (46),
+/// TankUnit (43) and ElevationMoveUnit (45) writeSync sequences are
+/// identical to the base UnitEntity layout - no class-specific fields, so
+/// the closure is the mount count plus a full byte-walk with no trailing
+/// bytes and no TimedKillUnit lifetime/time floats.
+#[test]
+fn crawl_tank_elevation_unit_sync_layouts_match_v1597_classes() {
+    use crate::network::codec::Reads;
+    use std::io::Cursor;
+
+    // --- TankUnit (class 43): vanquish (41), five weapon mounts (1
+    // launcher + 2 mirrored copies appended by UnitType.init) -----------
+    let spec = enemy_spec(41).unwrap();
+    assert_eq!(spec.entity_class, 43);
+    let unit = legacy_weapons_make_enemy(7_200, spec, 100.0, 200.0, spec.health);
+    let mut body = Vec::new();
+    write_unit_sync(&mut body, None, &unit, 110.0, 210.0, None, None).unwrap();
+
+    let mut r = Cursor::new(body.clone());
+    assert_eq!(r.read_b().unwrap(), 0); // abilities
+    assert_eq!(r.read_f().unwrap(), 110.0); // aimX
+    assert_eq!(r.read_f().unwrap(), 210.0); // aimY
+    assert_eq!(r.read_b().unwrap(), 2); // AI controller (no building ref)
+    assert!((0.0..=1.0).contains(&r.read_f().unwrap())); // elevation
+    assert_eq!(r.read_l().unwrap(), 0); // flag (double)
+    assert_eq!(r.read_f().unwrap(), spec.health);
+    assert!(r.read_bool().unwrap()); // attacking: 14.1 px < range 180
+    assert_eq!(r.read_i().unwrap(), -1); // mineTile directly: no lifetime
+    assert_eq!(r.read_b().unwrap(), 5); // vanquish mounts
+    for _ in 0..5 {
+        assert_eq!(r.read_b().unwrap(), 3); // shoot + rotate
+        assert_eq!(r.read_f().unwrap(), 110.0);
+        assert_eq!(r.read_f().unwrap(), 210.0);
+    }
+    assert_eq!(r.read_i().unwrap(), 0); // plans queue (no payload block)
+    assert_eq!(r.read_f().unwrap(), 0.0); // rotation
+    assert_eq!(r.read_f().unwrap(), 0.0); // shield
+    assert!(!r.read_bool().unwrap()); // spawnedByCore
+    assert_eq!(r.read_s().unwrap(), 0); // carried item
+    assert_eq!(r.read_i().unwrap(), 0);
+    assert_eq!(r.read_i().unwrap(), 0); // statuses
+    assert_eq!(r.read_b().unwrap(), 2); // team
+    assert_eq!(r.read_s().unwrap(), 41); // type id straight after team
+    assert!(!r.read_bool().unwrap()); // updateBuilding
+    assert_eq!(r.read_f().unwrap(), 0.0); // vel.x
+    assert_eq!(r.read_f().unwrap(), 0.0); // vel.y
+    assert_eq!(r.read_f().unwrap(), 100.0); // x
+    assert_eq!(r.read_f().unwrap(), 200.0); // y
+    assert_eq!(
+        r.position() as usize,
+        body.len(),
+        "no trailing bytes in the TankUnit sync"
+    );
+
+    // --- CrawlUnit (class 46): renale (56) / latum (57), weaponless -----
+    for unit_type in [56i16, 57] {
+        let spec = enemy_spec(unit_type).unwrap();
+        assert_eq!(spec.entity_class, 46);
+        let unit = legacy_weapons_make_enemy(
+            7_300 + i32::from(unit_type),
+            spec,
+            100.0,
+            200.0,
+            spec.health,
+        );
+        let mut body = Vec::new();
+        write_unit_sync(&mut body, None, &unit, 110.0, 210.0, None, None).unwrap();
+
+        let mut r = Cursor::new(body.clone());
+        assert_eq!(r.read_b().unwrap(), 0); // abilities
+        assert_eq!(r.read_f().unwrap(), 110.0);
+        assert_eq!(r.read_f().unwrap(), 210.0);
+        assert_eq!(r.read_b().unwrap(), 2); // AI controller
+        assert!((0.0..=1.0).contains(&r.read_f().unwrap()));
+        assert_eq!(r.read_l().unwrap(), 0);
+        assert_eq!(r.read_f().unwrap(), spec.health);
+        assert!(!r.read_bool().unwrap()); // attack_damage 0 -> never attacking
+        assert_eq!(r.read_i().unwrap(), -1); // mineTile
+        assert_eq!(r.read_b().unwrap(), 0); // zero mounts (SpawnDeathAbility only)
+        assert_eq!(r.read_i().unwrap(), 0); // plans queue
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert!(!r.read_bool().unwrap());
+        assert_eq!(r.read_s().unwrap(), 0); // carried item
+        assert_eq!(r.read_i().unwrap(), 0);
+        assert_eq!(r.read_i().unwrap(), 0); // statuses
+        assert_eq!(r.read_b().unwrap(), 2);
+        assert_eq!(r.read_s().unwrap(), unit_type); // no time float
+        assert!(!r.read_bool().unwrap());
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(r.read_f().unwrap(), 0.0);
+        assert_eq!(r.read_f().unwrap(), 100.0);
+        assert_eq!(r.read_f().unwrap(), 200.0);
+        assert_eq!(
+            r.position() as usize,
+            body.len(),
+            "no trailing bytes in the CrawlUnit sync ({unit_type})"
+        );
+    }
+
+    // --- ElevationMoveUnit (class 45): elude (49) ------------------------
+    let spec = enemy_spec(49).unwrap();
+    assert_eq!(spec.entity_class, 45);
+    let unit = legacy_weapons_make_enemy(7_400, spec, 100.0, 200.0, spec.health);
+    let mut body = Vec::new();
+    write_unit_sync(&mut body, None, &unit, 110.0, 210.0, None, None).unwrap();
+
+    let mut r = Cursor::new(body.clone());
+    assert_eq!(r.read_b().unwrap(), 0); // abilities
+    assert_eq!(r.read_f().unwrap(), 110.0);
+    assert_eq!(r.read_f().unwrap(), 210.0);
+    assert_eq!(r.read_b().unwrap(), 2); // AI controller
+    assert!((0.0..=1.0).contains(&r.read_f().unwrap())); // elevation
+    assert_eq!(r.read_l().unwrap(), 0);
+    assert_eq!(r.read_f().unwrap(), spec.health);
+    assert!(r.read_bool().unwrap()); // attacking: 14.1 px < range 150
+    assert_eq!(r.read_i().unwrap(), -1); // mineTile
+                                         // elude has 2 post-init weapons (Weapon.mirror default TRUE): a mount
+                                         // block is [b shooting][f aimX][f aimY] per mount.
+    assert_eq!(r.read_b().unwrap(), 2);
+    for _ in 0..2 {
+        assert_eq!(r.read_b().unwrap(), 3); // shoot + rotate
+        assert_eq!(r.read_f().unwrap(), 110.0); // aimX
+        assert_eq!(r.read_f().unwrap(), 210.0); // aimY
+    }
+    assert_eq!(r.read_i().unwrap(), 0); // plans queue
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert!(!r.read_bool().unwrap());
+    assert_eq!(r.read_s().unwrap(), 0); // carried item
+    assert_eq!(r.read_i().unwrap(), 0);
+    assert_eq!(r.read_i().unwrap(), 0); // statuses
+    assert_eq!(r.read_b().unwrap(), 2);
+    assert_eq!(r.read_s().unwrap(), 49); // type id straight after team
+    assert!(!r.read_bool().unwrap());
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert_eq!(r.read_f().unwrap(), 0.0);
+    assert_eq!(r.read_f().unwrap(), 100.0);
+    assert_eq!(r.read_f().unwrap(), 200.0);
+    assert_eq!(
+        r.position() as usize,
+        body.len(),
+        "no trailing bytes in the ElevationMoveUnit sync"
+    );
+}
+
+/// Mount counts must match `weapons.size` from the desktop.jar 159.7
+/// content dump (`Vars.content.units()` with `UnitType.init` applied so the
+/// mirrored weapon copies are counted), because TypeIO.writeMounts emits
+/// one length byte plus 9 bytes per mount inside every unit snapshot.
+#[test]
+fn weapon_mount_counts_match_v1605_jar() {
+    // Full post-init dump: id, expected mounts, unit name.
+    let multi = [
+        (0, 2, "dagger"),
+        (1, 2, "mace"),
+        (2, 2, "fortress"),
+        (3, 6, "scepter"),
+        (4, 2, "reign"),
+        (5, 2, "nova"),
+        (6, 2, "pulsar"),
+        (7, 2, "quasar"),
+        (8, 3, "vela"),
+        (9, 1, "corvus"),
+        (10, 1, "crawler"),
+        (11, 2, "atrax"),
+        (12, 4, "spiroct"),
+        (13, 8, "arkyid"),
+        (14, 3, "toxopid"),
+        (15, 1, "flare"),
+        (16, 2, "horizon"),
+        (17, 2, "zenith"),
+        (18, 6, "antumbra"),
+        (19, 6, "eclipse"),
+        (20, 0, "mono"),
+        (21, 2, "poly"),
+        (22, 4, "mega"),
+        (23, 1, "quad"),
+        (24, 0, "oct"),
+        (25, 3, "risso"),
+        (26, 4, "minke"),
+        (27, 3, "bryde"),
+        (28, 3, "sei"),
+        (29, 1, "omura"),
+        (30, 4, "retusa"),
+        (31, 3, "oxynoe"),
+        (32, 4, "cyerce"),
+        (33, 4, "aegires"),
+        (34, 6, "navanax"),
+        (35, 2, "alpha"),
+        (36, 2, "beta"),
+        (37, 2, "gamma"),
+        (38, 1, "stell"),
+        (39, 1, "locus"),
+        (40, 1, "precept"),
+        (41, 5, "vanquish"),
+        (42, 1, "conquer"),
+        (43, 1, "merui"),
+        (44, 4, "cleroi"),
+        (45, 2, "anthicus"),
+        (46, 1, "anthicus-missile"),
+        (47, 2, "tecta"),
+        (48, 2, "collaris"),
+        (49, 2, "elude"),
+        (50, 1, "avert"),
+        (51, 1, "obviate"),
+        (52, 2, "quell"),
+        (53, 1, "quell-missile"),
+        (54, 2, "disrupt"),
+        (55, 1, "disrupt-missile"),
+        (56, 0, "renale"),
+        (57, 0, "latum"),
+        (58, 1, "evoke"),
+        (59, 3, "incite"),
+        (60, 2, "emanate"),
+        (61, 0, "block"),
+        (62, 0, "manifold"),
+        (63, 0, "assembly-drone"),
+        (65, 1, "scathe-missile"),
+        (66, 1, "scathe-missile-phase"),
+        (67, 2, "scathe-missile-surge"),
+        (68, 1, "scathe-missile-surge-split"),
+    ];
+    for (unit_type, count, name) in multi {
+        assert_eq!(
+            enemy_weapon_mount_count(unit_type),
+            count,
+            "mounts of unit {name} ({unit_type})"
+        );
+    }
+    assert_eq!(enemy_weapon_mount_count(64), 0, "target dummy");
+    assert_eq!(enemy_weapon_mount_count(69), 0, "turret build tower");
 }
 
 #[test]
@@ -8402,8 +11302,9 @@ fn core_destruction_emits_game_over_call_packet_48_team_2() {
     assert!(!world.game_state.game_over.load(Ordering::Relaxed));
 
     // Natural flow: the enemy fires at the core and the projectile hits.
-    simulate_waves_and_enemies(&world, &connections, DAGGER.attack_reload);
-    assert_eq!(world.projectiles.len(), 1);
+    // Vanilla mirrored dagger weapon: both mounts fire every reload*2 ticks.
+    simulate_waves_and_enemies(&world, &connections, DAGGER.attack_reload * 2.0);
+    assert_eq!(world.projectiles.len(), 2);
     assert!(simulate_projectiles(&world, &connections, 0.0));
 
     assert!(world.game_state.game_over.load(Ordering::Relaxed));
@@ -8465,6 +11366,7 @@ fn runtime_built_core_registers_team_and_reregisters_on_destroy() {
     let pending = PendingBuild {
         position: pos_a,
         block: 339,
+        previous_block: 0,
         rotation: 0,
         config: Vec::new(),
         occupied: occupied_a,
@@ -8494,6 +11396,8 @@ fn runtime_built_core_registers_team_and_reregisters_on_destroy() {
     world.tiles.insert(
         pos_b,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: pos_b,
             block: 339,
             team: 5,
@@ -8574,6 +11478,7 @@ fn enemy_splash_core_destruction_also_emits_game_over_call_packet() {
         1.0,
         -1,
         0.0,
+        1.0,
     ));
     assert!(world.game_state.game_over.load(Ordering::Relaxed));
     assert!(world.persistence_dirty.load(Ordering::Relaxed));
@@ -8590,6 +11495,8 @@ fn enemy_splash_core_destruction_also_emits_game_over_call_packet() {
 
 fn erekir_like_tile(position: i32, block: i16) -> DynamicTile {
     DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position,
         block,
         team: 1,
@@ -8641,7 +11548,7 @@ fn thorium_reactor_overheat_destroys_reactor_and_applies_official_blast() {
     let victim_position = (45 << 16) | 40;
     let mut reactor_tile = erekir_like_tile(reactor_position, 315);
     reactor_tile.inventory = vec![(reactor::THORIUM_ITEM, reactor::ITEM_CAPACITY)];
-    reactor_tile.output_liquid_amount = 0.99; // NuclearReactorBuild.heat
+    reactor_tile.output_liquid_amount = 0.996; // NuclearReactorBuild.heat; +heating 0.005 crosses 0.999
     reactor_tile.health = crate::game::content::block_health(315);
     let mut victim = erekir_like_tile(victim_position, 345);
     victim.health = crate::game::content::block_health(345);
@@ -8669,7 +11576,7 @@ fn logic_cannot_take_items_from_enemy_buildings() {
     *world.game_state.mode.write() = GameMode::Pvp;
     let processor_pos = (40 << 16) | 40;
     let container_pos = (41 << 16) | 40;
-    let mut processor = erekir_like_tile(processor_pos, 431);
+    let mut processor = erekir_like_tile(processor_pos, 432);
     processor.team = 5;
     processor.config = vec![1]; // any non-empty config is fine here
     let mut container = erekir_like_tile(container_pos, 288);
@@ -8712,6 +11619,107 @@ fn logic_cannot_take_items_from_enemy_buildings() {
 }
 
 #[test]
+fn canvas_config_stores_packed_pixels_and_rejects_wrong_lengths() {
+    // CanvasBlock.config(byte[]): TypeIO tag 14 + i32 length + packed
+    // pixels; the buffer length is fixed per block (54 / 216 bytes).
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let mut painter = player();
+    painter.id = 1_000_006;
+    painter.unit_id = 2_000_006;
+    painter.x = 360.0;
+    painter.y = 800.0;
+    world.players.insert(
+        2_000_006,
+        PlayerCombatState {
+            uuid: "painter".into(),
+            player_id: 1_000_006,
+            unit_id: 2_000_006,
+            x: 360.0,
+            y: 800.0,
+            health: 150.0,
+            shield: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            statuses: Vec::new(),
+            dead: false,
+            respawn_timer: 0.0,
+            team: 1,
+        },
+    );
+    let pos = (45 << 16) | 100;
+    let occupied = block_footprint_in(300, 300, pos, 440).unwrap();
+    world.tiles.insert(
+        pos,
+        DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
+            position: pos,
+            block: 440,
+            team: 1,
+            health: crate::game::content::block_health(440),
+            occupied,
+            enabled: true,
+            config: Vec::new(),
+            stored_item: -1,
+            stored_amount: 0,
+            production_progress: 0.0,
+            transport_progress: 0.0,
+            ammo_units: 0.0,
+            inventory: Vec::new(),
+            power_stored: 0.0,
+            power_links: Vec::new(),
+            liquid_inventory: Vec::new(),
+            stored_liquid: -1,
+            liquid_amount: 0.0,
+            output_liquid_amount: 0.0,
+            junction_items: Vec::new(),
+            mass_driver_incoming: Vec::new(),
+            mass_driver_rotation: 90.0,
+            mass_driver_waiting: Vec::new(),
+            payload: None,
+            payload_progress: 0.0,
+            payload_rotation: 0.0,
+            payload_accum: Vec::new(),
+            door_open: false,
+            shield: 0.0,
+            light_color: -1_900_545,
+            memory: Vec::new(),
+            duct_rec_dir: 0,
+            unloader_offset: 0,
+            conveyor_items: Vec::new(),
+            rotation: 0,
+            message: None,
+            factory_command: None,
+            stack_state: 0,
+            stack_link: -1,
+            stack_cooldown: 0.0,
+            generation: 0,
+        },
+    );
+
+    // Wrong length (canvas wants exactly 54 pixel bytes) is rejected.
+    assert!(!apply_tile_config(
+        &painter,
+        &world,
+        pos,
+        &[14, 0, 0, 0, 53]
+    ));
+    // The exact-size payload is accepted and stored verbatim.
+    let mut pixels = vec![7u8; 54];
+    pixels[0] = 3;
+    let mut config = vec![14, 0, 0, 0, 54];
+    config.extend_from_slice(&pixels);
+    assert!(apply_tile_config(&painter, &world, pos, &config));
+    let tile = world.tiles.get(&pos).unwrap();
+    assert_eq!(tile.config, config);
+    drop(tile);
+    assert_eq!(
+        crate::network::buildings::snapshot::canvas_data(&world.tiles.get(&pos).unwrap().clone()),
+        Some(pixels.as_slice())
+    );
+}
+
+#[test]
 fn pvp_ownership_blocks_cross_team_config_and_break() {
     // SOL-002: a player may only configure/rotate/demolish their own
     // team's buildings. The legacy `tile.team != 1` check wrongly
@@ -8746,6 +11754,8 @@ fn pvp_ownership_blocks_cross_team_config_and_break() {
     world.tiles.insert(
         pos,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: pos,
             block: 270,
             team: 5,
@@ -8802,6 +11812,8 @@ fn pvp_ownership_blocks_cross_team_config_and_break() {
     world.tiles.insert(
         pos1,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: pos1,
             block: 270,
             team: 1,
@@ -8930,6 +11942,7 @@ fn request_block_snapshot_visibility_is_scoped_to_actor_team() {
     let pending = PendingBuild {
         position: pos,
         block: 216,
+        previous_block: 0,
         rotation: 0,
         config: Vec::new(),
         occupied: vec![pos],
@@ -9050,7 +12063,9 @@ fn unit_control_requires_friendly_alive_ai_unit_and_possession_rule() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: None,
+        drown_progress: 0.0,
     };
     world.enemies.insert(ally.id, ally);
     // Team-5 player can control their own AI unit.
@@ -9442,6 +12457,7 @@ fn controller_save_tag9_roundtrip_matches_java_afterread_semantics() {
     let (world, _connections, _, _) = legacy_weapons_test_world();
     let wall_pos = (8 << 16) | 8;
     let mut wall = crate::network::world::DynamicTile {
+        logic_control: None,
         position: wall_pos,
         block: 22,
         team: 6,
@@ -9583,8 +12599,9 @@ fn controller_save_logic_tag3_only_persists_processor_pos() {
     let (world, _connections, _, _) = legacy_weapons_test_world();
     let proc_pos = (8 << 16) | 8;
     let mut proc = crate::network::world::DynamicTile {
+        logic_control: None,
         position: proc_pos,
-        block: 431,
+        block: 432,
         team: 1,
         ..Default::default()
     };
@@ -9847,6 +12864,8 @@ fn power_node_config_write_updates_power_links_both_directions() {
                                   // (not adjacent to the laser, so only the node link reaches it)
     for (position, block) in [(node, 302), (laser, 327), (solar, 313)] {
         let mut tile = DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position,
             block,
             rotation: 0,
@@ -10006,6 +13025,7 @@ fn constructions_advance_only_while_builder_active() {
     let active = PendingBuild {
         position: pos,
         block: 257, // conveyor: 1 copper, fast build
+        previous_block: 0,
         rotation: 0,
         config: vec![0],
         occupied: vec![pos],
@@ -10102,6 +13122,42 @@ fn attack_mode_adds_enemy_cores_as_spawn_points() {
     // Idempotent.
     extend_attack_spawns(&mut spawns, &buildings);
     assert_eq!(spawns.len(), 3);
+}
+
+#[test]
+fn attack_mode_suppresses_wave_count_victory_and_uses_last_team_standing() {
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    world
+        .game_state
+        .start_hosting("modes".into(), GameMode::Pvp);
+    // Pvp preset: attackMode on, winWave reachable.
+    {
+        let mut rules = world.wave_rules.read().clone();
+        rules.attack_mode = true;
+        rules.win_wave = 3;
+        rules.waves_enabled = true;
+        rules.wave_timer = true;
+        *world.wave_rules.write() = rules;
+    }
+    *world.game_state.mode.write() = GameMode::Pvp;
+    world.game_state.wave.store(5, Ordering::Relaxed);
+
+    // Wave 5 >= winWave 3 with an enemy still alive: NO wave-count victory
+    // (Logic.checkGameState gates it on !attackMode and no enemies).
+    world.enemies.insert(
+        1,
+        legacy_weapons_make_enemy(1, DAGGER, core_x + 100.0, core_y, DAGGER.health),
+    );
+    simulate_waves_and_enemies(&world, &connections, 30.0);
+    assert!(
+        !world.game_state.game_over.load(Ordering::Relaxed),
+        "attackMode must suppress wave-count victory"
+    );
+
+    // Last team standing: clear every team-2 unit -> team 1 wins.
+    world.enemies.clear();
+    simulate_waves_and_enemies(&world, &connections, 1.0);
+    assert!(world.game_state.game_over.load(Ordering::Relaxed));
 }
 
 #[test]
@@ -10355,6 +13411,11 @@ fn pvp_shot_damages_enemy_core_not_own() {
         pierce_buildings: 0,
         spawn_reign_frags: false,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         enemy_target_position: None,
         enemy_target_core: false,
         apply_direct_on_impact: false,
@@ -10369,6 +13430,7 @@ fn pvp_shot_damages_enemy_core_not_own() {
         source_position: None,
         damage_interval: None,
         damage_timer: 0.0,
+        collided: Vec::new(),
     };
     world.projectiles.insert(
         4_200_001,
@@ -10492,6 +13554,11 @@ fn pvp_projectiles_damage_players_of_other_teams_only() {
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: false,
             apply_direct_on_impact: false,
@@ -10506,6 +13573,7 @@ fn pvp_projectiles_damage_players_of_other_teams_only() {
             source_position: None,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     assert!(simulate_pvp_player_damage(&world, &connections));
@@ -10530,6 +13598,11 @@ fn pvp_projectiles_damage_players_of_other_teams_only() {
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: false,
             apply_direct_on_impact: false,
@@ -10544,6 +13617,7 @@ fn pvp_projectiles_damage_players_of_other_teams_only() {
             source_position: None,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     assert!(!simulate_pvp_player_damage(&world, &connections));
@@ -10701,8 +13775,8 @@ fn attack_mode_waves_destroy_player_core_and_game_over() {
     assert!(!world.game_state.game_over.load(Ordering::Relaxed));
     // Waves are active in attack mode: the dagger fires its bolt at the
     // core (core_world target) and the impact destroys it.
-    simulate_waves_and_enemies(&world, &connections, DAGGER.attack_reload);
-    assert_eq!(world.projectiles.len(), 1);
+    simulate_waves_and_enemies(&world, &connections, DAGGER.attack_reload * 2.0);
+    assert_eq!(world.projectiles.len(), 2);
     assert!(simulate_projectiles(&world, &connections, 0.0));
     assert!(world.game_state.game_over.load(Ordering::Relaxed));
     assert!(world.persistence_dirty.load(Ordering::Relaxed));
@@ -10909,17 +13983,20 @@ fn legacy_units_fire_authoritative_projectiles_without_instant_damage() {
     // per shot. After the fire call the core must be untouched: the attack
     // is converted into projectiles instead of snapshot.attack_damage.
     type LegacyWeaponCase = (i16, f32, f32, &'static [(i16, usize, f32)]);
+    // Mirrored weapons fire BOTH mounts every declared*2 ticks (vanilla
+    // UnitType.init doubles Weapon.reload for the flipped copy), so their
+    // windows are doubled and their burst counts are mounts x shots.
     let cases: &[LegacyWeaponCase] = &[
-        (3, 100.0, 45.0, &[(10, 3, 70.0), (9, 6, 20.0)]),
+        (3, 100.0, 90.0, &[(10, 6, 70.0), (9, 12, 20.0)]),
         (9, 100.0, 350.0, &[(20, 1, 560.0)]),
-        (11, 90.0, 9.0, &[(22, 1, 13.0)]),
-        (12, 60.0, 14.0, &[(23, 1, 23.0)]),
-        (13, 100.0, 45.0, &[(26, 1, 12.0), (25, 10, 40.0)]),
-        (14, 100.0, 30.0, &[(27, 2, 110.0)]),
+        (11, 90.0, 18.0, &[(22, 2, 13.0)]),
+        (12, 60.0, 28.0, &[(23, 2, 23.0)]),
+        (13, 100.0, 90.0, &[(26, 2, 12.0), (25, 20, 40.0)]),
+        (14, 100.0, 60.0, &[(27, 4, 110.0)]),
         (15, 100.0, 80.0, &[(30, 3, 9.0)]),
-        (19, 100.0, 45.0, &[(36, 1, 115.0), (35, 8, 15.0)]),
-        (21, 100.0, 30.0, &[(37, 1, 12.0)]),
-        (22, 100.0, 24.0, &[(38, 1, 10.0), (39, 1, 8.0)]),
+        (19, 100.0, 90.0, &[(36, 2, 115.0), (35, 16, 15.0)]),
+        (21, 100.0, 60.0, &[(37, 2, 12.0)]),
+        (22, 100.0, 48.0, &[(38, 2, 10.0), (39, 2, 8.0)]),
         (23, 100.0, 55.0, &[(40, 1, 154.0)]),
     ];
     for (unit_type, distance, delta, expected) in cases {
@@ -10968,7 +14045,7 @@ fn legacy_units_fire_authoritative_projectiles_without_instant_damage() {
         3_000_011,
         legacy_weapons_make_enemy(3_000_011, spec, core_x + 90.0, core_y, spec.health),
     );
-    simulate_waves_and_enemies(&world, &connections, 9.0);
+    simulate_waves_and_enemies(&world, &connections, 18.0);
     let slag = world.projectiles.iter().next().unwrap().value().clone();
     assert_eq!(slag.bullet_id, 22);
     assert_eq!(slag.status_effect, 8); // melting
@@ -10981,7 +14058,7 @@ fn legacy_units_fire_authoritative_projectiles_without_instant_damage() {
         3_000_012,
         legacy_weapons_make_enemy(3_000_012, spec, core_x + 60.0, core_y, spec.health),
     );
-    simulate_waves_and_enemies(&world, &connections, 14.0);
+    simulate_waves_and_enemies(&world, &connections, 28.0);
     let sap = world.projectiles.iter().next().unwrap().value().clone();
     assert_eq!(sap.bullet_id, 23);
     assert_eq!(sap.status_effect, 9); // sapped
@@ -11003,7 +14080,10 @@ fn legacy_units_fire_authoritative_projectiles_without_instant_damage() {
             uuid: "sap-target".into(),
             player_id: 1_600_001,
             unit_id: 2_600_001,
-            x: core_x,
+            // Between the spiroct and its core target, clear of the core
+            // footprint: both mirrored mounts' beams converge past this
+            // point, so the rider takes both hits (2 x 23).
+            x: core_x + 30.0,
             y: core_y,
             health: 150.0,
             shield: 0.0,
@@ -11015,12 +14095,36 @@ fn legacy_units_fire_authoritative_projectiles_without_instant_damage() {
             team: 1,
         },
     );
-    simulate_waves_and_enemies(&world, &connections, 14.0);
+    simulate_waves_and_enemies(&world, &connections, 28.0);
+    for entry in world.projectiles.iter() {
+        let pr = entry.value();
+        eprintln!(
+            "PROBE b={} s=({},{}) t=({},{}) rem={}",
+            pr.bullet_id, pr.source_x, pr.source_y, pr.target_x, pr.target_y, pr.remaining_ticks
+        );
+    }
     assert!(simulate_projectiles(&world, &connections, 40.0));
-    assert_eq!(world.players.get(&2_600_001).unwrap().health, 127.0);
+    eprintln!(
+        "PROBE post: player={} core={} status={} shooter={}",
+        world.players.get(&2_600_001).unwrap().health,
+        *world.game_state.core_health.read(),
+        world.players.get(&2_600_001).unwrap().status_effect,
+        world.enemies.get(&spiroct_id).unwrap().health
+    );
+    // Both mirrored mounts converge their sap beams on the aim point: the
+    // rider takes both hits (2 x 23) and both beams pierce into the core.
+    assert_eq!(world.players.get(&2_600_001).unwrap().health, 104.0);
     assert_eq!(world.players.get(&2_600_001).unwrap().status_effect, 9);
-    assert_eq!(*world.game_state.core_health.read(), 6_000.0 - 23.0);
-    assert_eq!(world.enemies.get(&spiroct_id).unwrap().health, 511.5);
+    assert_eq!(*world.game_state.core_health.read(), 6_000.0 - 46.0);
+    // SapBulletType heals inside the damage application: both beams hit.
+    assert_eq!(world.enemies.get(&spiroct_id).unwrap().health, 523.0);
+
+    // NOTE: the lifesteal is gated on the impact actually reaching a
+    // target (SapBulletType.applyDamage heals inside the damage
+    // application). A beam whose victim dies mid-flight now heals nothing;
+    // there is no reachable all-miss scenario here because the port's
+    // beams always fly to a live target point (core included, which the
+    // official SapBulletType also treats as a valid healing hit).
 }
 
 #[test]
@@ -11056,7 +14160,9 @@ fn legacy_units_allied_volleys_match_official_tables() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: None,
+        drown_progress: 0.0,
     };
     let count = |fire: &[AlliedWeaponFire], bullet_id: i16| {
         fire.iter()
@@ -11068,32 +14174,32 @@ fn legacy_units_allied_volleys_match_official_tables() {
 
     let mut scepter = make(1, enemy_spec(3).unwrap(), 9_000.0);
     scepter.team = 1;
-    let fire = collect_allied_weapon_fire(&mut scepter, 45.0, 50.0).unwrap();
+    let fire = collect_allied_weapon_fire(&mut scepter, 90.0, 50.0).unwrap();
     assert_eq!((count(&fire, 10), count(&fire, 9)), (1, 6));
 
     let mut spiroct = make(2, enemy_spec(12).unwrap(), 1_000.0);
     spiroct.team = 1;
-    let fire = collect_allied_weapon_fire(&mut spiroct, 36.0, 50.0).unwrap();
+    let fire = collect_allied_weapon_fire(&mut spiroct, 72.0, 50.0).unwrap();
     assert_eq!((count(&fire, 23), count(&fire, 24)), (2, 2));
 
     let mut arkyid = make(3, enemy_spec(13).unwrap(), 8_000.0);
     arkyid.team = 1;
-    let fire = collect_allied_weapon_fire(&mut arkyid, 45.0, 50.0).unwrap();
+    let fire = collect_allied_weapon_fire(&mut arkyid, 90.0, 50.0).unwrap();
     assert_eq!((count(&fire, 26), count(&fire, 25)), (1, 10));
 
     let mut toxopid = make(4, enemy_spec(14).unwrap(), 22_000.0);
     toxopid.team = 1;
-    let fire = collect_allied_weapon_fire(&mut toxopid, 240.0, 50.0).unwrap();
-    assert_eq!((count(&fire, 27), count(&fire, 28)), (8, 1));
+    let fire = collect_allied_weapon_fire(&mut toxopid, 480.0, 50.0).unwrap();
+    assert_eq!((count(&fire, 27), count(&fire, 28)), (8, 2));
 
     let mut eclipse = make(5, enemy_spec(19).unwrap(), 22_000.0);
     eclipse.team = 1;
-    let fire = collect_allied_weapon_fire(&mut eclipse, 45.0, 50.0).unwrap();
+    let fire = collect_allied_weapon_fire(&mut eclipse, 90.0, 50.0).unwrap();
     assert_eq!((count(&fire, 36), count(&fire, 35)), (1, 8));
 
     let mut mega = make(6, enemy_spec(22).unwrap(), 460.0);
     mega.team = 1;
-    let fire = collect_allied_weapon_fire(&mut mega, 30.0, 50.0).unwrap();
+    let fire = collect_allied_weapon_fire(&mut mega, 60.0, 50.0).unwrap();
     assert_eq!((count(&fire, 38), count(&fire, 39)), (1, 2));
 
     // Single-weapon legacy units resolve through the shared volley table.
@@ -11107,6 +14213,26 @@ fn legacy_units_allied_volleys_match_official_tables() {
         let volley = enemy_projectile_volley(unit_type).unwrap();
         assert_eq!(volley.bullet_id, bullet_id);
         assert_eq!(volley.direct_damage, damage);
+    }
+
+    // Homing gates follow BulletType.homingPower from the desktop.jar dump
+    // (homingRange alone defaults to 50f on EVERY bullet and must never be
+    // used as the gate): only bullets 32/33/37/42/46/47/52 home among the
+    // modeled volleys; dagger(6)/mace(7)/risso-gun(41)/minke(43,44)/
+    // bryde-artillery(45)/sei-cannon(48)/cyerce-missile(56) are ballistic.
+    for (unit_type, homing_range) in [
+        (0i16, 0.0f32), // dagger, bullet 6
+        (1, 0.0),       // mace, bullet 7
+        (9, 0.0),       // corvus laser, bullet 20
+        (17, 60.0),     // zenith missile pair, bullet 32
+        (21, 50.0),     // poly missile, bullet 37
+    ] {
+        let volley = enemy_projectile_volley(unit_type)
+            .unwrap_or_else(|| panic!("no volley for unit {unit_type}"));
+        assert_eq!(
+            volley.homing_range, homing_range,
+            "homing range of unit {unit_type} volley"
+        );
     }
 
     // Beam/sap lengths and lifesteal strengths match UnitTypes.java.
@@ -11126,13 +14252,14 @@ fn legacy_units_allied_volleys_match_official_tables() {
         (0.5, 0.8, 0.85)
     );
 
-    // Dual-mount table entries for the legacy units.
+    // Dual-mount table entries for the legacy units. Cycles are the vanilla
+    // per-mount periods: declared reload x mount count (UnitType.init).
     assert!(naval_weapon_volleys(12)
-        .is_some_and(|((a, _), (b, _))| { (a - 14.0).abs() < 0.001 && (b - 18.0).abs() < 0.001 }));
+        .is_some_and(|((a, _), (b, _))| { (a - 28.0).abs() < 0.001 && (b - 36.0).abs() < 0.001 }));
     assert!(naval_weapon_volleys(14)
-        .is_some_and(|((a, _), (b, _))| { (a - 30.0).abs() < 0.001 && (b - 210.0).abs() < 0.001 }));
+        .is_some_and(|((a, _), (b, _))| { (a - 60.0).abs() < 0.001 && (b - 210.0).abs() < 0.001 }));
     assert!(naval_weapon_volleys(22)
-        .is_some_and(|((a, _), (b, _))| { (a - 24.0).abs() < 0.001 && (b - 15.0).abs() < 0.001 }));
+        .is_some_and(|((a, _), (b, _))| { (a - 48.0).abs() < 0.001 && (b - 30.0).abs() < 0.001 }));
 }
 
 #[test]
@@ -11143,6 +14270,8 @@ fn legacy_heal_bolts_repair_allied_buildings_and_quad_splash_heals_allies() {
     world.tiles.insert(
         wall_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: wall_position,
             block: 216,
             rotation: 0,
@@ -11245,7 +14374,9 @@ fn legacy_heal_bolts_repair_allied_buildings_and_quad_splash_heals_allies() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_time: 0.0,
             status_agg: None,
+            drown_progress: 0.0,
         },
     );
     // The mega bolt already filled the wall; damage it again so the quad
@@ -11321,11 +14452,20 @@ fn vela_beam_volley_matches_official_and_repair_beam_heals_allies() {
     assert_eq!(beam.team, 2);
     assert_eq!(beam.pierce_units, u8::MAX);
     assert_eq!(beam.total_ticks, 160.0);
-    // The 180-length beam pierces the player on its way to the core and
-    // the direct impact reaches the core (apply_direct_on_impact).
-    assert!(simulate_projectiles(&world, &connections, 160.0));
-    assert_eq!(world.players.get(&2_600_000).unwrap().health, 115.0);
+    // The 180-length beam pierces the player on its way to the core.
+    // Official ContinuousBulletType.update deals `damage` every
+    // `damageInterval` (5 ticks) for the whole 160-tick lifetime, so each
+    // 5-tick window costs both the pierced player and the core exactly one
+    // 35-damage application (Java Damage.collideLine per interval).
+    assert!(simulate_projectiles(&world, &connections, 5.0));
+    assert_eq!(world.players.get(&2_600_000).unwrap().health, 150.0 - 35.0);
     assert_eq!(*world.game_state.core_health.read(), 6_000.0 - 35.0);
+    assert!(simulate_projectiles(&world, &connections, 5.0));
+    assert_eq!(world.players.get(&2_600_000).unwrap().health, 150.0 - 70.0);
+    assert_eq!(*world.game_state.core_health.read(), 6_000.0 - 70.0);
+    // The remaining 150 ticks keep applying 35 every interval: 30 more hits.
+    assert!(simulate_projectiles(&world, &connections, 150.0));
+    assert_eq!(*world.game_state.core_health.read(), 6_000.0 - 32.0 * 35.0);
     world.enemies.clear();
     world.players.clear();
     world.projectiles.clear();
@@ -11365,6 +14505,8 @@ fn vela_beam_volley_matches_official_and_repair_beam_heals_allies() {
     world.tiles.insert(
         wall_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: wall_position,
             block: 216,
             rotation: 0,
@@ -11441,6 +14583,11 @@ fn oct_force_field_absorbs_damage_and_regenerates() {
         pierce_buildings: 0,
         spawn_reign_frags: false,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         enemy_target_position: None,
         enemy_target_core: false,
         apply_direct_on_impact: true,
@@ -11455,6 +14602,7 @@ fn oct_force_field_absorbs_damage_and_regenerates() {
         source_position: None,
         damage_interval: None,
         damage_timer: 0.0,
+        collided: Vec::new(),
     };
     // An allied bullet expiring inside the 140 radius is absorbed by the
     // area shield: the projectile is consumed and the field loses 9 hp.
@@ -11615,6 +14763,11 @@ fn allied_sap_lifesteal_heals_the_shooter() {
         pierce_buildings: 0,
         spawn_reign_frags: false,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         enemy_target_position: None,
         enemy_target_core: false,
         apply_direct_on_impact: true,
@@ -11629,6 +14782,7 @@ fn allied_sap_lifesteal_heals_the_shooter() {
         source_position: None,
         damage_interval: None,
         damage_timer: 0.0,
+        collided: Vec::new(),
     };
     // spiroct-weapon: 23 damage * sapStrength 0.5 = 11.5 healed to the
     // allied shooter; the enemy dagger takes the full 23.
@@ -11655,6 +14809,91 @@ fn allied_sap_lifesteal_heals_the_shooter() {
     assert!(simulate_projectiles(&world, &connections, 5.0));
     assert_eq!(world.enemies.get(&3_012_002).unwrap().health, 500.0);
     assert_eq!(world.enemies.get(&3_012_001).unwrap().health, 25.75);
+}
+
+#[test]
+fn sap_lifesteal_skips_dead_players_and_caps_heal_by_target_health() {
+    // Official SapBulletType.applyDamage heals the owner by
+    // min(target.health, damage) * sapStrength INSIDE the collision, so a
+    // target that is already dead heals nothing and a wounded target caps
+    // the heal at its remaining health.
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    let spiroct = enemy_spec(12).unwrap();
+    world.enemies.insert(
+        3_013_000,
+        legacy_weapons_make_enemy(3_013_000, spiroct, core_x + 60.0, core_y, 500.0),
+    );
+    let sap = |target_id: i32, damage: f32| Projectile {
+        target_id,
+        shooter_id: 3_013_000,
+        team: 2,
+        bullet_id: 23,
+        damage,
+        splash_damage: 0.0,
+        splash_radius: 0.0,
+        status_effect: 9,
+        status_duration: 180.0,
+        pierce_units: u8::MAX,
+        pierce_buildings: 0,
+        spawn_reign_frags: false,
+        homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
+        enemy_target_position: None,
+        enemy_target_core: false,
+        apply_direct_on_impact: true,
+        armor_multiplier: 1.0,
+        remaining_ticks: 5.0,
+        total_ticks: 5.0,
+        source_x: core_x + 60.0,
+        source_y: core_y,
+        target_x: core_x,
+        target_y: core_y,
+        lifetime_scale: 1.0,
+        source_position: None,
+        damage_interval: None,
+        damage_timer: 0.0,
+        collided: Vec::new(),
+    };
+    // Target marked dead mid-flight: the beam expires without a collision
+    // and the shooter never heals.
+    world.players.insert(
+        2_013_000,
+        PlayerCombatState {
+            uuid: "sap-dead-target".into(),
+            player_id: 1_013_000,
+            unit_id: 2_013_000,
+            x: core_x,
+            y: core_y,
+            health: 150.0,
+            shield: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            statuses: Vec::new(),
+            dead: true,
+            respawn_timer: 1.0,
+            team: 1,
+        },
+    );
+    world.projectiles.insert(4_013_001, sap(2_013_000, 23.0));
+    // No collision -> no world change at all.
+    assert!(!simulate_projectiles(&world, &connections, 5.0));
+    assert_eq!(world.enemies.get(&3_013_000).unwrap().health, 500.0);
+
+    // Wounded live target: the heal is capped by the pre-hit health
+    // (min(10, 23) * 0.5 = 5), not by the full beam damage.
+    {
+        let mut player = world.players.get_mut(&2_013_000).unwrap();
+        player.dead = false;
+        player.health = 10.0;
+    }
+    world.projectiles.insert(4_013_002, sap(2_013_000, 23.0));
+    assert!(simulate_projectiles(&world, &connections, 5.0));
+    let shooter = world.enemies.get(&3_013_000).unwrap();
+    assert!((shooter.health - 505.0).abs() < 0.001);
 }
 
 #[test]
@@ -11699,11 +14938,14 @@ fn scepter_burst_shot_delay_spaces_impacts_by_four_ticks() {
     // The burst impacts are spaced 4 ticks apart: each step hits exactly
     // one 70-damage bolt.
     assert!(simulate_projectiles(&world, &connections, 12.5));
-    assert_eq!(world.enemies.get(&3_003_000).unwrap().health, 930.0);
+    // Each bolt impact also walks the official scepter lightning chains
+    // (2 roots x length 6 -> 3 segments of 20); with this geometry two
+    // segments land on the same target per impact: 70 + 2 x 20.
+    assert_eq!(world.enemies.get(&3_003_000).unwrap().health, 890.0);
     assert!(simulate_projectiles(&world, &connections, 4.0));
-    assert_eq!(world.enemies.get(&3_003_000).unwrap().health, 860.0);
+    assert_eq!(world.enemies.get(&3_003_000).unwrap().health, 780.0);
     assert!(simulate_projectiles(&world, &connections, 4.0));
-    assert_eq!(world.enemies.get(&3_003_000).unwrap().health, 790.0);
+    assert_eq!(world.enemies.get(&3_003_000).unwrap().health, 670.0);
     assert!(world.projectiles.is_empty());
 }
 
@@ -11724,6 +14966,11 @@ fn toxopid_cannon_spawns_nine_fragments() {
         pierce_buildings: 0,
         spawn_reign_frags: false,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         enemy_target_position: None,
         enemy_target_core: false,
         apply_direct_on_impact: true,
@@ -11738,6 +14985,7 @@ fn toxopid_cannon_spawns_nine_fragments() {
         source_position: None,
         damage_interval: None,
         damage_timer: 0.0,
+        collided: Vec::new(),
     };
     // Enemy toxopid-cannon: on expiry it spawns the official 9 fragments
     // (bullet 29, 30 damage, splash 40/70, sapped 600).
@@ -11786,6 +15034,8 @@ fn corvus_beam_heals_allied_building_twenty_five_percent() {
     let wall_max = crate::game::content::block_health(216);
     let wall_position = (45 << 16) | 100;
     let wall = DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         position: wall_position,
         block: 216,
         rotation: 0,
@@ -11843,6 +15093,11 @@ fn corvus_beam_heals_allied_building_twenty_five_percent() {
         pierce_buildings: 0,
         spawn_reign_frags: false,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         enemy_target_position: Some(position),
         enemy_target_core: false,
         apply_direct_on_impact: true,
@@ -11857,6 +15112,7 @@ fn corvus_beam_heals_allied_building_twenty_five_percent() {
         source_position: None,
         damage_interval: None,
         damage_timer: 0.0,
+        collided: Vec::new(),
     };
     // An allied beam reaching an allied damaged wall heals 25% of max.
     world.projectiles.insert(4_020_001, beam(wall_position, 1));
@@ -11870,6 +15126,8 @@ fn corvus_beam_heals_allied_building_twenty_five_percent() {
     world.tiles.insert(
         enemy_wall_position,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: enemy_wall_position,
             block: 216,
             rotation: 0,
@@ -11928,16 +15186,20 @@ fn atrax_ignores_burning_and_melting_statuses() {
     assert!(unit_immune_to_status(11, 8));
     assert!(!unit_immune_to_status(11, 9));
     assert!(!unit_immune_to_status(0, 1));
-    // Official UnitTypes immunities (JAR 158.1, round-73 A5): mace/vela/
-    // atrax + precept/vanquish/conquer are immune to burning (atrax and
-    // 40/41/42 also to melting). navanax (34) has NO immunity writes in
-    // UnitTypes$35 and naval units (25-29) only receive wet — they CAN
-    // burn (resistance comes from liquid conversion, not hard immunity).
+    // Official UnitTypes immunities (159.7 source): mace/vela/atrax/
+    // navanax + precept/vanquish/conquer are immune to burning (atrax,
+    // 40/41/42 and the Neoplasm units 56/57 also to melting). Naval units
+    // (25-29) only receive wet — they CAN burn (resistance comes from
+    // liquid conversion, not hard immunity).
     assert!(unit_immune_to_status(1, 1));
     assert!(unit_immune_to_status(8, 1));
     assert!(
-        !unit_immune_to_status(34, 1),
-        "navanax is NOT immune to burning (JAR)"
+        unit_immune_to_status(34, 1),
+        "navanax is immune to burning (UnitTypes.java)"
+    );
+    assert!(
+        unit_immune_to_status(56, 8) && unit_immune_to_status(57, 1),
+        "Neoplasm units are immune to burning+melting"
     );
     assert!(
         !unit_immune_to_status(25, 1),
@@ -11972,6 +15234,10 @@ fn atrax_ignores_burning_and_melting_statuses() {
         "navanax is NOT immune to melting"
     );
     assert!(
+        !unit_immune_to_status(56, 9) && !unit_immune_to_status(57, 20),
+        "Neoplasm immunity covers only burning+melting"
+    );
+    assert!(
         !unit_immune_to_status(25, 9),
         "naval is not immune to sapped"
     );
@@ -11984,7 +15250,7 @@ fn atrax_ignores_burning_and_melting_statuses() {
     );
     world.enemies.insert(
         3_011_001,
-        legacy_weapons_make_enemy(3_011_001, DAGGER, core_x + 30.0, core_y, 150.0),
+        legacy_weapons_make_enemy(3_011_001, DAGGER, core_x + 20.0, core_y, 150.0),
     );
     let status_projectile = |damage: f32, status: i16, splash: bool| Projectile {
         target_id: 3_011_000,
@@ -12000,20 +15266,26 @@ fn atrax_ignores_burning_and_melting_statuses() {
         pierce_buildings: 0,
         spawn_reign_frags: false,
         homing_range: 0.0,
+        homing_power: 0.0,
+        homing_delay: -1.0,
+        collides_air: true,
+        collides_ground: true,
+        heals: false,
         enemy_target_position: None,
         enemy_target_core: false,
         apply_direct_on_impact: true,
         armor_multiplier: 1.0,
         remaining_ticks: 1.0,
         total_ticks: 1.0,
-        source_x: core_x + 50.0,
-        source_y: core_y,
-        target_x: core_x + 15.0,
+        source_x: core_x,
+        source_y: core_y - 50.0,
+        target_x: core_x,
         target_y: core_y,
         lifetime_scale: 1.0,
         source_position: None,
         damage_interval: None,
         damage_timer: 0.0,
+        collided: Vec::new(),
     };
     // Burning (1) direct hit: the atrax takes the damage but never the
     // status; the control dagger receives both the hit and the status.
@@ -12104,7 +15376,7 @@ fn item_bridge_transfers_across_linked_endpoints() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -12114,6 +15386,7 @@ fn item_bridge_transfers_across_linked_endpoints() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_000),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -12124,10 +15397,12 @@ fn item_bridge_transfers_across_linked_endpoints() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("unused-bridge-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -12140,14 +15415,23 @@ fn item_bridge_transfers_across_linked_endpoints() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let tile = |position: i32, block: i16, rotation: u8, config: Vec<u8>| DynamicTile {
+        logic_control: None,
+        payload_inventory: Vec::new(),
         enabled: true,
         message: None,
         position,
@@ -12298,7 +15582,7 @@ fn client_command_dispatch_votekick_requires_players() {
         base_buildings: DashMap::new(),
         floors: vec![0; total],
         overlays: vec![0; total],
-        enemy_spawns: map.enemy_spawns(),
+        enemy_spawns: parking_lot::RwLock::new(map.enemy_spawns()),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -12308,6 +15592,7 @@ fn client_command_dispatch_votekick_requires_players() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_001),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -12318,10 +15603,12 @@ fn client_command_dispatch_votekick_requires_players() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("client-command-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -12334,12 +15621,19 @@ fn client_command_dispatch_votekick_requires_players() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let connections = DashMap::new();
     let mut player = player();
@@ -12720,6 +16014,11 @@ fn pvp_projectiles_destroy_the_enemy_team_core() {
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: false,
             apply_direct_on_impact: false,
@@ -12734,6 +16033,7 @@ fn pvp_projectiles_destroy_the_enemy_team_core() {
             source_position: None,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     assert!(simulate_pvp_player_damage(&world, &connections));
@@ -12949,6 +16249,7 @@ fn construction_consumes_the_placing_players_team() {
     let pending = PendingBuild {
         position,
         block: 257, // conveyor: 1 copper
+        previous_block: 0,
         rotation: 0,
         config: vec![0],
         occupied: vec![position],
@@ -13101,12 +16402,13 @@ fn team_items_survive_a_save_and_load_round_trip() {
         &cores,
         &logic_flags,
         &crate::network::buildings::puddles::PuddleSystem::new(),
+        String::new(),
     )
     .unwrap();
 
-    // The saved file carries revision 14 (round 73) and the per-team block.
+    // The saved file carries revision 15 (ASTRA R02 live Rules JSON) and the per-team block.
     let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(json["version"], 14);
+    assert_eq!(json["version"], 15);
     assert_eq!(json["simulation_time"], 12_345.0);
     assert_eq!(json["logic_flags"][0][0], "enemy_spotted");
     assert_eq!(json["logic_flags"][0][1], 1.0);
@@ -13184,13 +16486,13 @@ fn sol002_team_cores_share_inventory_and_capacity() {
     world.game_state.team_items.get_mut(&5).unwrap()[0] = 7;
     // Both cores address TeamData.items, never independent inventories.
     assert_eq!(world.game_state.team_items.get(&5).unwrap()[0], 7);
-    assert_eq!(crate::network::economy::team_unit_cap(&world, 5), 40);
+    assert_eq!(crate::network::economy::team_unit_cap(&world, 5), 32);
     crate::network::world::unregister_team_core(&world, 5, 10 << 16 | 10);
     assert_eq!(
         crate::network::world::team_core_snapshot(&world, 5).len(),
         1
     );
-    assert_eq!(crate::network::economy::team_unit_cap(&world, 5), 32);
+    assert_eq!(crate::network::economy::team_unit_cap(&world, 5), 24);
     assert!(crate::network::world::registered_core_teams(&world).contains(&5));
 }
 
@@ -13208,7 +16510,7 @@ fn sol002_runtime_core_raises_cap_and_last_core_eliminates_team() {
             max_health: 100.0,
         },
     );
-    assert_eq!(crate::network::economy::team_unit_cap(&world, 7), 24);
+    assert_eq!(crate::network::economy::team_unit_cap(&world, 7), 16);
     crate::network::world::register_team_core(
         &world,
         7,
@@ -13219,7 +16521,7 @@ fn sol002_runtime_core_raises_cap_and_last_core_eliminates_team() {
             max_health: 100.0,
         },
     );
-    assert_eq!(crate::network::economy::team_unit_cap(&world, 7), 40);
+    assert_eq!(crate::network::economy::team_unit_cap(&world, 7), 32);
     crate::network::world::unregister_team_core(&world, 7, position);
     assert!(crate::network::world::registered_core_teams(&world).contains(&7));
     crate::network::world::unregister_team_core(&world, 7, position + 1);
@@ -13308,6 +16610,905 @@ fn set_mode_transition_is_transactional_and_preserves_map_rules() {
 }
 
 #[test]
+fn set_mode_set_rules_carries_the_target_sandbox_preset() {
+    // SetMode sends Call.setRules (119) with the *target* Gamemode.sandbox
+    // preset, built before committing world.wave_rules. It must not
+    // WorldDataBegin: that restream is the host-map path.
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    apply_game_mode_to_wave_rules(&mut world.wave_rules.write(), GameMode::Survival);
+    world.player_sessions.insert(2, player());
+    assert!(
+        !world.wave_rules.read().infinite_resources,
+        "live world is still survival"
+    );
+
+    let next_rules = mode_transition_rules(&world, GameMode::Sandbox).unwrap();
+    let json = client_visible_rules_json(&world, &next_rules).unwrap();
+    let streamed = parse_wave_rules(&json);
+    assert!(
+        streamed.infinite_resources,
+        "SetRules must carry sandbox infiniteResources: {json}"
+    );
+    assert!(
+        streamed.allow_edit_rules,
+        "SetRules must carry allowEditRules: {json}"
+    );
+    assert!(streamed.waves_enabled, "SetRules waves");
+    assert!(!streamed.wave_timer, "SetRules waveTimer");
+    assert!(
+        !streamed.instant_build,
+        "sandbox SetRules must not set instantBuild: {json}"
+    );
+
+    let frame = encode_set_rules_frame(&json).unwrap();
+    let packet = read_packet(std::io::Cursor::new(&frame[2..])).unwrap();
+    assert_eq!(packet[0], SET_RULES_PACKET_ID);
+    assert_ne!(packet[0], WORLD_DATA_BEGIN_PACKET_ID);
+
+    let stale = parse_wave_rules(
+        &crate::engine::world_stream::inspect_metadata(
+            &network_template_with_plans(&world).unwrap(),
+        )
+        .unwrap()
+        .rules,
+    );
+    assert!(
+        !stale.infinite_resources,
+        "reading live wave_rules during SetMode would still send survival"
+    );
+}
+
+#[test]
+fn r01_join_set_rules_and_msav_share_complete_live_rules() {
+    let (world, _, _, _) = legacy_weapons_test_world();
+    {
+        let mut rules = world.wave_rules.write();
+        rules.wait_enemies = true;
+        rules.unit_cap = 24;
+        rules.win_wave = 40;
+        rules.unit_build_speed_multiplier = 2.0;
+        rules
+            .team_rules
+            .entry(1)
+            .or_default()
+            .unit_health_multiplier = 3.0;
+    }
+    let live = world.wave_rules.read().clone();
+    let join = client_visible_rules_json(&world, &live).unwrap();
+    let msav = crate::engine::msav_roundtrip::rules_json_from_world(&world);
+    let join_rules = parse_wave_rules(&join);
+    let msav_rules = parse_wave_rules(&msav);
+    assert!(join_rules.wait_enemies);
+    assert_eq!(join_rules.unit_cap, 24);
+    assert_eq!(join_rules.win_wave, 40);
+    assert_eq!(join_rules.unit_build_speed_multiplier, 2.0);
+    assert_eq!(join_rules.team_rule(1).unit_health_multiplier, 3.0);
+    assert_eq!(join_rules.wait_enemies, msav_rules.wait_enemies);
+    assert_eq!(join_rules.unit_cap, msav_rules.unit_cap);
+    assert_eq!(join_rules.win_wave, msav_rules.win_wave);
+    assert_eq!(
+        join_rules.team_rule(1).unit_health_multiplier,
+        msav_rules.team_rule(1).unit_health_multiplier
+    );
+}
+
+#[test]
+fn r02_checkpoint_restores_live_wave_rules_before_map_defaults() {
+    let (world, _, _, _) = legacy_weapons_test_world();
+    {
+        let mut rules = world.wave_rules.write();
+        rules.wait_enemies = true;
+        rules.unit_cap = 24;
+        rules.wave_spacing = 120.0;
+        rules.unit_cost_multiplier = 3.0;
+    }
+    let path =
+        std::env::temp_dir().join(format!("mindustry-r02-rules-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    persist_tiles(
+        &path,
+        &world.tiles,
+        &world.game_state,
+        &world.enemies,
+        &world.base_buildings,
+        &world.player_profiles,
+        &world.building_commands,
+        &world.unit_orders,
+        &world.team_build_plans.read(),
+        (&world.cores, &world.team_core_lists),
+        &world.logic_flags,
+        &world.puddles,
+        checkpoint_rules_json(&world),
+    )
+    .unwrap();
+    let loaded = load_tiles(&path, Some((world.width, world.height))).unwrap();
+    assert!(
+        !loaded.rules_json.is_empty(),
+        "revision 15 must persist live Rules"
+    );
+    let (restored, _, _, _) = legacy_weapons_test_world();
+    assert!(!restored.wave_rules.read().wait_enemies);
+    apply_loaded_wave_rules(&restored, &loaded);
+    let rules = restored.wave_rules.read().clone();
+    assert!(rules.wait_enemies);
+    assert_eq!(rules.unit_cap, 24);
+    assert_eq!(rules.wave_spacing, 120.0);
+    assert_eq!(rules.unit_cost_multiplier, 3.0);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn w01_sandbox_holds_the_clock_and_still_simulates_units() {
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Sandbox;
+    apply_game_mode_to_wave_rules(&mut world.wave_rules.write(), GameMode::Sandbox);
+    assert!(world.wave_rules.read().waves_enabled);
+    assert!(!world.wave_rules.read().wave_timer);
+    *world.game_state.wave_time.write() = 14400.0;
+    let spacing = world.wave_rules.read().wave_spacing;
+    simulate_waves_and_enemies(&world, &connections, 60.0);
+    assert_eq!(
+        *world.game_state.wave_time.read(),
+        14400.0,
+        "sandbox without action must not tick the wave clock"
+    );
+
+    world.enemies.insert(
+        3_100_001,
+        legacy_weapons_make_enemy(3_100_001, DAGGER, core_x + 80.0, core_y, DAGGER.health),
+    );
+    simulate_waves_and_enemies(&world, &connections, 12.0);
+    let enemy = world.enemies.get(&3_100_001).unwrap();
+    assert!(
+        enemy.attack_reload > 0.0 || (enemy.x - (core_x + 80.0)).abs() > 0.01,
+        "sandbox still simulates an already-present enemy"
+    );
+    drop(enemy);
+
+    *world.game_state.wave_time.write() = 0.0;
+    simulate_waves_and_enemies(&world, &connections, 1.0);
+    assert_eq!(
+        *world.game_state.wave_time.read(),
+        spacing,
+        "manual sandbox wave restores waveSpacing"
+    );
+    simulate_waves_and_enemies(&world, &connections, 1.0);
+    assert_eq!(
+        *world.game_state.wave_time.read(),
+        spacing,
+        "a second tick without a new manual trigger must not fire another wave"
+    );
+}
+
+#[test]
+fn w02_spawns_amount_per_overlay_and_drops_missing_filters() {
+    use crate::network::units::MapSpawnGroup;
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.enemy_spawns.write() = vec![(8, 8), (48, 48)];
+    {
+        let mut rules = world.wave_rules.write();
+        rules.spawn_groups = vec![MapSpawnGroup {
+            unit_type: 0,
+            begin: 0,
+            end: u32::MAX,
+            spacing: 1,
+            max: 40,
+            scaling: 1.0,
+            shields: 0.0,
+            shield_scaling: 0.0,
+            unit_amount: 3,
+            spawn: -1,
+            effect: -1,
+            items: Vec::new(),
+            team: None,
+            payloads: Vec::new(),
+        }];
+    }
+    spawn_wave(&world, &crate::network::outbound::NOOP);
+    assert_eq!(world.enemies.len(), 6, "two overlays × amount 3");
+    world.enemies.clear();
+    world.game_state.wave.store(1, Ordering::Relaxed);
+    world.wave_rules.write().spawn_groups[0].spawn = (8 << 16) | 8;
+    spawn_wave(&world, &crate::network::outbound::NOOP);
+    assert_eq!(world.enemies.len(), 3, "filter to one overlay");
+    world.enemies.clear();
+    world.game_state.wave.store(1, Ordering::Relaxed);
+    world.wave_rules.write().spawn_groups[0].spawn = (20 << 16) | 20;
+    spawn_wave(&world, &crate::network::outbound::NOOP);
+    assert_eq!(
+        world.enemies.len(),
+        0,
+        "missing filter is zero, no fallback"
+    );
+}
+
+#[test]
+fn w06_mono_is_not_a_hostile_and_empty_overlays_still_advance_wave() {
+    use crate::network::units::MONO;
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    world.enemies.insert(
+        3_100_010,
+        legacy_weapons_make_enemy(3_100_010, MONO, core_x + 40.0, core_y, MONO.health),
+    );
+    assert_eq!(hostile_unit_count(&world), 0);
+    *world.enemy_spawns.write() = Vec::new();
+    let wave = world.game_state.wave.load(Ordering::Relaxed);
+    spawn_wave(&world, &crate::network::outbound::NOOP);
+    assert_eq!(world.game_state.wave.load(Ordering::Relaxed), wave + 1);
+    world.wave_rules.write().can_game_over = false;
+    world.wave_rules.write().win_wave = 1;
+    world.wave_rules.write().waves_enabled = true;
+    simulate_waves_and_enemies(&world, &connections, 1.0);
+    assert!(
+        !world.game_state.game_over.load(Ordering::Relaxed),
+        "canGameOver=false blocks wave victory"
+    );
+}
+
+#[test]
+fn w03_spawn_geometry_shockwave_and_spawn_effect() {
+    use crate::game::status::{STATUS_INVINCIBLE, STATUS_UNMOVING};
+    use crate::network::combat::unit_combat::effective_unit_speed;
+    use crate::network::units::MapSpawnGroup;
+
+    let (mut world, connections, _, _) = legacy_weapons_test_world();
+    world.width = 64;
+    world.height = 64;
+    *world.enemy_spawns.write() = vec![(8, 8)];
+    {
+        let mut rules = world.wave_rules.write();
+        rules.air_use_spawns = false;
+        rules.drop_zone_radius = 24.0;
+        rules.spawn_groups = vec![MapSpawnGroup {
+            unit_type: 15,
+            begin: 0,
+            end: u32::MAX,
+            spacing: 1,
+            max: 40,
+            scaling: 1.0,
+            shields: 0.0,
+            shield_scaling: 0.0,
+            unit_amount: 1,
+            spawn: (8 << 16) | 8,
+            effect: -1,
+            items: Vec::new(),
+            team: None,
+            payloads: Vec::new(),
+        }];
+    }
+    let (fx, fy) = crate::network::simulation::remaining::flyer_spawn_world(&world, 8, 8, 15);
+    assert!(
+        (fx - 0.0).abs() < 0.01 && (fy - 0.0).abs() < 0.01,
+        "air margin 0, got {fx},{fy}"
+    );
+    world.wave_rules.write().air_use_spawns = true;
+    let (ax, ay) = crate::network::simulation::remaining::flyer_spawn_world(&world, 8, 8, 15);
+    assert!((ax - 64.0).abs() < 0.01 && (ay - 64.0).abs() < 0.01);
+
+    world.wave_rules.write().air_use_spawns = false;
+    world.wave_rules.write().spawn_groups[0].unit_type = 0;
+    let inside = (8 << 16) | 8;
+    let outside = (40 << 16) | 40;
+    world.tiles.insert(
+        inside,
+        DynamicTile {
+            position: inside,
+            block: 16,
+            team: 1,
+            health: 400.0,
+            occupied: vec![inside],
+            ..Default::default()
+        },
+    );
+    world.tiles.insert(
+        outside,
+        DynamicTile {
+            position: outside,
+            block: 16,
+            team: 1,
+            health: 400.0,
+            occupied: vec![outside],
+            ..Default::default()
+        },
+    );
+    let mut inside_unit = legacy_weapons_make_enemy(3_100_020, DAGGER, 64.0, 64.0, DAGGER.health);
+    inside_unit.team = 1;
+    world.enemies.insert(3_100_020, inside_unit);
+    let mut outside_unit =
+        legacy_weapons_make_enemy(3_100_021, DAGGER, 400.0, 400.0, DAGGER.health);
+    outside_unit.team = 1;
+    world.enemies.insert(3_100_021, outside_unit);
+    spawn_wave(&world, &connections);
+    assert!(
+        world
+            .enemies
+            .get(&3_100_020)
+            .is_none_or(|unit| unit.health <= 0.0),
+        "rival unit inside drop zone dies"
+    );
+    assert!(
+        world
+            .enemies
+            .get(&3_100_021)
+            .is_some_and(|unit| unit.health > 0.0),
+        "rival unit outside drop zone lives"
+    );
+    assert!(
+        world
+            .tiles
+            .get(&inside)
+            .is_none_or(|tile| tile.health <= 0.0)
+            || world.tiles.get(&inside).is_none(),
+        "shockwave clears buildings inside dropZoneRadius"
+    );
+    assert!(
+        world
+            .tiles
+            .get(&outside)
+            .is_some_and(|tile| tile.health > 0.0),
+        "buildings outside the radius survive"
+    );
+    let spawned: Vec<_> = world
+        .enemies
+        .iter()
+        .filter(|unit| unit.team == 2)
+        .map(|unit| unit.clone())
+        .collect();
+    assert_eq!(spawned.len(), 1);
+    let unit = &spawned[0];
+    let overlay_x = 64.0;
+    let overlay_y = 64.0;
+    let offset = (unit.x - overlay_x).hypot(unit.y - overlay_y);
+    assert!(offset <= 16.001, "ground spread is radial 16, got {offset}");
+    assert!(
+        unit.statuses.iter().any(|s| s.effect == STATUS_UNMOVING),
+        "unmoving on spawn"
+    );
+    assert!(
+        unit.statuses.iter().any(|s| s.effect == STATUS_INVINCIBLE),
+        "invincible on spawn"
+    );
+    assert_eq!(effective_unit_speed(unit), 0.0, "tick 1 cannot move");
+    let incoming = crate::network::combat::apply_incoming_unit_damage(unit, 40.0, 1.0);
+    assert_eq!(incoming, 0.0, "tick 1 invincible");
+
+    let id = unit.id;
+    for _ in 0..29 {
+        simulate_enemy_statuses(&world, &connections, 1.0);
+    }
+    {
+        let live = world.enemies.get(&id).unwrap();
+        assert_eq!(effective_unit_speed(&live), 0.0, "tick 29 still unmoving");
+        assert_eq!(
+            crate::network::combat::apply_incoming_unit_damage(&live, 40.0, 1.0),
+            0.0,
+            "tick 29 still invincible"
+        );
+    }
+    simulate_enemy_statuses(&world, &connections, 1.0);
+    {
+        let live = world.enemies.get(&id).unwrap();
+        assert!(
+            effective_unit_speed(&live) > 0.0,
+            "tick 31 can move after unmoving expires"
+        );
+        assert_eq!(
+            crate::network::combat::apply_incoming_unit_damage(&live, 40.0, 1.0),
+            0.0,
+            "tick 31 still invincible"
+        );
+    }
+    for _ in 0..30 {
+        simulate_enemy_statuses(&world, &connections, 1.0);
+    }
+    let live = world.enemies.get(&id).unwrap();
+    let dealt = crate::network::combat::apply_incoming_unit_damage(&live, 40.0, 1.0);
+    assert!(dealt > 0.0, "tick 61 takes damage, got {dealt}");
+}
+
+#[test]
+fn w05_wave_effects_are_status_only() {
+    use crate::game::status::{STATUS_BOSS, STATUS_OVERDRIVE};
+    use crate::network::combat::unit_combat::effective_unit_speed;
+    use crate::network::units::MapSpawnGroup;
+
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.enemy_spawns.write() = vec![(8, 8)];
+    {
+        let mut rules = world.wave_rules.write();
+        rules.drop_zone_radius = 0.0;
+        rules.spawn_groups = vec![MapSpawnGroup {
+            unit_type: 0,
+            begin: 0,
+            end: u32::MAX,
+            spacing: 1,
+            max: 40,
+            scaling: 1.0,
+            shields: 0.0,
+            shield_scaling: 0.0,
+            unit_amount: 1,
+            spawn: -1,
+            effect: STATUS_BOSS,
+            items: Vec::new(),
+            team: None,
+            payloads: Vec::new(),
+        }];
+    }
+    spawn_wave(&world, &crate::network::outbound::NOOP);
+    let mut boss = world.enemies.iter().next().expect("boss dagger").clone();
+    assert_eq!(boss.health, DAGGER.health, "raw HP, not baked 1.5x");
+    assert_eq!(boss.move_speed, DAGGER.speed);
+    assert!(boss.statuses.iter().any(|s| s.effect == STATUS_BOSS));
+    boss.statuses.retain(|status| {
+        status.effect != crate::game::status::STATUS_UNMOVING
+            && status.effect != crate::game::status::STATUS_INVINCIBLE
+    });
+    let dealt = crate::network::combat::apply_incoming_unit_damage(&boss, 30.0, 1.0);
+    assert!(
+        (dealt - 20.0).abs() < 0.01,
+        "boss incoming /1.5, got {dealt}"
+    );
+    let encoded = serde_json::to_string(&boss).unwrap();
+    let loaded: EnemyUnit = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(loaded.health, DAGGER.health);
+    assert!(loaded.statuses.iter().any(|s| s.effect == STATUS_BOSS));
+
+    world.enemies.clear();
+    world.game_state.wave.store(1, Ordering::Relaxed);
+    world.wave_rules.write().spawn_groups[0].effect = STATUS_OVERDRIVE;
+    spawn_wave(&world, &crate::network::outbound::NOOP);
+    let mut from_wave = world.enemies.iter().next().unwrap().clone();
+    from_wave.statuses.retain(|status| {
+        status.effect != crate::game::status::STATUS_UNMOVING
+            && status.effect != crate::game::status::STATUS_INVINCIBLE
+    });
+    let mut later = legacy_weapons_make_enemy(3_100_030, DAGGER, 80.0, 80.0, DAGGER.health);
+    crate::network::units::StatusContainer::apply_status(&mut later, STATUS_OVERDRIVE, f32::MAX);
+    assert!(
+        (effective_unit_speed(&from_wave) - effective_unit_speed(&later)).abs() < 0.001,
+        "same overdrive whether applied at spawn or after"
+    );
+}
+
+#[test]
+fn r03_raw_health_and_rule_applied_at_hit() {
+    let (world, _, core_x, core_y) = legacy_weapons_test_world();
+    world.wave_rules.write().unit_health_multiplier = 3.0;
+    let id = spawn_unit_world(&world, 0, 1, core_x, core_y, 0.0).unwrap();
+    let unit = world.enemies.get(&id).unwrap();
+    assert_eq!(unit.health, DAGGER.health);
+    let dealt =
+        crate::network::combat::apply_incoming_unit_damage_in_world(&world, &unit, 45.0, 1.0);
+    assert!(
+        (dealt - 15.0).abs() < 0.01,
+        "unitHealth 3 divides incoming, got {dealt}"
+    );
+}
+
+#[test]
+fn e01_controller_not_team_selects_simulation_path() {
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    let mut ally = legacy_weapons_make_enemy(3_100_040, FLARE, core_x + 80.0, core_y, FLARE.health);
+    ally.team = 5;
+    ally.authority = UnitAuthority::Command;
+    ally.elevation = 1.0;
+    world.enemies.insert(3_100_040, ally);
+    let snapshot = world.enemies.get(&3_100_040).unwrap().clone();
+    assert!(
+        !crate::network::units::unit_uses_command_ai(Some(&world), &snapshot),
+        "team 5 is GroundAI when waves are on (Team.isAI)"
+    );
+    world.wave_rules.write().waves_enabled = false;
+    let snapshot = world.enemies.get(&3_100_040).unwrap().clone();
+    assert!(
+        crate::network::units::unit_uses_command_ai(Some(&world), &snapshot),
+        "team 5 is CommandAI when waves are off"
+    );
+    world.wave_rules.write().waves_enabled = true;
+
+    let mut possessed =
+        legacy_weapons_make_enemy(3_100_041, DAGGER, core_x + 40.0, core_y, DAGGER.health);
+    possessed.team = world.wave_rules.read().wave_team;
+    possessed.authority = UnitAuthority::Player { player_id: 1 };
+    let x0 = possessed.x;
+    world.enemies.insert(3_100_041, possessed);
+    // Skip the 300×300 GroundAI flowfield; possession is excluded before it.
+    let skipped = world.enemies.get(&3_100_041).is_some_and(|u| {
+        matches!(u.authority, UnitAuthority::Player { .. })
+            || crate::network::units::controller::unit_is_player_controlled(&world, u.id)
+    });
+    assert!(skipped, "possessed wave-team unit must not take GroundAI");
+    let _ = (connections, x0);
+}
+
+#[test]
+fn c06_possession_does_not_collide_with_core_avatar() {
+    let (world, _, core_x, core_y) = legacy_weapons_test_world();
+    let mut session = player();
+    session.x = core_x;
+    session.y = core_y;
+    session.controlled_unit = ControlledUnit::Standard(3_100_042);
+    world
+        .player_sessions
+        .insert(session.unit_id, session.clone());
+    world.players.insert(
+        session.unit_id,
+        crate::network::world::PlayerCombatState {
+            uuid: session.uuid.clone(),
+            player_id: session.id,
+            unit_id: session.unit_id,
+            x: core_x,
+            y: core_y,
+            health: 150.0,
+            shield: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            statuses: Vec::new(),
+            dead: false,
+            respawn_timer: 0.0,
+            team: 1,
+        },
+    );
+    let mut body = legacy_weapons_make_enemy(3_100_042, DAGGER, core_x, core_y, DAGGER.health);
+    body.authority = UnitAuthority::Player {
+        player_id: session.id,
+    };
+    world.enemies.insert(3_100_042, body);
+    simulate_unit_collisions(&world);
+    let player = world.players.get(&session.unit_id).unwrap();
+    let unit = world.enemies.get(&3_100_042).unwrap();
+    assert!(
+        (player.x - core_x).abs() < 0.01 && (unit.x - core_x).abs() < 0.01,
+        "possessed body and avatar must not auto-push"
+    );
+}
+
+#[test]
+fn c06_damage_hits_possessed_body_not_core_avatar() {
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    let mut session = player();
+    session.x = core_x;
+    session.y = core_y;
+    session.controlled_unit = ControlledUnit::Standard(3_100_043);
+    world
+        .player_sessions
+        .insert(session.unit_id, session.clone());
+    world.players.insert(
+        session.unit_id,
+        crate::network::world::PlayerCombatState {
+            uuid: session.uuid.clone(),
+            player_id: session.id,
+            unit_id: session.unit_id,
+            x: core_x,
+            y: core_y,
+            health: 150.0,
+            shield: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            statuses: Vec::new(),
+            dead: false,
+            respawn_timer: 0.0,
+            team: 1,
+        },
+    );
+    let mut body =
+        legacy_weapons_make_enemy(3_100_043, DAGGER, core_x + 80.0, core_y, DAGGER.health);
+    body.authority = UnitAuthority::Player {
+        player_id: session.id,
+    };
+    world.enemies.insert(3_100_043, body);
+    assert!(crate::network::combat::damage_player(
+        &world,
+        &connections,
+        session.unit_id,
+        40.0,
+        -1,
+        0.0,
+    ));
+    assert_eq!(
+        world.players.get(&session.unit_id).unwrap().health,
+        150.0,
+        "core avatar HP is not the combat body"
+    );
+    assert!(
+        world.enemies.get(&3_100_043).unwrap().health < DAGGER.health,
+        "possession damage must apply to player.unit()"
+    );
+}
+
+fn c06_possessed_session(
+    world: &crate::network::world::DynamicWorld,
+    body_id: i32,
+    body_x: f32,
+    body_y: f32,
+) -> SessionPlayer {
+    let mut session = player();
+    session.x = body_x;
+    session.y = body_y;
+    session.controlled_unit = ControlledUnit::Standard(body_id);
+    world
+        .player_sessions
+        .insert(session.unit_id, session.clone());
+    world.players.insert(
+        session.unit_id,
+        crate::network::world::PlayerCombatState {
+            uuid: session.uuid.clone(),
+            player_id: session.id,
+            unit_id: session.unit_id,
+            x: body_x - 80.0,
+            y: body_y,
+            health: 150.0,
+            shield: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            statuses: Vec::new(),
+            dead: false,
+            respawn_timer: 0.0,
+            team: 1,
+        },
+    );
+    let mut body = legacy_weapons_make_enemy(body_id, DAGGER, body_x, body_y, DAGGER.health);
+    body.team = 1;
+    body.authority = UnitAuthority::Player {
+        player_id: session.id,
+    };
+    world.enemies.insert(body_id, body);
+    session
+}
+
+#[test]
+fn c06_splash_beam_status_observers_and_disconnect() {
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    let body_x = core_x + 80.0;
+    let body_y = core_y;
+    let session = c06_possessed_session(&world, 3_100_080, body_x, body_y);
+    let mut observer = player();
+    observer.id = 2;
+    observer.unit_id = 3;
+    observer.uuid = "observer".into();
+    world
+        .player_sessions
+        .insert(observer.unit_id, observer.clone());
+    world.players.insert(
+        observer.unit_id,
+        crate::network::world::PlayerCombatState {
+            uuid: observer.uuid.clone(),
+            player_id: observer.id,
+            unit_id: observer.unit_id,
+            x: core_x,
+            y: core_y,
+            health: 150.0,
+            shield: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            statuses: Vec::new(),
+            dead: false,
+            respawn_timer: 0.0,
+            team: 1,
+        },
+    );
+
+    assert!(crate::network::combat::apply_enemy_splash_damage(
+        &world,
+        &connections,
+        body_x,
+        body_y,
+        25.0,
+        16.0,
+        1.0,
+        4,
+        120.0,
+        1.0,
+    ));
+    assert_eq!(
+        world.players.get(&session.unit_id).unwrap().health,
+        150.0,
+        "splash must not hit the core avatar"
+    );
+    assert_eq!(
+        world.players.get(&observer.unit_id).unwrap().health,
+        150.0,
+        "an observer outside the blast keeps avatar HP"
+    );
+    let after_splash = world.enemies.get(&3_100_080).unwrap().clone();
+    assert!(after_splash.health < DAGGER.health);
+    assert!(
+        after_splash.status_effect == 4
+            || after_splash.statuses.iter().any(|entry| entry.effect == 4),
+        "splash status applies to the possessed body"
+    );
+
+    let before_beam = after_splash.health;
+    assert!(crate::network::combat::apply_enemy_shared_pierce_damage(
+        &world,
+        &connections,
+        body_x - 16.0,
+        body_y,
+        body_x + 16.0,
+        body_y,
+        18.0,
+        4,
+        -1,
+        0.0,
+    ));
+    assert!(world.enemies.get(&3_100_080).unwrap().health < before_beam);
+    assert_eq!(world.players.get(&session.unit_id).unwrap().health, 150.0);
+
+    let before_lightning = world.enemies.get(&3_100_080).unwrap().health;
+    let spec = crate::network::combat::lightning_spec(10).unwrap();
+    crate::network::combat::spawn_impact_lightning(
+        &world,
+        &connections,
+        2,
+        spec,
+        99,
+        body_x - 8.0,
+        body_y,
+        body_x,
+        body_y,
+    );
+    assert!(
+        world.enemies.get(&3_100_080).unwrap().health < before_lightning,
+        "lightning must chain onto the possessed body"
+    );
+    assert_eq!(world.players.get(&session.unit_id).unwrap().health, 150.0);
+
+    let hp = world.enemies.get(&3_100_080).unwrap().health;
+    let (_, mut released) = world.player_sessions.remove(&session.unit_id).unwrap();
+    crate::network::units::switch_player_unit(&world, &mut released, None);
+    assert_eq!(
+        world.enemies.get(&3_100_080).unwrap().health,
+        hp,
+        "disconnect during combat keeps the damaged body"
+    );
+    assert_eq!(world.players.get(&session.unit_id).unwrap().health, 150.0);
+}
+
+#[test]
+fn c07_erekir_core_write_sync_emits_payload_unit_class() {
+    use crate::network::codec::Reads;
+    let (world, _, core_x, core_y) = legacy_weapons_test_world();
+    crate::network::world::register_team_core(
+        &world,
+        1,
+        crate::network::world::TeamCore {
+            position: world.core_position,
+            block: 342,
+            health: 6_000.0,
+            max_health: 6_000.0,
+        },
+    );
+    let mut session = player();
+    session.x = core_x;
+    session.y = core_y;
+    session.controlled_unit = ControlledUnit::Core;
+    let combat = crate::network::world::PlayerCombatState {
+        uuid: session.uuid.clone(),
+        player_id: session.id,
+        unit_id: session.unit_id,
+        x: core_x,
+        y: core_y,
+        health: 300.0,
+        shield: 0.0,
+        status_effect: -1,
+        status_duration: 0.0,
+        statuses: Vec::new(),
+        dead: false,
+        respawn_timer: 0.0,
+        team: 1,
+    };
+    let snapshot =
+        encode_initial_entity_snapshot_in(&session, Some(&combat), Some(&world)).unwrap();
+    let mut input = std::io::Cursor::new(snapshot);
+    let count = input.read_s().unwrap();
+    assert_eq!(count, 2);
+    let _data_len = input.read_s().unwrap();
+    let pos = input.position() as usize;
+    let mut body = std::io::Cursor::new(&input.get_ref()[pos..]);
+    body.read_i().unwrap();
+    let class_id = body.read_b().unwrap();
+    assert_eq!(
+        class_id, PAYLOAD_UNIT_CLASS_ID,
+        "nucleus avatar is PayloadUnit, not Alpha"
+    );
+    body.read_b().unwrap();
+    body.read_f().unwrap();
+    body.read_f().unwrap();
+    body.read_b().unwrap();
+    body.read_i().unwrap();
+    body.read_f().unwrap();
+    body.read_l().unwrap();
+    body.read_f().unwrap();
+    body.read_bool().unwrap();
+    body.read_i().unwrap();
+    body.read_b().unwrap();
+    body.read_b().unwrap();
+    body.read_f().unwrap();
+    body.read_f().unwrap();
+    let payloads = body.read_i().unwrap();
+    assert_eq!(payloads, 0, "docked evoke writes an empty payload count");
+}
+
+#[test]
+fn reconnect_replaces_stale_uuid_session() {
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    let admin = crate::state::administration::Administration::new();
+    let mut stale = player();
+    stale.uuid = "QR7ZhZ1c9BU=".into();
+    stale.id = 1_000_000i32.wrapping_add(7);
+    stale.unit_id = 2_000_000i32.wrapping_add(7);
+    world.player_sessions.insert(stale.unit_id, stale.clone());
+    world.players.insert(
+        stale.unit_id,
+        PlayerCombatState {
+            uuid: stale.uuid.clone(),
+            player_id: stale.id,
+            unit_id: stale.unit_id,
+            x: 0.0,
+            y: 0.0,
+            health: 150.0,
+            shield: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            statuses: Vec::new(),
+            dead: false,
+            respawn_timer: 0.0,
+            team: 1,
+        },
+    );
+    admin.register_connection(crate::state::administration::ConnectedPlayer {
+        uuid: stale.uuid.clone(),
+        name: stale.name.clone(),
+        ip: "192.168.1.92".into(),
+        player_id: stale.id,
+        unit_id: stale.unit_id,
+    });
+    let (tx, _rx) = tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+    connections.insert(
+        7,
+        PendingConnection {
+            ip: "192.168.1.92".parse().unwrap(),
+            outbound: tx,
+            udp_inbound: tokio::sync::mpsc::unbounded_channel().0,
+            udp_endpoint: Arc::new(parking_lot::RwLock::new(None)),
+            udp_socket: None,
+            player_name: Arc::new(parking_lot::RwLock::new(Some(stale.name.clone()))),
+            outbound_drops: Arc::new(AtomicU64::new(0)),
+            critical_drops: Arc::new(AtomicU64::new(0)),
+            last_keepalive_rtt_ms: Arc::new(AtomicU64::new(0)),
+            last_packet_epoch_ms: Arc::new(AtomicU64::new(0)),
+            outbound_queued: Arc::new(AtomicU64::new(0)),
+        },
+    );
+
+    crate::network::session::replace_stale_uuid_session(
+        &world,
+        &connections,
+        &admin,
+        "QR7ZhZ1c9BU=",
+        99,
+    );
+
+    assert!(
+        !world.player_sessions.contains_key(&stale.unit_id),
+        "stale session must be dropped before the new ConnectPacket"
+    );
+    assert!(
+        !world.players.contains_key(&stale.unit_id),
+        "stale player entity must despawn"
+    );
+    assert!(
+        !connections.contains_key(&7),
+        "stale TCP must be closed so the 12 s timeout cannot leave a ghost"
+    );
+    assert!(
+        admin.find_connected_by_uuid(&stale.uuid).is_none(),
+        "console registry must forget the old connection"
+    );
+}
+
+#[test]
 fn set_mode_reconciliation_cancels_pending_work_without_item_side_effects() {
     let (world, _connections, _, _) = legacy_weapons_test_world();
     let build_position = (44 << 16) | 104;
@@ -13323,6 +17524,7 @@ fn set_mode_reconciliation_cancels_pending_work_without_item_side_effects() {
         PendingBuild {
             position: build_position,
             block: 257,
+            previous_block: 0,
             rotation: 0,
             config: vec![0],
             occupied: vec![build_position],
@@ -13396,22 +17598,18 @@ fn strict_mode_rejects_unknown_spawn_groups_and_warns_otherwise() {
     let rules =
         "{\"spawns\":[{\"type\":\"dagger\"},{\"type\":\"totallyFakeUnit\"},{\"type\":\"mace\"}]}";
     let (parsed, diagnostics) = crate::network::units::parse_wave_rules_report(rules);
-    assert_eq!(parsed.spawn_groups.len(), 2, "supported groups survive");
-    assert_eq!(diagnostics.len(), 1, "one unsupported group reported");
-    assert!(
-        diagnostics[0].contains("totallyFakeUnit"),
-        "diagnostic names the unit: {}",
-        diagnostics[0]
+    assert_eq!(
+        parsed.spawn_groups.len(),
+        3,
+        "unknown types fall back to dagger (ASTRA W04)"
     );
-    // Non-strict: warning only, hosting proceeds.
+    assert_eq!(parsed.spawn_groups[1].unit_type, 0);
+    assert!(
+        diagnostics.is_empty(),
+        "dagger fallback is valid, not a skipped group: {diagnostics:?}"
+    );
     assert!(enforce_strict_spawn_groups("test-map", &diagnostics, false).is_ok());
-    // Strict: hosting fails with location and count.
-    let err = enforce_strict_spawn_groups("test-map", &diagnostics, true).unwrap_err();
-    let message = err.to_string();
-    assert!(message.contains("test-map"), "{message}");
-    assert!(message.contains("totallyFakeUnit"), "{message}");
-    assert!(message.contains("1 unsupported spawn group"), "{message}");
-    // No diagnostics: strict hosting proceeds.
+    assert!(enforce_strict_spawn_groups("test-map", &diagnostics, true).is_ok());
     assert!(enforce_strict_spawn_groups("test-map", &[], true).is_ok());
 }
 
@@ -13444,8 +17642,8 @@ fn strict_mode_rejects_unsupported_logic_processors() {
     // unsupported statement is marked rejected and never executes.
     let (world, _connections, _, _) = legacy_weapons_test_world();
     let pos = (30 << 16) | 30;
-    // logic block 432 with a config carrying an unsupported statement.
-    let mut tile = erekir_like_tile(pos, 432);
+    // logic block 433 with a config carrying an unsupported statement.
+    let mut tile = erekir_like_tile(pos, 433);
     // Build a TypeIO byte[] config: tag 14 envelope around a zlib
     // stream whose content is the LogicBlock.compress layout:
     // [1][source_len i32][source][link_count i32][links].
@@ -13660,6 +17858,7 @@ fn persistence_worker_saves_snapshots_durably_and_orders_writes() {
         (&world.cores, &world.team_core_lists),
         &world.logic_flags,
         &world.puddles,
+        checkpoint_rules_json(&world),
     );
     assert_eq!(saved.map_name, "legacy-weapons");
     // Durable sync write works and produces a loadable file.
@@ -13706,6 +17905,8 @@ fn p010_factory_command_is_typed_metadata_not_config_suffix() {
     world.tiles.insert(
         pos,
         DynamicTile {
+            logic_control: None,
+            payload_inventory: Vec::new(),
             position: pos,
             block: 377,
             team: 1,
@@ -13819,6 +18020,7 @@ fn p010_factory_command_is_typed_metadata_not_config_suffix() {
         (&world.cores, &world.team_core_lists),
         &world.logic_flags,
         &world.puddles,
+        checkpoint_rules_json(&world),
     );
     saved.tiles.clear();
     saved.tiles.push(legacy_tile.clone());
@@ -13865,13 +18067,14 @@ fn p05_banned_blocks_units_and_core_radius_gate_authority() {
     );
     assert!(!whitelist.unit_banned(0));
     assert!(whitelist.unit_banned(1));
-    // Spawn groups with banned units are skipped (WaveSpawner).
+    // ASTRA W04: a fabrication ban does not skip the wave group.
     let spawn_rules = parse_wave_rules(
         "{\"spawns\":[{\"type\":\"dagger\"},{\"type\":\"mace\"}],\"bannedUnits\":[\"dagger\"]}",
     );
     let spawned = map_wave_spawns(0, &spawn_rules);
-    assert_eq!(spawned.len(), 1);
-    assert_eq!(spawned[0].spec.unit_type, 1, "only mace spawns");
+    assert_eq!(spawned.len(), 2, "banned dagger still waves");
+    assert_eq!(spawned[0].spec.unit_type, 0);
+    assert_eq!(spawned[1].spec.unit_type, 1);
     // Placement plans for banned blocks are rejected.
     let (world, _connections, _, _) = legacy_weapons_test_world();
     world.wave_rules.write().banned_blocks = vec![216];
@@ -13957,6 +18160,7 @@ fn p05_team_rules_parse_and_gate_per_team_authority() {
     let pending = PendingBuild {
         position: pos,
         block: 216,
+        previous_block: 0,
         rotation: 0,
         config: Vec::new(),
         occupied: vec![pos],
@@ -13971,11 +18175,16 @@ fn p05_team_rules_parse_and_gate_per_team_authority() {
     let base_time = crate::game::content::block_build_time(216) / 0.5;
     schedule_build(&world, &pending);
     let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
-    // team 1 speed multiplier 2.0 -> half the base time.
     assert!(
-        (remaining - base_time / 2.0).abs() < 1.0,
-        "team build speed halves remaining ticks: {remaining} vs {}",
-        base_time / 2.0
+        (remaining - base_time).abs() < 1.0,
+        "schedule remaining is buildCost, not pre-divided by team speed: {remaining} vs {base_time}"
+    );
+    simulate_constructions(&world, &_connections, 1.0);
+    let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
+    assert!(
+        (remaining - (base_time - 2.0)).abs() < 1.0,
+        "team build speed 2x consumes 2 work per tick: {remaining} vs {}",
+        base_time - 2.0
     );
 }
 
@@ -14037,6 +18246,7 @@ fn p05_team_infinite_resources_completes_builds_and_breaks_immediately() {
     let pending = PendingBuild {
         position,
         block: 257,
+        previous_block: 0,
         rotation: 0,
         config: vec![0],
         occupied: vec![position],
@@ -14106,6 +18316,7 @@ fn p05_team_block_multipliers_scale_damage_and_health_per_team() {
     world.tiles.insert(
         pos,
         DynamicTile {
+            logic_control: None,
             position: pos,
             block: 341,
             team: 1,
@@ -14355,6 +18566,25 @@ fn p011_register_udp_promotes_session_and_rejects_adversarial_ids() {
         apply_register_udp(&connections, 42, source),
         RegisterUdpOutcome::UnknownId,
         "TCP close before UDP must drop the pending id"
+    );
+}
+
+#[test]
+fn p011_register_udp_accepts_nat_source_address() {
+    let connections = DashMap::new();
+    let (tcp_tx, mut tcp_rx) = tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+    let (udp_tx, _udp_rx) = tokio::sync::mpsc::unbounded_channel();
+    connections.insert(7, handshake_pending("10.0.0.1", tcp_tx, udp_tx));
+    let nat: SocketAddr = "203.0.113.9:40000".parse().unwrap();
+    assert_eq!(
+        apply_register_udp(&connections, 7, nat),
+        RegisterUdpOutcome::Bound,
+        "RegisterUDP must bind the presenting address, matching ArcNet"
+    );
+    assert_eq!(*connections.get(&7).unwrap().udp_endpoint.read(), Some(nat));
+    assert_eq!(
+        tcp_rx.try_recv().unwrap(),
+        framework_registration(REGISTER_UDP, 0)
     );
 }
 
@@ -14617,6 +18847,8 @@ fn p1_strict_anticheat_limits_client_movement_by_elapsed_time() {
         mouse_x: 12.0,
         mouse_y: 13.0,
         rotation: 330.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: true, // alpha cannot boost
         shooting: false,
         building: true,
@@ -14669,6 +18901,8 @@ fn p1_strict_anticheat_limits_client_movement_by_elapsed_time() {
         mouse_x: 0.0,
         mouse_y: 0.0,
         rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
         building: true,
@@ -14696,6 +18930,8 @@ fn p1_strict_anticheat_limits_client_movement_by_elapsed_time() {
         mouse_x: 0.0,
         mouse_y: 0.0,
         rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
         building: true,
@@ -14880,6 +19116,65 @@ fn p2_decoders_never_panic_on_random_payloads() {
 }
 
 #[test]
+fn loadout_resets_all_core_teams_and_caps_duplicate_stacks() {
+    let (world, _, _, _) = legacy_weapons_test_world();
+    let core = crate::network::world::TeamCore {
+        position: (90 << 16) | 90,
+        block: 339,
+        health: 1100.0,
+        max_health: 1100.0,
+    };
+    world.cores.insert(5, core);
+    world.team_core_lists.insert(5, vec![core]);
+    world.game_state.team_items.insert(6, vec![99; 22]);
+    world.wave_rules.write().loadout = vec![(1, 3000), (1, 3000)];
+    crate::network::core_inventory::initialize_loadout(&world);
+    let items = crate::network::economy::items_for_team(&world, 5);
+    assert_eq!(items[0], 0);
+    assert_eq!(items[1], 4000);
+    assert!(!world.game_state.team_items.contains_key(&6));
+    world.wave_rules.write().loadout.clear();
+    crate::network::core_inventory::initialize_loadout(&world);
+    assert!(crate::network::economy::items_for_team(&world, 5)
+        .iter()
+        .all(|amount| *amount == 0));
+}
+
+#[test]
+fn survival_and_sandbox_start_with_exact_map_loadout() {
+    for mode in [GameMode::Survival, GameMode::Sandbox] {
+        for (json, copper, lead) in [
+            ("{}", 100, 0),
+            ("{loadout:[]}", 0, 0),
+            ("{loadout:[{item:lead,amount:50}]}", 0, 50),
+        ] {
+            let template = crate::engine::world_stream::replace_rules(
+                include_bytes!("../../dummy_world.dat"),
+                json,
+            )
+            .unwrap();
+            let state = GameState::new();
+            state.start_hosting("loadout-test".into(), mode);
+            let world = fresh_world_from_template(
+                &state,
+                template,
+                "loadout-test".into(),
+                PathBuf::from("target/loadout-test-unused.json"),
+            )
+            .unwrap();
+            assert_eq!(state.core_items.read()[0], copper, "{mode:?}: {json}");
+            assert_eq!(state.core_items.read()[1], lead, "{mode:?}: {json}");
+            let stream = network_template_with_plans(&world).unwrap();
+            let metadata = crate::engine::world_stream::inspect_metadata(&stream).unwrap();
+            assert_eq!(
+                parse_wave_rules(&metadata.rules).loadout,
+                world.wave_rules.read().loadout
+            );
+        }
+    }
+}
+
+#[test]
 fn p1_rules_fog_and_loadout_parse_and_override() {
     // P1: Rules.fog and Rules.loadout reach the authority (WaveRules)
     // and the console overrides mutate them.
@@ -14893,7 +19188,7 @@ fn p1_rules_fog_and_loadout_parse_and_override() {
     // Defaults.
     let default = parse_wave_rules("{}");
     assert!(!default.fog);
-    assert!(default.loadout.is_empty());
+    assert_eq!(default.loadout, vec![(0, 100)]);
     // The overrides helper applies both keys.
     let (world, _connections, _, _) = legacy_weapons_test_world();
     let path = std::env::temp_dir().join(format!("mindustry-p1-fog-{}.json", std::process::id()));
@@ -14927,6 +19222,7 @@ fn p1_build_multipliers_zero_half_and_double_gate_construction() {
         PendingBuild {
             position: pos,
             block: 216,
+            previous_block: 0,
             rotation: 0,
             config: Vec::new(),
             occupied: vec![pos],
@@ -14938,7 +19234,7 @@ fn p1_build_multipliers_zero_half_and_double_gate_construction() {
             applied_assist: 0.0,
         }
     };
-    // x2: half the base time.
+    // x2: same scheduled remaining; twice the work per tick.
     {
         world.wave_rules.write().build_speed_multiplier = 2.0;
         let pending = make(2.0);
@@ -14946,13 +19242,19 @@ fn p1_build_multipliers_zero_half_and_double_gate_construction() {
         schedule_build(&world, &pending);
         let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
         assert!(
-            (remaining - base_time / 2.0).abs() < 1.0,
-            "x2 halves remaining: {remaining} vs {}",
-            base_time / 2.0
+            (remaining - base_time).abs() < 1.0,
+            "x2 does not pre-divide remaining: {remaining} vs {base_time}"
+        );
+        simulate_constructions(&world, &_connections, 1.0);
+        let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
+        assert!(
+            (remaining - (base_time - 2.0)).abs() < 1.0,
+            "x2 consumes 2 work per tick: {remaining} vs {}",
+            base_time - 2.0
         );
         world.pending_builds.remove(&pos);
     }
-    // x0.5: double the base time.
+    // x0.5: half the work per tick.
     {
         world.wave_rules.write().build_speed_multiplier = 0.5;
         let pending = make(0.5);
@@ -14960,9 +19262,15 @@ fn p1_build_multipliers_zero_half_and_double_gate_construction() {
         schedule_build(&world, &pending);
         let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
         assert!(
-            (remaining - base_time / 0.5).abs() < 1.0,
-            "x0.5 doubles remaining: {remaining} vs {}",
-            base_time / 0.5
+            (remaining - base_time).abs() < 1.0,
+            "x0.5 does not pre-scale remaining: {remaining} vs {base_time}"
+        );
+        simulate_constructions(&world, &_connections, 1.0);
+        let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
+        assert!(
+            (remaining - (base_time - 0.5)).abs() < 1.0,
+            "x0.5 consumes 0.5 work per tick: {remaining} vs {}",
+            base_time - 0.5
         );
         world.pending_builds.remove(&pos);
     }
@@ -14974,10 +19282,15 @@ fn p1_build_multipliers_zero_half_and_double_gate_construction() {
         schedule_build(&world, &pending);
         let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
         assert!(
-            remaining.is_finite() && remaining > base_time * 100.0,
-            "x0 leaves an effectively infinite build: {remaining}"
+            remaining.is_finite() && (remaining - base_time).abs() < 1.0,
+            "x0 keeps a finite buildCost remaining: {remaining}"
         );
-        // The plan stays registered with an effectively infinite build.
+        simulate_constructions(&world, &_connections, 100.0);
+        let remaining = world.pending_builds.get(&pos).unwrap().remaining_ticks;
+        assert!(
+            (remaining - base_time).abs() < 1.0,
+            "x0 never accrues: {remaining} vs {base_time}"
+        );
         assert!(world.pending_builds.get(&pos).unwrap().remaining_ticks > 0.0);
         world.pending_builds.remove(&pos);
     }
@@ -15059,6 +19372,7 @@ fn core_inventory_enforces_topology_capacity_and_repairs_legacy_overflow() {
     // 300 to the capacity; reinforced storage deliberately does not.
     let container_pos = (103 << 16) | 100;
     let container = DynamicTile {
+        logic_control: None,
         position: container_pos,
         block: 345,
         team: 1,
@@ -15348,6 +19662,9 @@ fn spawn_group_amount_respects_map_max_not_fixed_40() {
             unit_amount: amount,
             spawn: -1,
             effect: -1,
+            items: Vec::new(),
+            team: None,
+            payloads: Vec::new(),
         }
     };
     // mace max=120 (like the official `mace 120` late-wave group): the
@@ -15372,6 +19689,9 @@ fn spawn_group_amount_respects_map_max_not_fixed_40() {
     // spacing 0 in JSON is normalized to 1, like SpawnGroup.getSpawned.
     let zero_spacing = group(0, u32::MAX, 0, 10, i32::MAX as f32, 1);
     assert_eq!(map_spawn_group_amount(7, &zero_spacing), 1);
+    // ASTRA W04: max=0 stays zero.
+    let none = group(0, u32::MAX, 1, 0, 1.0, 3);
+    assert_eq!(map_spawn_group_amount(0, &none), 0);
 }
 
 #[test]
@@ -15394,31 +19714,30 @@ fn spawn_wave_uses_loaded_map_groups_and_applies_effects() {
     assert!(!world.wave_rules.read().is_default());
     assert_eq!(*world.game_state.wave_time.read(), 14400.0); // waveSpacing * 2
 
-    spawn_wave(&world);
+    spawn_wave(&world, &crate::network::outbound::NOOP);
     let wave = world.game_state.wave.load(Ordering::Relaxed);
     assert_eq!(wave, 2); // fetch_add: counter moves past the spawned wave
-    let enemies: Vec<_> = world
-        .enemies
-        .iter()
-        .map(|enemy| {
-            (
-                enemy.unit_type,
-                enemy.status_effect,
-                enemy.shield,
-                enemy.move_speed,
-                enemy.health,
-            )
-        })
-        .collect();
+    let overlays = world.enemy_spawns.read().len();
+    let enemies: Vec<_> = world.enemies.iter().map(|enemy| enemy.clone()).collect();
     assert_eq!(
         enemies.len(),
-        1,
-        "groundZero wave 1 must be a single dagger"
+        overlays,
+        "groundZero wave 1 is one dagger per overlay"
     );
-    let (unit_type, effect, shield, _speed, _health) = enemies[0];
-    assert_eq!(unit_type, 0);
-    assert_eq!(effect, -1);
-    assert_eq!(shield, 0.0);
+    if overlays > 0 {
+        let enemy = &enemies[0];
+        assert_eq!(enemy.unit_type, 0);
+        assert_eq!(enemy.shield, 0.0);
+        assert_eq!(enemy.health, DAGGER.health);
+        assert!(enemy
+            .statuses
+            .iter()
+            .any(|status| status.effect == crate::game::status::STATUS_UNMOVING));
+        assert!(enemy
+            .statuses
+            .iter()
+            .any(|status| status.effect == crate::game::status::STATUS_INVINCIBLE));
+    }
 
     // Maze fallback (no map spawns): unchanged single dagger on wave 1.
     let maze_state = GameState::new();
@@ -15434,13 +19753,15 @@ fn spawn_wave_uses_loaded_map_groups_and_applies_effects() {
     // JSON, so its wave-1 composition is the same single dagger.
     assert_eq!(maze_world.wave_rules.read().spawn_groups.len(), 27);
     assert!(!maze_world.wave_rules.read().is_default());
-    spawn_wave(&maze_world);
+    spawn_wave(&maze_world, &crate::network::outbound::NOOP);
+    let maze_overlays = maze_world.enemy_spawns.read().len();
     let maze_enemies: Vec<_> = maze_world
         .enemies
         .iter()
         .map(|enemy| enemy.unit_type)
         .collect();
-    assert_eq!(maze_enemies, vec![0]); // one dagger
+    assert_eq!(maze_enemies.len(), maze_overlays);
+    assert!(maze_enemies.iter().all(|unit_type| *unit_type == 0));
 
     // Maps whose rules define no spawns fall back to the bundled table
     // (official Map.rules(): `if(result.spawns.isEmpty()) result.spawns =
@@ -15527,7 +19848,7 @@ fn ulocate_ore_finds_overlay_with_official_158_content_ids() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -15537,6 +19858,7 @@ fn ulocate_ore_finds_overlay_with_official_158_content_ids() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_001),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -15547,10 +19869,12 @@ fn ulocate_ore_finds_overlay_with_official_158_content_ids() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("ulocate-ore-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -15563,12 +19887,19 @@ fn ulocate_ore_finds_overlay_with_official_158_content_ids() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let connections = DashMap::new();
     let view = crate::logic::WorldView {
@@ -15702,7 +20033,7 @@ fn enemy_projectile_collides_with_building_in_flight() {
         base_buildings: DashMap::new(),
         floors: map.floors,
         overlays: map.overlays,
-        enemy_spawns,
+        enemy_spawns: parking_lot::RwLock::new(enemy_spawns),
         enemies: DashMap::new(),
         players: DashMap::new(),
         player_sessions: DashMap::new(),
@@ -15712,6 +20043,7 @@ fn enemy_projectile_collides_with_building_in_flight() {
         next_player_unit_id: AtomicI32::new(2_500_000),
         next_enemy_id: AtomicI32::new(3_000_001),
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
+        damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
@@ -15722,10 +20054,12 @@ fn enemy_projectile_collides_with_building_in_flight() {
         pending_breaks: DashMap::new(),
         mineable_ore: std::sync::OnceLock::new(),
         mono_mining_targets: DashMap::new(),
+        ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
+        naval_navigation: parking_lot::Mutex::new(None),
         save_path: std::env::temp_dir().join("projectile-collision-test.json"),
         network_template: Arc::new(include_bytes!("../../dummy_world.dat").to_vec()),
         persistence_dirty: AtomicBool::new(false),
@@ -15738,12 +20072,19 @@ fn enemy_projectile_collides_with_building_in_flight() {
         base_turret_progress: DashMap::new(),
         base_mender_progress: DashMap::new(),
         team_build_plans: parking_lot::RwLock::new(crate::engine::typeio::TeamBlocks::default()),
-        wave_rules: parking_lot::RwLock::new(crate::network::units::WaveRules::default()),
+        wave_rules: parking_lot::RwLock::new({
+            crate::network::units::WaveRules {
+                waves_enabled: true,
+                ..Default::default()
+            }
+        }),
         votekick_target: parking_lot::RwLock::new(None),
         votekick_votes: AtomicI32::new(0),
         votekick_voters: DashMap::new(),
         votekick_cooldowns: DashMap::new(),
         puddles: crate::network::buildings::puddles::PuddleSystem::new(),
+        building_last_damage: DashMap::new(),
+        repair_beam_strengths: DashMap::new(),
     };
     let core_x = i32::from(SPAWN_X) as f32 * 8.0;
     let core_y = i32::from(SPAWN_Y) as f32 * 8.0;
@@ -15779,6 +20120,11 @@ fn enemy_projectile_collides_with_building_in_flight() {
             pierce_buildings: 0,
             spawn_reign_frags: false,
             homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
             enemy_target_position: None,
             enemy_target_core: true,
             apply_direct_on_impact: true,
@@ -15793,6 +20139,7 @@ fn enemy_projectile_collides_with_building_in_flight() {
             source_position: None,
             damage_interval: None,
             damage_timer: 0.0,
+            collided: Vec::new(),
         },
     );
     let connections = DashMap::new();
@@ -16131,4 +20478,643 @@ fn best_core_from_prebuilt_base_building_without_registry() {
     let best = crate::network::wire::unit_control::best_core_position_for_team(&world, 1, 0.0, 0.0)
         .unwrap();
     assert_eq!(best, origin);
+}
+
+#[test]
+fn corvus_laser_hits_once_over_full_lifetime() {
+    // Official corvus-weapon (159.7 UnitTypes.java): plain LaserBulletType -
+    // Damage.collideLine applies the full 560 damage exactly once; the beam
+    // then only keeps drawing until its 65-tick lifetime ends. Unlike the
+    // vela ContinuousLaserBulletType there is NO per-interval repetition.
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    let volley = enemy_projectile_volley(9).unwrap();
+    assert_eq!(volley.bullet_id, 20);
+    let before = *world.game_state.core_health.read();
+    world.projectiles.insert(
+        4_022_001,
+        Projectile {
+            target_id: -1,
+            shooter_id: 0,
+            team: 2,
+            bullet_id: 20,
+            damage: volley.direct_damage,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            pierce_units: 0,
+            pierce_buildings: 0,
+            spawn_reign_frags: false,
+            homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
+            enemy_target_position: None,
+            enemy_target_core: true,
+            apply_direct_on_impact: true,
+            armor_multiplier: 1.0,
+            remaining_ticks: 65.0,
+            total_ticks: 65.0,
+            source_x: core_x + 300.0,
+            source_y: core_y + 200.0,
+            target_x: core_x + 8.0,
+            target_y: core_y + 8.0,
+            lifetime_scale: 1.0,
+            source_position: None,
+            // spawn_enemy_projectile must NOT give the corvus beam an
+            // interval (only ContinuousLaserBulletType 18 repeats).
+            damage_interval: None,
+            damage_timer: 0.0,
+            collided: Vec::new(),
+        },
+    );
+    // Step past the expiry in several ticks: exactly ONE application lands.
+    for _ in 0..8 {
+        simulate_projectiles(&world, &connections, 10.0);
+    }
+    let after = *world.game_state.core_health.read();
+    assert!((before - after - volley.direct_damage).abs() < 0.001);
+}
+
+#[test]
+fn quell_launcher_routes_missile_insert_through_frag_carrier() {
+    // UnitTypes.java quell-weapon (159.7): launcher bullet 103 carries
+    // fragBullets 1 of an anonymous fragBullet carrier whose spawnUnit
+    // inserts quell-missile(53). Vanilla never registers the carrier as a
+    // bullet entity (`BulletType.create` returns before `init`), so the port
+    // reroutes the payload lookup instead of spawning a projectile.
+    assert_eq!(spawn_unit_frag_carrier(103), 104);
+    assert_eq!(spawn_unit_bullet_payload(103), None);
+    assert_eq!(spawn_unit_bullet_payload(104), Some(53));
+    // anthicus/disrupt stay direct spawnUnit payloads.
+    assert_eq!(spawn_unit_frag_carrier(92), 92);
+    assert_eq!(spawn_unit_frag_carrier(106), 106);
+
+    // End-to-end: an expired quell launcher inserts exactly one
+    // quell-missile at its impact point.
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    let impact_x = core_x + 40.0;
+    let impact_y = core_y - 25.0;
+    world.projectiles.insert(
+        4_023_001,
+        Projectile {
+            target_id: -1,
+            shooter_id: 0,
+            team: 2,
+            bullet_id: 103,
+            damage: 52.5,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            pierce_units: 0,
+            pierce_buildings: 0,
+            spawn_reign_frags: false,
+            homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
+            enemy_target_position: None,
+            enemy_target_core: false,
+            apply_direct_on_impact: true,
+            armor_multiplier: 1.0,
+            remaining_ticks: 1.0,
+            total_ticks: 1.0,
+            source_x: core_x - 120.0,
+            source_y: core_y - 160.0,
+            target_x: impact_x,
+            target_y: impact_y,
+            lifetime_scale: 1.0,
+            source_position: None,
+            damage_interval: None,
+            damage_timer: 0.0,
+            collided: Vec::new(),
+        },
+    );
+    assert!(simulate_projectiles(&world, &connections, 1.0));
+    assert!(world.projectiles.get(&4_023_001).is_none());
+    let missiles: Vec<_> = world
+        .enemies
+        .iter()
+        .filter(|entry| entry.unit_type == 53)
+        .map(|entry| *entry.key())
+        .collect();
+    assert_eq!(missiles.len(), 1);
+}
+
+#[test]
+fn scathe_launcher_expiry_inserts_missile_with_no_splash() {
+    // Blocks.java v159.7 (economy/erekir.rs module comment): the scathe
+    // turret launchers 186/189/192 are BulletType(0f, 0f) payloads carrying
+    // spawnUnit scathe-missile/-phase/-surge -- NO direct and NO splash
+    // damage in vanilla (the damage lives in the missiles' shootOnDeath
+    // death explosions 187/190/193, applied by kill_enemy). The
+    // surge-split frag carrier 194 carries no spawnUnit payload of its own.
+    assert_eq!(spawn_unit_bullet_payload(186), Some(65));
+    assert_eq!(spawn_unit_bullet_payload(189), Some(66));
+    assert_eq!(spawn_unit_bullet_payload(192), Some(67));
+    assert_eq!(spawn_unit_frag_carrier(186), 186);
+    assert_eq!(spawn_unit_frag_carrier(189), 189);
+    assert_eq!(spawn_unit_frag_carrier(192), 192);
+    assert_eq!(spawn_unit_bullet_payload(187), None);
+    assert_eq!(spawn_unit_bullet_payload(190), None);
+    assert_eq!(spawn_unit_bullet_payload(193), None);
+    assert_eq!(spawn_unit_bullet_payload(194), None);
+
+    // End-to-end: an expired scathe launcher inserts exactly ONE
+    // scathe-missile at its impact point and deals NO damage on expiry
+    // (vanilla launcher BulletType(0f, 0f); see economy/erekir.rs ammo spec).
+    let (world, connections, core_x, core_y) = legacy_weapons_test_world();
+    let impact_x = core_x + 30.0;
+    let impact_y = core_y;
+    let before = *world.game_state.core_health.read();
+    world.projectiles.insert(
+        4_023_002,
+        Projectile {
+            target_id: -1,
+            shooter_id: 0,
+            team: 2,
+            bullet_id: 186,
+            damage: 0.0,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            pierce_units: 0,
+            pierce_buildings: 0,
+            spawn_reign_frags: false,
+            homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
+            enemy_target_position: None,
+            enemy_target_core: false,
+            apply_direct_on_impact: false,
+            armor_multiplier: 1.0,
+            remaining_ticks: 1.0,
+            total_ticks: 1.0,
+            source_x: core_x - 200.0,
+            source_y: core_y - 200.0,
+            target_x: impact_x,
+            target_y: impact_y,
+            lifetime_scale: 1.0,
+            source_position: None,
+            damage_interval: None,
+            damage_timer: 0.0,
+            collided: Vec::new(),
+        },
+    );
+    assert!(simulate_projectiles(&world, &connections, 1.0));
+    assert!(world.projectiles.get(&4_023_002).is_none());
+    // No launcher splash: the sharded core inside the old radius is untouched.
+    let after = *world.game_state.core_health.read();
+    assert!((before - after).abs() < 0.001);
+    assert!(!world.players.iter().any(|player| player.dead));
+    // Exactly one missile of the right type at the impact point.
+    let missiles: Vec<_> = world
+        .enemies
+        .iter()
+        .filter(|entry| entry.unit_type == 65)
+        .map(|entry| (entry.x, entry.y))
+        .collect();
+    assert_eq!(missiles.len(), 1);
+    assert!((missiles[0].0 - impact_x).abs() < 0.01);
+    assert!((missiles[0].1 - impact_y).abs() < 0.01);
+    // No insertion for non-scathe payloads: phase/surge/surge-split never
+    // join through this expired shot.
+    assert!(!world.enemies.iter().any(|entry| entry.unit_type == 66));
+    assert!(!world.enemies.iter().any(|entry| entry.unit_type == 67));
+    assert!(!world.enemies.iter().any(|entry| entry.unit_type == 68));
+}
+
+#[test]
+fn arkyid_and_eclipse_timer_groups_carry_distinct_mount_offsets() {
+    let offsets_for = |unit_type: i16, bullet_id: i16| {
+        let mut unit =
+            legacy_weapons_make_enemy(7_600, enemy_spec(unit_type).unwrap(), 0.0, 0.0, 8_000.0);
+        unit.team = 1;
+        let fire = collect_allied_weapon_fire(&mut unit, 90.0, 50.0).unwrap();
+        let mut offsets: Vec<f32> = fire
+            .iter()
+            .filter_map(|fire| match fire {
+                AlliedWeaponFire::Projectile(volley) if volley.bullet_id == bullet_id => {
+                    Some(volley.mount_offset)
+                }
+                _ => None,
+            })
+            .collect();
+        offsets.sort_unstable_by(f32::total_cmp);
+        offsets.dedup();
+        offsets
+    };
+
+    // One distinct lateral per sap timer group.
+    assert_eq!(offsets_for(13, 25), vec![4.0, 9.0, 14.0]);
+    // The primary purple mount keeps its own offset.
+    assert_eq!(offsets_for(13, 26), vec![9.0]);
+    // One distinct lateral per artillery timer group.
+    assert_eq!(offsets_for(19, 35), vec![11.0, 20.0]);
+}
+
+#[test]
+fn arkyid_sap_and_eclipse_flak_groups_spawn_from_their_own_muzzles() {
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let cases = [
+        ("arkyid-secondary", ARKYID_SAP, 4.0),
+        ("arkyid-tertiary", ARKYID_SAP, 9.0),
+        ("arkyid-quaternary", ARKYID_SAP, 14.0),
+        ("eclipse-secondary", ECLIPSE_FLAK, 11.0),
+        ("eclipse-tertiary", ECLIPSE_FLAK, 20.0),
+    ];
+    let x = 1_000.0f32;
+    let y = 1_000.0f32;
+    for (label, base_volley, offset) in cases {
+        world.projectiles.clear();
+        spawn_enemy_volley(
+            &world,
+            &crate::network::outbound::NoopEmit,
+            -1,
+            None,
+            false,
+            volley_with_mount_offset(base_volley, offset),
+            x,
+            y,
+            x + 100.0,
+            y,
+        );
+        // Aiming due east puts the muzzle purely on the y axis:
+        // source_y = y -/+ mount_offset for the mirrored pair.
+        let laterals: Vec<f32> = world
+            .projectiles
+            .iter()
+            .map(|projectile| (y - projectile.source_y).abs())
+            .collect();
+        assert_eq!(laterals.len(), 2, "{label}: both mirrored mounts must fire");
+        for lateral in &laterals {
+            assert!(
+                (lateral - offset).abs() < 0.001,
+                "{label}: expected muzzle lateral {offset}, got {laterals:?}"
+            );
+        }
+    }
+}
+
+/// Audit H14: UI notification frames match the javap-verified official
+/// generated-packet layouts:
+///   Announce (8):   TypeIO.writeString(message)
+///   InfoMessage(59):TypeIO.writeString(message)
+///   InfoToast (64): TypeIO.writeString(message) + f duration
+#[test]
+fn ui_notification_frames_match_official_layouts() {
+    // read_packet keeps [id][compress byte][payload...].
+    let announce = crate::network::wire::encode::encode_announce_frame("hi").unwrap();
+    let packet = read_packet(std::io::Cursor::new(&announce[2..])).unwrap();
+    assert_eq!(packet[0], 8);
+    // TypeIO.writeString("hi") = u16 len + MUTF-8 bytes.
+    assert_eq!(&packet[2..], &[0, 2, b'h', b'i']);
+
+    let info = crate::network::wire::encode::encode_info_message_frame("hi").unwrap();
+    let packet = read_packet(std::io::Cursor::new(&info[2..])).unwrap();
+    assert_eq!(packet[0], 59);
+    assert_eq!(&packet[2..], &[0, 2, b'h', b'i']);
+
+    let toast = crate::network::wire::encode::encode_info_toast_frame("hi", 5.0).unwrap();
+    let packet = read_packet(std::io::Cursor::new(&toast[2..])).unwrap();
+    assert_eq!(packet[0], 64);
+    assert_eq!(&packet[2..], &[0, 2, b'h', b'i', 0x40, 0xA0, 0x00, 0x00]); // writeString("hi") + f32 5.0 = 0x40A00000
+}
+
+#[test]
+fn door_tap_config_toggles_open_and_chains_adjacent_doors() {
+    assert!(valid_tile_config(228, &[10, 1]));
+    assert!(valid_tile_config(229, &[10, 0]));
+    assert!(!valid_tile_config(239, &[10, 1]));
+
+    let (world, _connections, _, _) = legacy_weapons_test_world();
+    let a = (45 << 16) | 100;
+    let b = (46 << 16) | 100;
+    for pos in [a, b] {
+        world.tiles.insert(
+            pos,
+            DynamicTile {
+                position: pos,
+                block: 228,
+                team: 1,
+                occupied: vec![pos],
+                health: 400.0,
+                ..Default::default()
+            },
+        );
+    }
+    let actor = player();
+    assert!(apply_tile_config(&actor, &world, a, &[10, 1]));
+    assert!(world.tiles.get(&a).unwrap().door_open);
+    assert!(world.tiles.get(&b).unwrap().door_open);
+
+    assert!(apply_tile_config(&actor, &world, a, &[10, 0]));
+    assert!(!world.tiles.get(&a).unwrap().door_open);
+    assert!(!world.tiles.get(&b).unwrap().door_open);
+}
+
+#[test]
+fn auto_door_toggle_frame_is_tile_plus_bool() {
+    let position: i32 = (45 << 16) | 100;
+    let frame =
+        crate::network::wire::encode::encode_auto_door_toggle_frame(position, true).unwrap();
+    let packet = read_packet(std::io::Cursor::new(&frame[2..])).unwrap();
+    assert_eq!(
+        packet[0],
+        crate::network::protocol::AUTO_DOOR_TOGGLE_PACKET_ID
+    );
+    // `read_packet` returns id + payload (no length/compress prefix). TypeIO.writeTile
+    // is one packed i32, then bool open.
+    assert_eq!(&packet[1..5], &position.to_be_bytes());
+    assert_eq!(packet[5], 1);
+    assert_eq!(packet.len(), 6);
+}
+
+#[test]
+fn survival_construction_persisted_load_and_finish() {
+    let (world, connections, _, _) = legacy_weapons_test_world();
+    *world.game_state.mode.write() = GameMode::Survival;
+    world
+        .game_state
+        .infinite_resources
+        .store(false, Ordering::Relaxed);
+    world.wave_rules.write().infinite_resources = false;
+
+    // Initially 0 items: building titanium-conveyor (258) cannot complete.
+    *world.game_state.core_items.write() = vec![0; 22];
+    let position = (54 << 16) | 52;
+    let mut builder = player();
+    builder.unit_id = 2_000_001;
+    builder.x = 54.0 * 8.0;
+    builder.y = 52.0 * 8.0;
+    let plan = BuildPlan {
+        position,
+        block: 258, // titanium-conveyor (requires copper 1, lead 1, titanium 1)
+        rotation: 1,
+        breaking: false,
+        config: vec![0],
+    };
+    let world = std::sync::Arc::new(world);
+    apply_build_plans(
+        &mut builder,
+        std::slice::from_ref(&plan),
+        &world,
+        &connections,
+        &test_admin(),
+        true,
+    )
+    .unwrap();
+    assert!(world.pending_builds.contains_key(&position));
+
+    // Simulate: cannot finish because copper/lead/titanium are 0.
+    simulate_constructions(&world, &connections, 400.0);
+    assert!(
+        world.pending_builds.contains_key(&position),
+        "must remain pending when items missing"
+    );
+    {
+        let tile = world
+            .tiles
+            .get(&position)
+            .expect("timed place inserts ConstructBlock");
+        assert!(
+            crate::network::buildings::construction::is_construct_block(tile.block),
+            "unpaid construct must stay a ConstructBlock, not the finished conveyor"
+        );
+        assert_eq!(tile.stored_amount, 258);
+    }
+
+    // Deposit copper (0), lead (1), titanium (6):
+    {
+        let mut items = world.game_state.core_items.write();
+        items[0] = 220; // copper
+        items[1] = 12; // lead
+        items[6] = 307; // titanium
+    }
+    // Now simulate construction again:
+    simulate_constructions(&world, &connections, 400.0);
+    assert!(
+        !world.pending_builds.contains_key(&position),
+        "must finish when resources available"
+    );
+    assert!(world.tiles.get(&position).is_some_and(|t| t.block == 258));
+    assert_eq!(world.game_state.core_items.read()[0], 219);
+    assert_eq!(world.game_state.core_items.read()[1], 11);
+    assert_eq!(world.game_state.core_items.read()[6], 306);
+}
+
+#[test]
+fn pruebas01_save_restores_core_items_to_game_state() {
+    let path = std::path::Path::new("world-pruebas01.json");
+    if !path.exists() {
+        return;
+    }
+    let loaded = load_tiles(path, None).unwrap();
+    let items = loaded
+        .core_items
+        .expect("world-pruebas01.json must have core_items");
+    assert_eq!(items[0], 220); // copper
+    assert_eq!(items[6], 307); // titanium
+
+    let (world, _, _, _) = legacy_weapons_test_world();
+    *world.game_state.core_items.write() = items.clone();
+    assert_eq!(world.game_state.core_items.read()[0], 220);
+    assert_eq!(world.game_state.core_items.read()[6], 307);
+}
+
+#[test]
+fn astra_review_sandbox_resource_flags_control_cost_and_refund() {
+    let state = GameState::new();
+    *state.mode.write() = GameMode::Sandbox;
+    *state.core_items.write() = vec![0; 22];
+    let mut rules = crate::network::units::WaveRules::default();
+    assert!(!crate::network::buildings::consume_requirements_for(
+        &state, &rules, 1, 257
+    ));
+    state.core_items.write()[0] = 2;
+    assert!(crate::network::buildings::consume_requirements_for(
+        &state, &rules, 1, 257
+    ));
+    assert_eq!(state.core_items.read()[0], 1);
+    refund_requirements(&state, 1, 257);
+    assert_eq!(state.core_items.read()[0], 2);
+    rules.infinite_resources = true;
+    assert!(crate::network::buildings::consume_requirements_for(
+        &state, &rules, 1, 257
+    ));
+    assert_eq!(state.core_items.read()[0], 2);
+}
+
+#[test]
+fn astra_review_wave_weapons_reload_without_banking_idle_or_disarmed_shots() {
+    for mode in [GameMode::Survival, GameMode::Sandbox] {
+        for unit_type in [0, 3, 18] {
+            let (world, out, x, y) = legacy_weapons_test_world();
+            *world.game_state.mode.write() = mode;
+            let spec = enemy_spec(unit_type).unwrap();
+            let mut unit = legacy_weapons_make_enemy(3_900_001, spec, x + 40.0, y, spec.health);
+            crate::network::units::StatusContainer::apply_status(&mut unit, 20, 1000.0);
+            world.enemies.insert(unit.id, unit);
+            for _ in 0..600 {
+                simulate_waves_and_enemies(&world, &out, 1.0);
+            }
+            assert!(
+                world.projectiles.is_empty(),
+                "disarmed type {unit_type} fired"
+            );
+            {
+                let mut unit = world.enemies.get_mut(&3_900_001).unwrap();
+                unit.statuses.clear();
+                unit.status_effect = -1;
+                unit.status_duration = 0.0;
+                unit.status_agg = None;
+                unit.x = x + 40.0;
+                unit.y = y;
+            }
+            simulate_waves_and_enemies(&world, &out, 1.0);
+            let count = world.projectiles.len();
+            assert!(
+                count > 0 && count <= 10,
+                "type {unit_type} banked {count} projectiles"
+            );
+        }
+    }
+}
+
+#[test]
+fn astra_review_boost_blocks_weapons_but_normal_flight_does_not() {
+    for (unit_type, elevation, expected) in [(5, 0.1, false), (5, 0.0, true), (15, 1.0, true)] {
+        let spec = enemy_spec(unit_type).unwrap();
+        let mut unit = legacy_weapons_make_enemy(3_900_002, spec, 0.0, 0.0, spec.health);
+        unit.elevation = elevation;
+        assert_eq!(
+            crate::network::combat::unit_combat::unit_can_shoot(&unit),
+            expected
+        );
+    }
+}
+
+#[test]
+fn astra_review_wave_targeting_ignores_possession_avatar() {
+    let (world, out, x, y) = legacy_weapons_test_world();
+    let body_id = 3_900_004;
+    let session = c06_possessed_session(&world, body_id, x + 80.0, y + 40.0);
+    // The stale core avatar is closer, on the opposite side of the shooter.
+    {
+        let mut avatar = world.players.get_mut(&session.unit_id).unwrap();
+        avatar.x = x + 80.0;
+        avatar.y = y - 10.0;
+    }
+    let mut shooter = legacy_weapons_make_enemy(3_900_003, DAGGER, x + 80.0, y, DAGGER.health);
+    shooter.attack_reload = 26.0;
+    world.enemies.insert(shooter.id, shooter);
+    simulate_waves_and_enemies(&world, &out, 1.0);
+    assert!(!world.projectiles.is_empty());
+    assert!(
+        world.projectiles.iter().all(|p| p.target_y > y),
+        "must aim at the possessed body"
+    );
+}
+
+#[test]
+fn astra_review_ordered_unit_keeps_course_while_firing() {
+    for hold_fire in [false, true] {
+        let (world, out, x, y) = legacy_weapons_test_world();
+        let mut ally = legacy_weapons_make_enemy(3_900_010, FLARE, x, y, FLARE.health);
+        ally.team = 1;
+        ally.elevation = 1.0;
+        ally.attack_reload = 100.0;
+        world.enemies.insert(ally.id, ally.clone());
+        world.unit_orders.insert(
+            ally.id,
+            UnitOrder {
+                unit_id: ally.id,
+                command: 0,
+                stances: if hold_fire { 1 << 1 } else { 0 },
+                payload_cooldown: 0.0,
+                target_kind: 0,
+                target_id: -1,
+                target_x: Some(x + 300.0),
+                target_y: Some(y),
+                logic_control: 0,
+                queue: Vec::new(),
+            },
+        );
+        world.enemies.insert(
+            3_900_011,
+            legacy_weapons_make_enemy(3_900_011, DAGGER, x, y + 40.0, DAGGER.health),
+        );
+        for _ in 0..10 {
+            simulate_allied_units(&world, &out, 1.0);
+        }
+        let current = world.enemies.get(&ally.id).unwrap();
+        assert!(
+            current.x > x && current.velocity_x > 0.0,
+            "combat must not stop a move order"
+        );
+        assert!(
+            (current.y - y).abs() < 0.1,
+            "combat must not integrate a second movement"
+        );
+        assert_eq!(world.projectiles.is_empty(), hold_fire);
+    }
+}
+
+#[test]
+fn astra_review_checkpoint_keeps_factory_output_and_payload_order() {
+    let mut save: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tools/smoke/smoke-unit-payload-world-1597.json"
+    ))
+    .unwrap();
+    let mut unit = save["enemies"][0].clone();
+    unit["id"] = serde_json::json!(3_900_020);
+    // The factory may have been deselected after completing this payload.
+    let factory = save["tiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|tile| tile["block"] == 377)
+        .unwrap();
+    factory["payload"] = unit.clone();
+    factory["config"] = serde_json::json!([1, 255, 255, 255, 255]);
+    save["enemies"] = serde_json::json!([]);
+    save["unit_orders"] = serde_json::json!([{
+        "unit_id": 3_900_020, "command": 0, "stances": 0,
+        "payload_cooldown": 0.0, "target_kind": 0, "target_id": -1,
+        "target_x": 80.0, "target_y": 80.0, "logic_control": 0, "queue": []
+    }]);
+    let path =
+        std::env::temp_dir().join(format!("astra-payload-order-{}.json", std::process::id()));
+    for (block, unit_type) in [(377, 0), (380, 1)] {
+        let tile = save["tiles"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|tile| tile["payload"].is_object())
+            .unwrap();
+        tile["block"] = serde_json::json!(block);
+        tile["payload"]["unit_type"] = serde_json::json!(unit_type);
+        std::fs::write(&path, serde_json::to_vec(&save).unwrap()).unwrap();
+        let loaded = load_tiles(&path, Some((300, 300))).unwrap();
+        assert!(
+            loaded.tiles.iter().any(|tile| tile.payload.is_some()),
+            "block {block} lost its completed output"
+        );
+        assert_eq!(
+            loaded.unit_orders.len(),
+            1,
+            "held unit order must survive reload"
+        );
+        assert_eq!(loaded.unit_orders[0].target_x, Some(80.0));
+    }
+    std::fs::remove_file(path).unwrap();
 }

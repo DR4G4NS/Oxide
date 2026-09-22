@@ -2,19 +2,298 @@
 //! factories, unit caps. The economy facade re-exports through
 //! crate::network::economy::*.
 
+use crate::game::content::block_size;
+use crate::network::buildings::construction::{block_footprint, dynamic_at};
 use crate::network::buildings::snapshot::*;
-use crate::network::combat::unit_combat::effective_unit_speed;
 use crate::network::economy::spec::{
     accept_logistics_item_from, factory_recipe, inventory_add, inventory_count, inventory_remove,
     inventory_total, offset_position,
 };
 use crate::network::units::*;
 use crate::network::wire::encode::{encode_unit_spawn_payload, frame_generated_packet};
-use crate::network::wire::tile_config::{configured_unit_command, unit_factory_plan};
+use crate::network::wire::tile_config::configured_unit_command;
 use crate::network::world::*;
 use dashmap::DashMap;
 
 use super::*;
+
+/// Official `PayloadBlock` ctor (159.7): `payloadSpeed = 0.7`, `payloadRotateSpeed = 5`.
+const PAYLOAD_SPEED: f32 = 0.7;
+const PAYLOAD_ROTATE_SPEED: f32 = 5.0;
+const PAYLOAD_ARRIVED: f32 = 0.01;
+const PAYLOAD_AT_DEST: f32 = 0.001;
+
+fn unit_block_half(block: i16) -> f32 {
+    f32::from(block_size(block)) * 4.0
+}
+
+fn set_pay_vector(tile: &mut DynamicTile, x: f32, y: f32) {
+    if x == 0.0 && y == 0.0 {
+        tile.payload_accum.clear();
+    } else {
+        tile.payload_accum = vec![x, y];
+    }
+}
+
+/// Initialize every newly received UnitPayload consistently, whether it
+/// arrives from another unit block, a conveyor, or a carrying unit.
+pub(crate) fn initialize_received_unit_payload(
+    tile: &mut DynamicTile,
+    source_x: f32,
+    source_y: f32,
+    rotation: f32,
+) {
+    let Some(CarriedPayload::Unit(unit)) = tile.payload.as_deref() else {
+        return;
+    };
+    let unit_type = unit.unit_type;
+    let (cx, cy) = building_center(tile.position, tile.block);
+    let half = unit_block_half(tile.block);
+    set_pay_vector(
+        tile,
+        (source_x - cx).clamp(-half, half),
+        (source_y - cy).clamp(-half, half),
+    );
+    tile.payload_rotation = rotation;
+    tile.production_progress = 0.0;
+    tile.stored_amount = i32::from(unit_type) + 1;
+}
+
+fn approach_vec(current: (f32, f32), dest: (f32, f32), step: f32) -> (f32, f32) {
+    let dx = dest.0 - current.0;
+    let dy = dest.1 - current.1;
+    let dist = dx.hypot(dy);
+    if dist <= step {
+        dest
+    } else {
+        (current.0 + dx / dist * step, current.1 + dy / dist * step)
+    }
+}
+
+fn output_dest(tile: &DynamicTile) -> (f32, f32) {
+    let half = unit_block_half(tile.block);
+    let radians = (f32::from(tile.rotation) * 90.0).to_radians();
+    (radians.cos() * half, radians.sin() * half)
+}
+
+fn has_arrived(tile: &DynamicTile) -> bool {
+    let (x, y) = unit_block_pay_vector(tile);
+    x.hypot(y) <= PAYLOAD_ARRIVED
+}
+
+fn front_position(tile: &DynamicTile) -> i32 {
+    // Official Building.front: nearby(d4(rotation) * (size/2 + 1)) from the
+    // origin tile (odd-sized UnitBlock origins are the centre).
+    let trns = i32::from(block_size(tile.block)) / 2 + 1;
+    offset_position_by(tile.position, tile.rotation, trns)
+}
+
+fn apply_move_in(tile: &mut DynamicTile, delta: f32) -> bool {
+    let dest_rot = f32::from(tile.rotation) * 90.0;
+    tile.payload_rotation = move_toward_angle(
+        tile.payload_rotation,
+        dest_rot,
+        PAYLOAD_ROTATE_SPEED * delta,
+    );
+    let next = approach_vec(
+        unit_block_pay_vector(tile),
+        (0.0, 0.0),
+        PAYLOAD_SPEED * delta,
+    );
+    set_pay_vector(tile, next.0, next.1);
+    has_arrived(tile)
+}
+
+fn apply_move_out_slide(tile: &mut DynamicTile, delta: f32) -> (f32, f32) {
+    let dest = output_dest(tile);
+    let dest_rot = f32::from(tile.rotation) * 90.0;
+    tile.payload_rotation = move_toward_angle(
+        tile.payload_rotation,
+        dest_rot,
+        PAYLOAD_ROTATE_SPEED * delta,
+    );
+    let next = approach_vec(unit_block_pay_vector(tile), dest, PAYLOAD_SPEED * delta);
+    set_pay_vector(tile, next.0, next.1);
+    dest
+}
+
+pub(crate) fn unit_allowed_in_payloads(unit_type: i16) -> bool {
+    // Official UnitType.allowedInPayloads is true for combat units and false
+    // for missiles / the internal `block` unit / assembly drones.
+    !matches!(unit_type, 46 | 53 | 55 | 61..=69)
+}
+
+pub(crate) fn unit_spawned_by_core(unit_type: i16) -> bool {
+    // Official core ships spawn with spawnedByCore=true: Serpulo
+    // alpha/beta/gamma and Erekir evoke/incite/emanate.
+    matches!(unit_type, 35..=37 | 58..=60)
+}
+
+fn unit_tile_position(unit: &EnemyUnit) -> i32 {
+    let x = crate::network::combat::enemy::world_to_tile(unit.x);
+    let y = crate::network::combat::enemy::world_to_tile(unit.y);
+    (x << 16) | (y as u16 as i32)
+}
+
+fn unit_on_building_footprint(
+    world: &DynamicWorld,
+    unit: &EnemyUnit,
+    building: &DynamicTile,
+) -> bool {
+    let tile = unit_tile_position(unit);
+    if tile == building.position || building.occupied.contains(&tile) {
+        return true;
+    }
+    block_footprint(world, building.position, building.block)
+        .is_some_and(|footprint| footprint.contains(&tile))
+}
+
+pub(crate) fn front_accepts_payload(
+    world: &DynamicWorld,
+    front: &DynamicTile,
+    payload: &CarriedPayload,
+) -> bool {
+    if !front.enabled || front.payload.is_some() {
+        return false;
+    }
+    if let Some(limit) = payload_block_limit(front.block) {
+        if matches!(front.block, 398..=409)
+            && payload_fits_limit(payload, limit)
+            && payload_block_accepts(front.block, payload)
+        {
+            return true;
+        }
+    }
+    if let CarriedPayload::Unit(unit) = payload {
+        if reconstructor_recipe(front.block).is_some() {
+            let Some(output) = reconstructor_upgrade(front.block, unit.unit_type) else {
+                return false;
+            };
+            return !world.wave_rules.read().unit_banned(output);
+        }
+    }
+    false
+}
+
+/// Official `PayloadBlockBuild.moveOutPayload` for UnitBlock descendants.
+/// Snapshots the tile, slides `payVector`, then either hands the payload to
+/// the front acceptor or dumps into the world. Never holds a tile guard
+/// while querying another tile.
+fn move_out_unit_payload(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    key: i32,
+    delta_ticks: f32,
+) -> bool {
+    let dest = if let Some(mut tile) = world.tiles.get_mut(&key) {
+        if tile.payload.is_none() {
+            return false;
+        }
+        apply_move_out_slide(&mut tile, delta_ticks.max(0.0))
+    } else {
+        return false;
+    };
+    let Some(snapshot) = world.tiles.get(&key).map(|tile| tile.clone()) else {
+        return false;
+    };
+    let (px, py) = unit_block_pay_vector(&snapshot);
+    if (px - dest.0).hypot(py - dest.1) > PAYLOAD_AT_DEST {
+        return true;
+    }
+    let front = dynamic_at(world, front_position(&snapshot));
+    let front_accepts =
+        front
+            .as_ref()
+            .zip(snapshot.payload.as_deref())
+            .is_some_and(|(front, payload)| {
+                front.team == snapshot.team && front_accepts_payload(world, front, payload)
+            });
+    if front_accepts {
+        if let Some(front) = front {
+            let payload = world
+                .tiles
+                .get_mut(&key)
+                .and_then(|mut tile| tile.payload.take());
+            if let Some(payload) = payload {
+                if let Some(mut receiver) = world.tiles.get_mut(&front.position) {
+                    let (sx, sy) = building_center(snapshot.position, snapshot.block);
+                    let (rx, ry) = building_center(receiver.position, receiver.block);
+                    let half = unit_block_half(receiver.block);
+                    receiver.payload = Some(payload);
+                    set_pay_vector(
+                        &mut receiver,
+                        (sx - rx).clamp(-half, half),
+                        (sy - ry).clamp(-half, half),
+                    );
+                    receiver.payload_rotation = snapshot.payload_rotation;
+                    if reconstructor_recipe(receiver.block).is_some() {
+                        if let Some(CarriedPayload::Unit(unit)) = receiver.payload.as_deref() {
+                            receiver.stored_amount = i32::from(unit.unit_type) + 1;
+                            receiver.production_progress = 0.0;
+                        }
+                    }
+                }
+                if let Some(mut sender) = world.tiles.get_mut(&key) {
+                    sender.payload = None;
+                    sender.payload_accum.clear();
+                    sender.stored_amount = 0;
+                    sender.production_progress = 0.0;
+                }
+            }
+        }
+        return true;
+    }
+    let can_dump = front.as_ref().is_none_or(|front| {
+        !crate::game::content::building_check_solid(front.block, front.door_open)
+            || front.position == snapshot.position
+    });
+    // Empty or non-solid front (conveyor, open door) → dump. Solid wall → hold.
+    if front.is_some() && !can_dump {
+        return true;
+    }
+    let Some(CarriedPayload::Unit(unit)) = snapshot.payload.as_deref().cloned() else {
+        return true;
+    };
+    let (dump_x, dump_y) = {
+        let (center_x, center_y) = building_center(snapshot.position, snapshot.block);
+        let (px, py) = unit_block_pay_vector(&snapshot);
+        (center_x + px, center_y + py)
+    };
+    if !can_create_unit(world, unit.team, unit.unit_type)
+        || !payload_dump_world_clear(world, &unit, dump_x, dump_y)
+    {
+        return true;
+    }
+    if let Some(mut live) = world.tiles.get_mut(&key) {
+        live.payload = None;
+        live.payload_accum.clear();
+        live.stored_amount = 0;
+        live.production_progress = 0.0;
+    }
+    release_held_unit(world, out, &snapshot, unit);
+    true
+}
+
+fn attribute_crafter_boost(world: &DynamicWorld, block: i16, position: i32) -> f32 {
+    use crate::game::content::FloorAttribute;
+    let (attribute, scale, size, max_boost) = match block {
+        184 => (FloorAttribute::Heat, 0.15, 3, 1.0),
+        330 => (FloorAttribute::Spores, 1.0, 2, 2.0),
+        _ => return 1.0,
+    };
+    let tile_x = (position >> 16) as i16 as i32;
+    let tile_y = position as i16 as i32;
+    let mut sum = 0.0;
+    for dy in 0..size {
+        for dx in 0..size {
+            sum += crate::game::content::floor_attribute(
+                crate::network::combat::floor_at_tile(world, tile_x + dx, tile_y + dy),
+                attribute,
+            );
+        }
+    }
+    (1.0 + (sum * scale).min(max_boost)).max(0.0)
+}
 
 pub(crate) fn simulate_factories(
     world: &DynamicWorld,
@@ -45,9 +324,10 @@ pub(crate) fn simulate_factories(
         if has_inputs && final_total <= recipe.capacity {
             let efficiency = power.get(&key).copied().unwrap_or(1.0);
             if efficiency > 0.0 {
+                let boost = attribute_crafter_boost(world, snapshot.block, snapshot.position);
+                let time_scale = building_time_scale(world, key);
                 let crafted = if let Some(mut factory) = world.tiles.get_mut(&key) {
-                    factory.production_progress +=
-                        delta_ticks * building_time_scale(world, key) * efficiency;
+                    factory.production_progress += delta_ticks * time_scale * efficiency * boost;
                     if factory.production_progress >= recipe.craft_time {
                         factory.production_progress %= recipe.craft_time;
                         for (item, amount) in recipe.inputs {
@@ -202,109 +482,98 @@ pub(crate) struct UnitFactoryPlan {
     pub(crate) build_time: f32,
 }
 
+struct ProductionRecipe {
+    block: i16,
+    plan: i16,
+    unit_type: i16,
+    build_time: f32,
+    liquid_id: i16,
+    liquid_rate: f32,
+    items: Vec<(i16, i32)>,
+}
+
+fn production_recipes() -> &'static [ProductionRecipe] {
+    static RECIPES: std::sync::LazyLock<Vec<ProductionRecipe>> = std::sync::LazyLock::new(|| {
+        include_str!("../../game/unit_production.tsv")
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let mut fields = line.split('\t');
+                ProductionRecipe {
+                    block: fields.next().unwrap().parse().unwrap(),
+                    plan: fields.next().unwrap().parse().unwrap(),
+                    unit_type: fields.next().unwrap().parse().unwrap(),
+                    build_time: fields.next().unwrap().parse().unwrap(),
+                    liquid_id: fields.next().unwrap().parse().unwrap(),
+                    liquid_rate: fields.next().unwrap().parse().unwrap(),
+                    items: fields
+                        .map(|field| {
+                            let (item, amount) = field.split_once(':').unwrap();
+                            (item.parse().unwrap(), amount.parse().unwrap())
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    });
+    &RECIPES
+}
+
 pub(crate) fn unit_factory_recipe(block: i16, config: &[u8]) -> Option<UnitFactoryPlan> {
-    // Erekir fabricators (386-388) are configurable=false with one fixed plan
-    // (Blocks.java: tankFabricator -> stell, shipFabricator -> elude,
-    // mechFabricator -> merui).
-    let (plan, unit_type) = match block {
-        386..=388 => (0i16, [38, 49, 43][(block - 386) as usize]),
-        _ => unit_factory_plan(block, config).or_else(|| {
-            // Official UnitFactoryBuild.created() selects the first unlocked plan.
-            unit_factory_plan(block, &[1, 0, 0, 0, 0])
-        })?,
-    };
-    let recipe = match block {
-        377 => [
-            UnitFactoryPlan {
-                unit_type: 0,
-                requirements: &[(9, 10), (1, 10)],
-                build_time: 900.0,
-            },
-            UnitFactoryPlan {
-                unit_type: 10,
-                requirements: &[(9, 8), (5, 10)],
-                build_time: 600.0,
-            },
-            UnitFactoryPlan {
-                unit_type: 5,
-                requirements: &[(9, 30), (1, 20), (6, 20)],
-                build_time: 2_400.0,
-            },
-        ]
-        .get(usize::try_from(plan).ok()?)
-        .copied(),
-        378 => [
-            UnitFactoryPlan {
-                unit_type: 15,
-                requirements: &[(9, 15)],
-                build_time: 900.0,
-            },
-            UnitFactoryPlan {
-                unit_type: 20,
-                requirements: &[(9, 30), (1, 15)],
-                build_time: 2_100.0,
-            },
-        ]
-        .get(usize::try_from(plan).ok()?)
-        .copied(),
-        379 => [
-            UnitFactoryPlan {
-                unit_type: 25,
-                requirements: &[(9, 20), (3, 35)],
-                build_time: 2_700.0,
-            },
-            UnitFactoryPlan {
-                unit_type: 30,
-                requirements: &[(9, 15), (6, 20)],
-                build_time: 2_100.0,
-            },
-        ]
-        .get(usize::try_from(plan).ok()?)
-        .copied(),
-        386 => [UnitFactoryPlan {
-            unit_type: 38, // stell
-            requirements: &[(16, 40), (9, 50)],
-            build_time: 2_100.0, // 60f * 35f
-        }]
-        .get(usize::try_from(plan).ok()?)
-        .copied(),
-        387 => [UnitFactoryPlan {
-            unit_type: 49, // elude
-            requirements: &[(3, 50), (9, 70)],
-            build_time: 2_400.0, // 60f * 40f
-        }]
-        .get(usize::try_from(plan).ok()?)
-        .copied(),
-        388 => [UnitFactoryPlan {
-            unit_type: 43, // merui
-            requirements: &[(16, 50), (9, 70)],
-            build_time: 2_400.0, // 60f * 40f
-        }]
-        .get(usize::try_from(plan).ok()?)
-        .copied(),
-        _ => None,
-    }?;
-    (recipe.unit_type == unit_type).then_some(recipe)
+    let (plan, unit_type) =
+        crate::network::wire::tile_config::resolved_unit_factory_plan(block, config)?;
+    let recipe = production_recipes().iter().find(|recipe| {
+        recipe.block == block && recipe.plan == plan && recipe.unit_type == unit_type
+    })?;
+    Some(UnitFactoryPlan {
+        unit_type,
+        requirements: &recipe.items,
+        build_time: recipe.build_time,
+    })
 }
 
 pub(crate) fn unit_factory_item_capacity(block: i16, item: i16) -> i32 {
-    match (block, item) {
-        (377, 9) => 60,
-        (377, 1 | 6) => 40,
-        (377, 5) => 20,
-        (378, 9) => 60,
-        (378, 1) => 30,
-        (379, 9 | 6) => 40,
-        (379, 3) => 70,
-        // Erekir fabricators: per-item capacity = amount * 2 (initCapacities).
-        (386, 16) => 80,
-        (386, 9) => 100,
-        (387, 3) => 100,
-        (387, 9) => 140,
-        (388, 16) => 100,
-        (388, 9) => 140,
-        _ => 0,
+    production_recipes()
+        .iter()
+        .filter(|recipe| recipe.block == block && recipe.plan >= 0)
+        .flat_map(|recipe| &recipe.items)
+        .filter(|(candidate, _)| *candidate == item)
+        .map(|(_, amount)| amount.saturating_mul(2))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Shared consumption gate for the power graph and client prediction. The
+/// held payload is authoritative; `stored_amount` is only a legacy marker.
+pub(crate) fn unit_block_consumption_ready(
+    tile: &DynamicTile,
+    rules: &WaveRules,
+    tick: f32,
+) -> bool {
+    if !tile.enabled || !rules.activate_unit_factories(tile.team, tick) {
+        return false;
     }
+    let cost = rules.unit_cost_multiplier.max(0.0)
+        * rules.team_rule(tile.team).unit_cost_multiplier.max(0.0);
+    let has_items = |items: &[(i16, i32)]| {
+        items.iter().all(|(item, amount)| {
+            inventory_count(&tile.inventory, *item) >= (*amount as f32 * cost).round() as i32
+        })
+    };
+    if let Some(recipe) = reconstructor_recipe(tile.block) {
+        let Some(CarriedPayload::Unit(unit)) = tile.payload.as_deref() else {
+            return false;
+        };
+        return reconstructor_upgrade(tile.block, unit.unit_type)
+            .is_some_and(|output| !rules.unit_banned(output))
+            && has_items(recipe.items)
+            && (recipe.liquid_rate <= 0.0
+                || cost == 0.0
+                || (tile.stored_liquid == recipe.liquid_id && tile.liquid_amount > 0.000_001));
+    }
+    tile.payload.is_none()
+        && unit_factory_recipe(tile.block, &tile.config)
+            .is_some_and(|plan| !rules.unit_banned(plan.unit_type) && has_items(plan.requirements))
 }
 
 pub(crate) fn simulate_unit_factories(
@@ -324,6 +593,20 @@ pub(crate) fn simulate_unit_factories(
         let Some(snapshot) = world.tiles.get(&key).map(|tile| tile.clone()) else {
             continue;
         };
+        if !snapshot.enabled {
+            continue;
+        }
+        if snapshot.payload.is_some() {
+            // Official UnitFactoryBuild.updateTile: `shouldConsume` is false
+            // while a payload is held, `progress = 0`, and `moveOutPayload`
+            // runs every tick. Completion happens *after* moveOut, so a
+            // payload created this tick does not slide until the next tick.
+            if let Some(mut factory) = world.tiles.get_mut(&key) {
+                factory.production_progress = 0.0;
+            }
+            changed |= move_out_unit_payload(world, out, key, delta_ticks);
+            continue;
+        }
         let Some(plan) = unit_factory_recipe(snapshot.block, &snapshot.config) else {
             continue;
         };
@@ -332,13 +615,17 @@ pub(crate) fn simulate_unit_factories(
         if !rules.activate_unit_factories(snapshot.team, tick) {
             continue;
         }
+        if rules.unit_banned(plan.unit_type) {
+            continue;
+        }
         // A7: official UnitFactory consumes `Math.round(amount *
         // Rules.unitCost(team))` (ConsumeItems.trigger JAR offsets 23-52;
         // Rules.unitCost offsets 0-16 = unitCostMultiplier * TeamRule
         // .unitCostMultiplier; UnitFactory.lambda$initCapacities$6 wires it
         // as the Consume multiplier). The port models the TeamRule part; the
         // global Rules.unitCostMultiplier is not parsed (see report).
-        let cost_multiplier = rules.team_rule(snapshot.team).unit_cost_multiplier;
+        let cost_multiplier = rules.unit_cost_multiplier.max(0.0)
+            * rules.team_rule(snapshot.team).unit_cost_multiplier;
         let requirements: Vec<(i16, i32)> = plan
             .requirements
             .iter()
@@ -355,9 +642,6 @@ pub(crate) fn simulate_unit_factories(
         {
             continue;
         }
-        if !can_create_unit(world, snapshot.team, plan.unit_type) {
-            continue;
-        }
         let efficiency = power.get(&key).copied().unwrap_or(0.0);
         if efficiency <= 0.0 {
             continue;
@@ -366,65 +650,61 @@ pub(crate) fn simulate_unit_factories(
         // Rules.unitBuildSpeed(team)` (UnitFactory$UnitFactoryBuild.updateTile
         // JAR offsets 93-117; Rules.unitBuildSpeed offsets 0-16 =
         // unitBuildSpeedMultiplier * TeamRule.unitBuildSpeedMultiplier).
-        // The port models the TeamRule part; the global
-        // Rules.unitBuildSpeedMultiplier is not parsed (see report).
-        let build_speed_multiplier = rules.team_rule(snapshot.team).unit_build_speed_multiplier;
-        let completed = if let Some(mut factory) = world.tiles.get_mut(&key) {
-            factory.production_progress += delta_ticks
-                * building_time_scale(world, key)
-                * efficiency
-                * build_speed_multiplier.max(0.0);
+        let build_speed_multiplier = rules.unit_build_speed_multiplier.max(0.0)
+            * rules.team_rule(snapshot.team).unit_build_speed_multiplier;
+        // DashMap: snapshot overdrive before the factory get_mut.
+        let time_scale = building_time_scale(world, key);
+        changed = true;
+        if let Some(mut factory) = world.tiles.get_mut(&key) {
+            factory.production_progress +=
+                delta_ticks * time_scale * efficiency * build_speed_multiplier.max(0.0);
             if factory.production_progress >= plan.build_time {
-                factory.production_progress %= plan.build_time;
-                for (item, amount) in requirements {
-                    let removed = inventory_remove(&mut factory.inventory, item, amount);
+                // Official: `progress %= 1f`, then `payload = new UnitPayload`,
+                // `payVector.setZero()`, consume. Cap is checked at dump,
+                // not at create (UnitPayload.dump / Units.canCreate).
+                factory.production_progress %= 1.0;
+                for (item, amount) in &requirements {
+                    if *amount <= 0 {
+                        continue;
+                    }
+                    let removed = inventory_remove(&mut factory.inventory, *item, *amount);
                     debug_assert!(removed, "validated unit-factory inputs disappeared");
                 }
-                true
-            } else {
-                false
+                factory.payload_accum.clear();
+                factory.production_progress =
+                    factory.production_progress.clamp(0.0, plan.build_time);
+                drop(factory);
+                if let Some(unit) = create_unit_for_block(world, &snapshot, plan.unit_type) {
+                    bind_factory_spawn_order(world, &snapshot, &unit);
+                    if let Some(mut factory) = world.tiles.get_mut(&key) {
+                        factory.payload = Some(Box::new(CarriedPayload::Unit(unit)));
+                    }
+                }
             }
-        } else {
-            false
-        };
-        changed = true;
-        if completed {
-            spawn_factory_unit(world, out, &snapshot, plan.unit_type);
         }
     }
     changed
 }
 
-pub(crate) fn spawn_factory_unit(
+fn create_unit_for_block(
     world: &DynamicWorld,
-    out: &dyn crate::network::outbound::FrameEmit,
     factory: &DynamicTile,
     unit_type: i16,
-) {
-    let Some(spec) = enemy_spec(unit_type) else {
-        return;
-    };
+) -> Option<EnemyUnit> {
+    let spec = enemy_spec(unit_type)?;
     world.game_state.game_stats.write().units_created += 1;
     let id = world.next_enemy_id.fetch_add(1, Ordering::Relaxed);
-    let center_x = (factory.position >> 16) as i16 as f32 * 8.0;
-    let center_y = factory.position as i16 as f32 * 8.0;
+    let (center_x, center_y) = building_center(factory.position, factory.block);
     let angle = f32::from(factory.rotation) * 90.0;
-    let radians = angle.to_radians();
     let mut unit = EnemyUnit {
         id,
         unit_type,
         entity_class: spec.entity_class,
         team: factory.team,
-        x: center_x + radians.cos() * 20.0,
-        y: center_y + radians.sin() * 20.0,
+        x: center_x,
+        y: center_y,
+        health: spec.health,
         rotation: angle,
-        health: spec.health
-            * world.wave_rules.read().unit_health_multiplier
-            * world
-                .wave_rules
-                .read()
-                .team_rule(factory.team)
-                .unit_health_multiplier,
         shield: 0.0,
         status_effect: -1,
         status_duration: f32::MAX,
@@ -447,20 +727,35 @@ pub(crate) fn spawn_factory_unit(
         authority: crate::network::world::UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_time: 0.0,
         status_agg: Default::default(),
+        drown_progress: 0.0,
     };
     // P0-01: factory allies are born with their team's default controller
     // (CommandAI for player-commandable teams).
     unit.authority = crate::network::units::default_unit_authority(world, &unit);
-    world.register_unit_group(id);
-    world.enemies.insert(id, unit.clone());
-    let command =
-        configured_unit_command(factory).unwrap_or_else(|| default_unit_command(unit_type));
+    if crate::game::content::unit_movement(unit_type).flying {
+        unit.elevation = 1.0;
+    }
+    Some(unit)
+}
+
+fn bind_factory_spawn_order(world: &DynamicWorld, factory: &DynamicTile, unit: &EnemyUnit) {
+    if world.unit_orders.contains_key(&unit.id) {
+        return;
+    }
+    let requested =
+        configured_unit_command(factory).unwrap_or_else(|| default_unit_command(unit.unit_type));
+    let command = if crate::game::unit_types::unit_type_allows_command(unit.unit_type, requested) {
+        requested
+    } else {
+        default_unit_command(unit.unit_type)
+    };
     let target = world.building_commands.get(&factory.position);
     world.unit_orders.insert(
-        id,
+        unit.id,
         UnitOrder {
-            unit_id: id,
+            unit_id: unit.id,
             command,
             stances: 0,
             payload_cooldown: 0.0,
@@ -472,12 +767,58 @@ pub(crate) fn spawn_factory_unit(
             queue: Vec::new(),
         },
     );
+}
+
+fn insert_released_unit(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    factory: &DynamicTile,
+    unit: EnemyUnit,
+) {
+    bind_factory_spawn_order(world, factory, &unit);
+    world.register_unit_group(unit.id);
+    world.enemies.insert(unit.id, unit.clone());
     // dashmap-guard: allow DM900 reason="encode_unit_spawn_payload reads rules and payload fields only; it does not access building_commands"
     if let Ok(payload) = encode_unit_spawn_payload(world, &unit) {
         if let Ok(frame) = frame_generated_packet(UNIT_SPAWN_PACKET_ID, &payload, false) {
             out.broadcast(frame);
         }
     }
+}
+
+fn release_held_unit(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    factory: &DynamicTile,
+    mut unit: EnemyUnit,
+) {
+    let (center_x, center_y) = building_center(factory.position, factory.block);
+    let (px, py) = unit_block_pay_vector(factory);
+    unit.x = center_x + px;
+    unit.y = center_y + py;
+    unit.rotation = factory.payload_rotation;
+    insert_released_unit(world, out, factory, unit);
+    // Official UnitBlock.dumpPayload: Call.unitBlockSpawn(tile) after a
+    // successful dump. TypeIO.writeTile is the packed i32 position.
+    if let Ok(frame) = encode_unit_block_spawn_frame(factory.position) {
+        out.broadcast(frame);
+    }
+}
+
+pub(crate) fn spawn_factory_unit(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    factory: &DynamicTile,
+    unit_type: i16,
+) {
+    let Some(mut unit) = create_unit_for_block(world, factory, unit_type) else {
+        return;
+    };
+    let (center_x, center_y) = building_center(factory.position, factory.block);
+    let radians = (f32::from(factory.rotation) * 90.0).to_radians();
+    unit.x = center_x + radians.cos() * 20.0;
+    unit.y = center_y + radians.sin() * 20.0;
+    insert_released_unit(world, out, factory, unit);
 }
 
 pub(crate) fn default_unit_command(unit_type: i16) -> u8 {
@@ -507,10 +848,26 @@ pub(crate) fn can_create_unit(world: &DynamicWorld, team: u8, unit_type: i16) ->
     let count = world
         .enemies
         .iter()
-        .filter(|unit| unit.team == team && unit.unit_type == unit_type)
-        .count();
+        .map(|unit| count_unit_type_with_payloads(&unit, team, unit_type))
+        .sum::<usize>();
     count < usize::try_from(cap.max(0)).unwrap_or(usize::MAX)
         && !world.wave_rules.read().unit_banned(unit_type)
+}
+
+fn count_unit_type_with_payloads(unit: &EnemyUnit, team: u8, unit_type: i16) -> usize {
+    // Teams.updateTeamStats counts units carried by live units recursively.
+    // Building payloads remain outside the count until released.
+    usize::from(unit.team == team && unit.unit_type == unit_type)
+        + unit
+            .payloads
+            .iter()
+            .map(|payload| match payload {
+                CarriedPayload::Unit(carried) => {
+                    count_unit_type_with_payloads(carried, team, unit_type)
+                }
+                CarriedPayload::Build(_) => 0,
+            })
+            .sum::<usize>()
 }
 
 pub(crate) fn core_unit_modifier(block: i16) -> i32 {
@@ -537,41 +894,28 @@ pub(crate) fn team_unit_cap(world: &DynamicWorld, team: u8) -> i32 {
     {
         return i32::MAX;
     }
-    let legacy = crate::network::world::team_core_snapshot(world, 1)
-        .iter()
-        .map(|core| core_unit_modifier(core.block))
-        .sum::<i32>();
-    let base = world.sharded_unit_cap.saturating_sub(legacy).max(0);
+    // Official Units.getCap: `unitCapVariable ? unitCap + team.unitCap : unitCap`.
+    // Live cores of THIS team, not a cached load-time total (ASTRA F01).
+    if !rules.unit_cap_variable {
+        return rules.unit_cap.max(0);
+    }
     let own = crate::network::world::team_core_snapshot(world, team)
         .iter()
         .map(|core| core_unit_modifier(core.block))
         .sum::<i32>();
-    base.saturating_add(own).max(0)
+    rules.unit_cap.saturating_add(own).max(0)
 }
 
 pub(crate) fn sharded_unit_cap(
     rules: &str,
     buildings: &[crate::engine::world_stream::NetworkBuilding],
 ) -> i32 {
-    let parsed = serde_json::from_str::<serde_json::Value>(rules).unwrap_or_default();
-    if parsed
-        .get("disableUnitCap")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    let parsed = crate::network::units::parse_wave_rules(rules);
+    if parsed.disable_unit_cap {
         return i32::MAX;
     }
-    let rule_cap = parsed
-        .get("unitCap")
-        .and_then(serde_json::Value::as_i64)
-        .and_then(|value| i32::try_from(value).ok())
-        .unwrap_or(0)
-        .max(0);
-    if !parsed
-        .get("unitCapVariable")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true)
-    {
+    let rule_cap = parsed.unit_cap.max(0);
+    if !parsed.unit_cap_variable {
         return rule_cap;
     }
     let core_modifier = buildings
@@ -591,38 +935,36 @@ pub(crate) fn sharded_unit_cap(
 #[derive(Clone, Copy)]
 pub(crate) struct ReconstructorRecipe {
     pub(crate) items: &'static [(i16, i32)],
+    /// Consumed liquid id (Liquids.java load order: water 0, slag 1, oil 2,
+    /// cryofluid 3, neoplasm 4, arkycite 5, gallium 6, ozone 7, hydrogen 8,
+    /// nitrogen 9, cyanogen 10). Negative when the block consumes no liquid.
+    pub(crate) liquid_id: i16,
     pub(crate) liquid_rate: f32,
     pub(crate) build_time: f32,
 }
 
 pub(crate) fn reconstructor_recipe(block: i16) -> Option<ReconstructorRecipe> {
-    match block {
-        380 => Some(ReconstructorRecipe {
-            items: &[(9, 40), (4, 40)],
-            liquid_rate: 0.0,
-            build_time: 600.0,
-        }),
-        381 => Some(ReconstructorRecipe {
-            items: &[(9, 130), (6, 80), (3, 40)],
-            liquid_rate: 0.0,
-            build_time: 1_800.0,
-        }),
-        382 => Some(ReconstructorRecipe {
-            items: &[(9, 850), (6, 750), (10, 650)],
-            liquid_rate: 1.0,
-            build_time: 5_400.0,
-        }),
-        383 => Some(ReconstructorRecipe {
-            items: &[(9, 1_000), (10, 600), (12, 500), (11, 350)],
-            liquid_rate: 3.0,
-            build_time: 14_400.0,
-        }),
-        _ => None,
-    }
+    let recipe = production_recipes()
+        .iter()
+        .find(|recipe| recipe.block == block && recipe.plan == -1)?;
+    Some(ReconstructorRecipe {
+        items: &recipe.items,
+        liquid_id: recipe.liquid_id,
+        liquid_rate: recipe.liquid_rate,
+        build_time: recipe.build_time,
+    })
 }
 
 pub(crate) fn reconstructor_upgrade(block: i16, input: i16) -> Option<i16> {
+    // Erekir refabricator upgrades (Blocks.java v158.1 `upgrades` rows).
+    // prime-refabricator carries three upgrade pairs.
     let output = match (block, input) {
+        (389, 38) => 39, // stell -> locus
+        (390, 49) => 50, // elude -> avert
+        (391, 43) => 44, // merui -> cleroi
+        (392, 39) => 40, // locus -> precept
+        (392, 44) => 45, // cleroi -> anthicus
+        (392, 50) => 51, // avert -> obviate
         (380, 5) => 6,
         (380, 0) => 1,
         (380, 10) => 11,
@@ -669,18 +1011,30 @@ pub(crate) fn reconstructor_item_capacity(block: i16, item: i16) -> i32 {
 }
 
 /// Executes `UnitCommand.enterPayload` for the currently supported unit-payload
-/// acceptors. Unlike the old proximity shortcut, a unit is only consumed after
-/// it has been explicitly ordered onto the matching reconstructor.
+/// acceptors. Official CommandAI absorbs only when the unit is standing on the
+/// building (`buildOn`) with command 5; movement is the ordinary order path.
+/// `PayloadBlock.acceptPayload(self, …)` uses `relativeTo(self) == -1`, so the
+/// unit-on-footprint path has no extra face check — `relativeTo` applies to
+/// building-to-building dumps (`src/network/economy/transport.rs`).
 pub(crate) fn simulate_unit_payload_entries(
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
-    delta_ticks: f32,
+    _delta_ticks: f32,
 ) -> bool {
     let candidates: Vec<_> = world
         .unit_orders
         .iter()
-        .filter(|order| order.command == 5 && order.target_kind == 1)
-        .map(|order| (order.unit_id, order.target_id))
+        .filter(|order| order.command == 5)
+        .map(|order| {
+            let target = if order.target_kind == 1 && order.target_id >= 0 {
+                Some(order.target_id)
+            } else if let (Some(x), Some(y)) = (order.target_x, order.target_y) {
+                Some((((x / 8.0).floor() as i32) << 16) | ((y / 8.0).floor() as i32 & 0xffff))
+            } else {
+                None
+            };
+            (order.unit_id, target)
+        })
         .collect();
     let mut changed = false;
 
@@ -688,47 +1042,55 @@ pub(crate) fn simulate_unit_payload_entries(
         let Some(unit) = world.enemies.get(&unit_id).map(|unit| unit.clone()) else {
             continue;
         };
-        let Some(reconstructor) = world.tiles.get(&position).map(|tile| tile.clone()) else {
+        let position = position.or_else(|| {
+            let tile =
+                ((unit.x / 8.0).floor() as i32) << 16 | ((unit.y / 8.0).floor() as i32 & 0xffff);
+            Some(tile)
+        });
+        let Some(position) = position else {
+            continue;
+        };
+        let Some(reconstructor) = dynamic_at(world, position)
+            .and_then(|tile| world.tiles.get(&tile.position).map(|t| t.clone()))
+        else {
             continue;
         };
         if unit.team != reconstructor.team
+            || !reconstructor.enabled
+            || reconstructor.payload.is_some()
             || reconstructor_recipe(reconstructor.block).is_none()
-            || reconstructor.stored_amount != 0
-            || reconstructor_upgrade(reconstructor.block, unit.unit_type).is_none()
+            || reconstructor_upgrade(reconstructor.block, unit.unit_type)
+                .is_none_or(|output| world.wave_rules.read().unit_banned(output))
+            || !unit_allowed_in_payloads(unit.unit_type)
+            || unit_spawned_by_core(unit.unit_type)
+            || !unit_on_building_footprint(world, &unit, &reconstructor)
         {
             continue;
         }
 
-        let target_x = (position >> 16) as i16 as f32 * 8.0;
-        let target_y = position as i16 as f32 * 8.0;
-        let dx = target_x - unit.x;
-        let dy = target_y - unit.y;
-        let distance = dx.hypot(dy);
-        let acceptance_distance =
-            f32::from(crate::game::content::block_size(reconstructor.block)) * 4.0;
-        if distance > acceptance_distance.max(1.0) {
-            if let Some(mut live) = world.enemies.get_mut(&unit_id) {
-                let speed = effective_unit_speed(&live);
-                let step = (speed * delta_ticks.max(0.0)).min(distance);
-                live.velocity_x = dx / distance * speed;
-                live.velocity_y = dy / distance * speed;
-                live.x += dx / distance * step;
-                live.y += dy / distance * step;
-                live.rotation = dy.atan2(dx).to_degrees();
-                changed = true;
-            }
-            continue;
-        }
-
-        if let Ok(frame) = encode_unit_entered_payload_frame(unit_id, position) {
+        if let Ok(frame) = encode_unit_entered_payload_frame(unit_id, reconstructor.position) {
             out.broadcast(frame);
         }
         world.enemies.remove(&unit_id);
+        // Official `unitEnteredPayload` calls `unit.remove()`, which drops the
+        // unit from `Groups.unit` too; every other despawn path pairs the two.
+        // Leaving the id behind kept it in the snapshot order and in the unit
+        // cap after it had become a payload.
+        world.unregister_unit_group(unit_id);
         // P0-01: control associations die with the unit-as-payload.
         crate::network::units::detach_unit_control(world, unit_id);
-        if let Some(mut live) = world.tiles.get_mut(&position) {
+        if let Some(mut live) = world.tiles.get_mut(&reconstructor.position) {
+            let (cx, cy) = building_center(reconstructor.position, live.block);
+            let half = unit_block_half(live.block);
             live.stored_amount = i32::from(unit.unit_type) + 1;
             live.production_progress = 0.0;
+            live.payload_rotation = unit.rotation;
+            set_pay_vector(
+                &mut live,
+                (unit.x - cx).clamp(-half, half),
+                (unit.y - cy).clamp(-half, half),
+            );
+            live.payload = Some(Box::new(CarriedPayload::Unit(unit)));
         }
         changed = true;
     }
@@ -748,6 +1110,16 @@ pub(crate) fn encode_unit_entered_payload_frame(
     frame_generated_packet(UNIT_ENTERED_PAYLOAD_PACKET_ID, &payload, false)
 }
 
+/// `UnitBlockSpawnCallPacket` (id 146): TypeIO.writeTile — packed i32 position.
+/// Official `Call.unitBlockSpawn(tile)` after `UnitBlock.dumpPayload`.
+pub(crate) fn encode_unit_block_spawn_frame(position: i32) -> std::io::Result<Vec<u8>> {
+    use crate::network::codec::Writes;
+
+    let mut payload = Vec::with_capacity(4);
+    payload.write_i(position)?;
+    frame_generated_packet(UNIT_BLOCK_SPAWN_PACKET_ID, &payload, false)
+}
+
 pub(crate) fn simulate_reconstructors(
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
@@ -765,6 +1137,9 @@ pub(crate) fn simulate_reconstructors(
         let Some(snapshot) = world.tiles.get(&key).map(|tile| tile.clone()) else {
             continue;
         };
+        if !snapshot.enabled {
+            continue;
+        }
         let Some(recipe) = reconstructor_recipe(snapshot.block) else {
             continue;
         };
@@ -773,55 +1148,97 @@ pub(crate) fn simulate_reconstructors(
         if !rules.activate_unit_factories(snapshot.team, tick) {
             continue;
         }
-        if snapshot.stored_amount == 0 {
-            continue;
-        }
-        let input_type = i16::try_from(snapshot.stored_amount - 1).unwrap_or(-1);
-        let Some(output_type) = reconstructor_upgrade(snapshot.block, input_type) else {
+        let Some(CarriedPayload::Unit(held)) = snapshot.payload.as_deref() else {
             continue;
         };
-        if !can_create_unit(world, snapshot.team, output_type) {
+        let input_type = held.unit_type;
+        let Some(output_type) = reconstructor_upgrade(snapshot.block, input_type) else {
+            // Official: no remaining upgrade → `moveOutPayload` every tick.
+            changed |= move_out_unit_payload(world, out, key, delta_ticks);
+            continue;
+        };
+        if rules.unit_banned(output_type) {
+            changed |= move_out_unit_payload(world, out, key, delta_ticks);
             continue;
         }
-        let has_items = recipe
+        let cost_multiplier = rules.unit_cost_multiplier.max(0.0)
+            * rules.team_rule(snapshot.team).unit_cost_multiplier;
+        let requirements: Vec<(i16, i32)> = recipe
             .items
             .iter()
+            .map(|(item, amount)| {
+                (
+                    *item,
+                    (*amount as f32 * cost_multiplier.max(0.0)).round().max(0.0) as i32,
+                )
+            })
+            .collect();
+        let has_items = requirements
+            .iter()
             .all(|(item, amount)| inventory_count(&snapshot.inventory, *item) >= *amount);
-        let has_liquid = recipe.liquid_rate <= 0.0
-            || (snapshot.stored_liquid == 3
-                && snapshot.liquid_amount + 0.0001 >= recipe.liquid_rate * delta_ticks.max(0.0));
         let efficiency = power.get(&key).copied().unwrap_or(0.0);
-        if !has_items || !has_liquid || efficiency <= 0.0 {
+        let build_speed_multiplier = rules.unit_build_speed_for(snapshot.team).max(0.0);
+        let time_scale = building_time_scale(world, key);
+        let edelta = delta_ticks.max(0.0) * time_scale * efficiency.max(0.0);
+        let consume_scale = edelta * cost_multiplier.max(0.0);
+        let have_liquid = if recipe.liquid_rate <= 0.0 {
+            f32::MAX
+        } else if snapshot.stored_liquid == recipe.liquid_id {
+            snapshot.liquid_amount
+        } else {
+            0.0
+        };
+        let liquid_need = recipe.liquid_rate * consume_scale;
+        // ASTRA F07: ConsumeLiquid.efficiency is the available fraction, not a
+        // boolean "enough for a full tick".
+        let liquid_frac = if recipe.liquid_rate <= 0.0 || liquid_need <= 1e-9 {
+            1.0
+        } else {
+            (have_liquid / liquid_need).clamp(0.0, 1.0)
+        };
+        let arrived = if let Some(mut reconstructor) = world.tiles.get_mut(&key) {
+            apply_move_in(&mut reconstructor, delta_ticks.max(0.0))
+        } else {
+            false
+        };
+        changed = true;
+        if !arrived {
             continue;
         }
-        let complete = if let Some(mut reconstructor) = world.tiles.get_mut(&key) {
-            let scaled_delta = delta_ticks * building_time_scale(world, key) * efficiency;
-            reconstructor.production_progress += scaled_delta;
+        if !has_items || liquid_frac <= 0.0 || efficiency <= 0.0 {
+            continue;
+        }
+        if let Some(mut reconstructor) = world.tiles.get_mut(&key) {
+            let progress_delta =
+                delta_ticks * time_scale * efficiency * liquid_frac * build_speed_multiplier;
+            reconstructor.production_progress += progress_delta;
             if recipe.liquid_rate > 0.0 {
-                reconstructor.liquid_amount =
-                    (reconstructor.liquid_amount - recipe.liquid_rate * scaled_delta).max(0.0);
+                reconstructor.liquid_amount = (reconstructor.liquid_amount
+                    - recipe.liquid_rate * consume_scale * liquid_frac)
+                    .max(0.0);
                 if reconstructor.liquid_amount <= 0.0001 {
                     reconstructor.liquid_amount = 0.0;
                     reconstructor.stored_liquid = -1;
                 }
             }
             if reconstructor.production_progress >= recipe.build_time {
-                for (item, amount) in recipe.items {
+                // Official: replace `payload.unit`, `progress %= 1f`, consume.
+                // The upgraded type has no further upgrade, so later ticks
+                // take the moveOut branch. Cap is checked at dump.
+                reconstructor.production_progress %= 1.0;
+                for (item, amount) in &requirements {
                     let removed = inventory_remove(&mut reconstructor.inventory, *item, *amount);
                     debug_assert!(removed, "validated reconstructor inputs disappeared");
                 }
-                reconstructor.production_progress = 0.0;
-                reconstructor.stored_amount = 0;
-                true
-            } else {
-                false
+                drop(reconstructor);
+                if let Some(unit) = create_unit_for_block(world, &snapshot, output_type) {
+                    bind_factory_spawn_order(world, &snapshot, &unit);
+                    if let Some(mut reconstructor) = world.tiles.get_mut(&key) {
+                        reconstructor.payload = Some(Box::new(CarriedPayload::Unit(unit)));
+                        reconstructor.stored_amount = i32::from(output_type) + 1;
+                    }
+                }
             }
-        } else {
-            false
-        };
-        changed = true;
-        if complete {
-            spawn_factory_unit(world, out, &snapshot, output_type);
         }
     }
     changed
@@ -987,9 +1404,10 @@ pub(crate) fn simulate_liquid_factories(
         if efficiency <= 0.0 {
             continue;
         }
+        let boost = attribute_crafter_boost(world, snapshot.block, snapshot.position);
+        let time_scale = building_time_scale(world, key);
         let crafted = if let Some(mut factory) = world.tiles.get_mut(&key) {
-            factory.production_progress +=
-                delta_ticks * building_time_scale(world, key) * efficiency;
+            factory.production_progress += delta_ticks * time_scale * efficiency * boost;
             if factory.production_progress >= recipe.craft_time {
                 factory.production_progress %= recipe.craft_time;
                 for (item, amount) in recipe.item_inputs {

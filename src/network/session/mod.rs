@@ -27,7 +27,6 @@ use crate::network::listener::broadcast_player_snapshot;
 use crate::network::listener::broadcast_respawn;
 use crate::network::listener::deposit_player_inventory;
 use crate::network::listener::encode_block_snapshot;
-use crate::network::listener::encode_construct_block_snapshot;
 use crate::network::listener::encode_construct_finish;
 use crate::network::listener::encode_rotate_block_frame;
 use crate::network::listener::encode_take_items_frame;
@@ -52,7 +51,6 @@ use crate::network::world::{
     PlayerCombatState, Projectile, SessionPlayer, WorldStore,
 };
 use crate::state::administration::Administration;
-use crate::state::game_state::GameMode;
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::io::{Error, ErrorKind};
@@ -79,6 +77,53 @@ pub(crate) use replay::{framework_ping, framework_ping_reply, packet_id_label};
 use crate::network::buildings::construction::{
     dynamic_at, effective_building_team, network_template_with_plans,
 };
+
+/// Drop a live session that already owns `uuid` on a different connection.
+/// Vanilla only rejects this under `admins.isStrict()` (`idInUse`); without
+/// that, a reconnect during the 12 s ArcNet TCP timeout leaves a ghost
+/// player entity and a second `players_count` slot.
+pub(crate) fn replace_stale_uuid_session(
+    world: &DynamicWorld,
+    connections: &DashMap<i32, PendingConnection>,
+    admin: &Administration,
+    uuid: &str,
+    incoming_connection_id: i32,
+) {
+    let stale: Vec<(i32, SessionPlayer)> = world
+        .player_sessions
+        .iter()
+        .filter(|session| session.uuid == uuid)
+        .map(|session| (*session.key(), session.value().clone()))
+        .collect();
+    for (unit_id, mut session) in stale {
+        let old_connection = session.id.wrapping_sub(1_000_000);
+        if old_connection == incoming_connection_id {
+            continue;
+        }
+        world.player_sessions.remove(&unit_id);
+        if let Ok(frames) = encode_player_disconnect_frames(&session) {
+            for frame in frames {
+                broadcast(connections, frame);
+            }
+        }
+        crate::network::buildings::plans::pause_player_build_queue(world, &session);
+        if matches!(
+            session.controlled_unit,
+            crate::network::world::ControlledUnit::Standard(_)
+        ) {
+            crate::network::units::switch_player_unit(world, &mut session, None);
+        }
+        world.players.remove(&unit_id);
+        connections.remove(&old_connection);
+        if admin
+            .find_connected_by_uuid(&session.uuid)
+            .is_some_and(|connected| connected.player_id == session.id)
+        {
+            admin.unregister_connection(&session.uuid);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_tcp(
     socket: TcpStream,
@@ -134,10 +179,34 @@ pub async fn handle_tcp(
             None
         });
 
+    let mut last_host_maps = store
+        .load()
+        .game_state
+        .host_map_events
+        .load(Ordering::Relaxed);
+
     loop {
         // Reload the shared world each iteration so `host` hot-swaps and the
         // re-streamed ConnectConfirm apply to the new map immediately.
         let world = store.load();
+        let host_maps = world.game_state.host_map_events.load(Ordering::Relaxed);
+        if host_maps != last_host_maps {
+            last_host_maps = host_maps;
+            if let Some(player) = session_player.as_mut() {
+                if let Some(fresh) = world.player_sessions.get(&player.unit_id) {
+                    player.x = fresh.x;
+                    player.y = fresh.y;
+                    player.mouse_x = fresh.mouse_x;
+                    player.mouse_y = fresh.mouse_y;
+                    player.active_plans.clear();
+                    player.last_snapshot = -1;
+                    player.mining_position = None;
+                    player.mining_progress = 0.0;
+                    player.carried_item = -1;
+                    player.carried_amount = 0;
+                }
+            }
+        }
         if let Some(player) = session_player.as_mut() {
             if let Some(profile) = world.player_profiles.get(&player.uuid) {
                 if player.unit_id != profile.unit_id {
@@ -242,7 +311,8 @@ pub async fn handle_tcp(
                     )
                     .await?;
                 }
-                for payload in encode_enemy_entity_snapshots(&world)? {
+                let viewer_team = session_player.as_ref().map(|player| player_team(&world, player));
+                for payload in encode_enemy_entity_snapshots_visible_to(&world, viewer_team)? {
                     send_generated_packet_prefer_udp(
                         &udp_socket,
                         udp_endpoint,
@@ -463,6 +533,7 @@ pub async fn handle_tcp(
                     *connection.player_name.write() = Some(connect.name.clone());
                 }
                 let uuid = connect.uuid.clone();
+                replace_stale_uuid_session(&world, &connections, &admin, &uuid, connection_id);
                 let player_id = 1_000_000i32.wrapping_add(connection_id);
                 let unit_id = 2_000_000i32.wrapping_add(connection_id);
                 // Official NetServer.assignTeam runs on ConnectPacket (before
@@ -501,9 +572,8 @@ pub async fn handle_tcp(
                 world.player_profiles.insert(uuid.clone(), combat.clone());
                 world.persistence_dirty.store(true, Ordering::Relaxed);
                 let template = network_template_with_plans(&world)?;
-                let mode = *world.game_state.mode.read();
                 let world_stream =
-                    crate::engine::world_stream::personalize_current_with_state_mode(
+                    crate::engine::world_stream::personalize_current_with_state_mode_and_rand(
                         &template,
                         player_id,
                         &connect.name,
@@ -512,8 +582,7 @@ pub async fn handle_tcp(
                         world.game_state.wave.load(Ordering::Relaxed),
                         *world.game_state.wave_time.read(),
                         f64::from(*world.game_state.simulation_time.read()),
-                        mode == GameMode::Pvp,
-                        mode == GameMode::Sandbox,
+                        world.game_state.extras.rand_seeds(),
                     )?;
                 let is_admin_player = admin.is_admin(&connect.uuid);
                 let session = SessionPlayer {
@@ -529,9 +598,13 @@ pub async fn handle_tcp(
                     mouse_x: spawn_x,
                     mouse_y: spawn_y,
                     rotation: 90.0,
+                    velocity_x: 0.0,
+                    velocity_y: 0.0,
                     boosting: false,
                     shooting: false,
+                    building: true,
                     last_command: None,
+                    docked_type: None,
                     active_plans: HashSet::new(),
                     mining_position: None,
                     mining_progress: 0.0,
@@ -562,6 +635,17 @@ pub async fn handle_tcp(
             }) => {
                 joined = true;
                 info!("Client {} finished loading the world", peer);
+                if let Some(player) = session_player.as_mut() {
+                    // WorldDataBegin (host hot-swap) reloads the client. Accept
+                    // the next ClientSnapshot even if lastSent restarted at 0.
+                    player.last_snapshot = -1;
+                    player.active_plans.clear();
+                    if let Some(profile) = world.player_profiles.get(&player.uuid) {
+                        player.unit_id = profile.unit_id;
+                        player.x = profile.x;
+                        player.y = profile.y;
+                    }
+                }
                 let player = session_player.as_ref().ok_or_else(|| {
                     Error::new(
                         ErrorKind::InvalidData,
@@ -641,97 +725,126 @@ pub async fn handle_tcp(
                 let player = session_player.as_mut().ok_or_else(|| {
                     Error::new(ErrorKind::InvalidData, "snapshot before ConnectPacket")
                 })?;
-                let unit_matches = match player.controlled_unit {
-                    crate::network::world::ControlledUnit::Core => {
-                        snapshot.unit_id == player.unit_id || snapshot.unit_id == -1
-                    }
-                    crate::network::world::ControlledUnit::Standard(unit_id) => {
-                        snapshot.unit_id == unit_id || snapshot.unit_id == -1
-                    }
-                    // BlockUnit IDs are local transient entity IDs; TypeIO
-                    // identifies them by tile position everywhere persistent.
-                    crate::network::world::ControlledUnit::Building(_) => true,
-                };
-                if snapshot.snapshot_id > player.last_snapshot && unit_matches {
+                // Official NetServer.clientSnapshot copies the plan queue
+                // before the unit-id check. Plans still apply when the
+                // snapshot unit is not Player.writeSync's unit (possessed
+                // Mono, or a stale id). The live Alpha path uses the same
+                // apply_build_plans. Motion still requires a matching unit.
+                if !crate::network::wire::client_snapshot::client_snapshot_id_is_new(
+                    player, &snapshot,
+                ) {
+                    crate::network::buildings::construction::record_snapshot_rejected();
+                } else {
                     let alive = world
                         .players
                         .get(&player.unit_id)
                         .is_none_or(|combat| !combat.dead);
-                    if alive {
-                        if let Some(combat) = world.players.get(&player.unit_id) {
-                            player.x = combat.x;
-                            player.y = combat.y;
-                        }
-                        // P1 anticheat: official NetServer.clientSnapshot
-                        // measures the elapsed wall time since the previous
-                        // snapshot (`lastReceivedClientTime`, capped at
-                        // 1500 ms) and limits the applied movement to
-                        // `elapsed/1000*60*speed*1.1` in strict mode.
-                        let now = std::time::Instant::now();
-                        let elapsed_ms = now
-                            .duration_since(last_client_snapshot_time)
-                            .as_millis()
-                            .min(1500) as u64;
-                        last_client_snapshot_time = now;
-                        let strict = world.game_state.strict_mode.load(Ordering::Relaxed);
-                        // M3: a correction beyond the official 112-unit
-                        // threshold returns the authoritative position to
-                        // push back to this client via SetPosition(110).
-                        let correction = apply_controlled_client_snapshot(
-                            player, &snapshot, &world, strict, elapsed_ms,
+                    let unit_matches =
+                        crate::network::wire::client_snapshot::client_snapshot_unit_matches(
+                            player, &snapshot,
                         );
-                        if let Some((x, y)) = correction {
-                            let mut payload = Vec::new();
-                            crate::network::codec::Writes::write_f(&mut payload, x)?;
-                            crate::network::codec::Writes::write_f(&mut payload, y)?;
-                            let frame =
-                                frame_generated_packet(SET_POSITION_PACKET_ID, &payload, false)?;
-                            if let Some(connection) = connections.get(&connection_id) {
-                                enqueue_outbound(&connection, frame, true);
+                    if alive {
+                        if unit_matches {
+                            if let Some(combat) = world.players.get(&player.unit_id) {
+                                player.x = combat.x;
+                                player.y = combat.y;
                             }
-                        }
-                        if let Some(mut combat) = world.players.get_mut(&player.unit_id) {
-                            combat.x = player.x;
-                            combat.y = player.y;
-                            let profile = combat.clone();
-                            let uuid = profile.uuid.clone();
-                            drop(combat);
-                            world.player_profiles.insert(uuid, profile);
-                            world.persistence_dirty.store(true, Ordering::Relaxed);
-                        }
-                        if matches!(
-                            player.controlled_unit,
-                            crate::network::world::ControlledUnit::Core
-                                | crate::network::world::ControlledUnit::Standard(_)
-                        ) {
-                            apply_build_plans(
-                                player,
-                                &snapshot.plans,
-                                &world,
-                                &connections,
-                                &admin,
-                                snapshot.building,
-                            )?;
-                        }
-                        if player.controlled_unit == crate::network::world::ControlledUnit::Core {
-                            update_mining(player, &snapshot, &world, &connections)?;
-                        }
-                        // Possessed standard units and BlockUnit turret
-                        // proxies fire through their own authoritative mount
-                        // simulation. Running Alpha's 17-tick bullet here as
-                        // well produced a duplicate, wrong weapon on every
-                        // controlled-unit snapshot.
-                        if player.controlled_unit == crate::network::world::ControlledUnit::Core {
-                            update_player_combat(player, &world, &connections)?;
+                            // P1 anticheat: official NetServer.clientSnapshot
+                            // measures the elapsed wall time since the previous
+                            // snapshot (`lastReceivedClientTime`, capped at
+                            // 1500 ms) and limits the applied movement to
+                            // `elapsed/1000*60*speed*1.1` in strict mode.
+                            let now = std::time::Instant::now();
+                            let elapsed_ms = now
+                                .duration_since(last_client_snapshot_time)
+                                .as_millis()
+                                .min(1500) as u64;
+                            last_client_snapshot_time = now;
+                            let strict = world.game_state.strict_mode.load(Ordering::Relaxed);
+                            // M3: a correction beyond the official 112-unit
+                            // threshold returns the authoritative position to
+                            // push back to this client via SetPosition(110).
+                            let correction = apply_controlled_client_snapshot(
+                                player, &snapshot, &world, strict, elapsed_ms,
+                            );
+                            if let Some((x, y)) = correction {
+                                let mut payload = Vec::new();
+                                crate::network::codec::Writes::write_f(&mut payload, x)?;
+                                crate::network::codec::Writes::write_f(&mut payload, y)?;
+                                let frame = frame_generated_packet(
+                                    SET_POSITION_PACKET_ID,
+                                    &payload,
+                                    false,
+                                )?;
+                                if let Some(connection) = connections.get(&connection_id) {
+                                    enqueue_outbound(&connection, frame, true);
+                                }
+                            }
+                            if let Some(mut combat) = world.players.get_mut(&player.unit_id) {
+                                combat.x = player.x;
+                                combat.y = player.y;
+                                let profile = combat.clone();
+                                let uuid = profile.uuid.clone();
+                                drop(combat);
+                                world.player_profiles.insert(uuid, profile);
+                                world.persistence_dirty.store(true, Ordering::Relaxed);
+                            }
+                        } else {
+                            player.last_snapshot = snapshot.snapshot_id;
+                            player.building = !snapshot.dead && snapshot.building;
+                            // Build-range for simulate_constructions follows
+                            // the reporting unit (the Mono on screen), not the
+                            // last Alpha combat cell. Do not write this into
+                            // world.players: that row is still the Alpha.
+                            player.x = snapshot.x;
+                            player.y = snapshot.y;
                         }
                     } else {
+                        // Motion stays gated on a live combat row. Plans still
+                        // apply (NetServer copies them before the dead check),
+                        // so BeginPlace is not skipped while the client Alpha
+                        // is already flying with the build beam on.
                         player.last_snapshot = snapshot.snapshot_id;
+                        player.building = !snapshot.dead && snapshot.building;
+                        player.x = snapshot.x;
+                        player.y = snapshot.y;
                     }
                     world.player_sessions.insert(player.unit_id, player.clone());
-                    let combat = world.players.get(&player.unit_id);
-                    let payload = encode_initial_entity_snapshot(player, combat.as_deref())?;
-                    let frame = frame_generated_packet(ENTITY_SNAPSHOT_PACKET_ID, &payload, true)?;
-                    broadcast(&connections, frame);
+                    if matches!(
+                        player.controlled_unit,
+                        crate::network::world::ControlledUnit::Core
+                            | crate::network::world::ControlledUnit::Standard(_)
+                    ) {
+                        if snapshot.plans.iter().any(|plan| plan.breaking) {
+                            crate::network::buildings::construction::record_break_plan_seen();
+                        }
+                        apply_build_plans(
+                            player,
+                            &snapshot.plans,
+                            &world,
+                            &connections,
+                            &admin,
+                            snapshot.building,
+                        )?;
+                    }
+                    if alive
+                        && unit_matches
+                        && player.controlled_unit == crate::network::world::ControlledUnit::Core
+                    {
+                        update_mining(player, &snapshot, &world, &connections)?;
+                    }
+                    // Possessed standard units and BlockUnit turret
+                    // proxies fire through their own authoritative mount
+                    // simulation. Running Alpha's 17-tick bullet here as
+                    // well produced a duplicate, wrong weapon on every
+                    // controlled-unit snapshot.
+                    if alive
+                        && unit_matches
+                        && player.controlled_unit == crate::network::world::ControlledUnit::Core
+                    {
+                        update_player_combat(player, &world, &connections)?;
+                    }
+                    world.player_sessions.insert(player.unit_id, player.clone());
                 }
             }
             Ok(Packet::Unknown {
@@ -883,7 +996,7 @@ pub async fn handle_tcp(
                 use crate::network::listener::broadcast_respawn;
                 use crate::network::listener::deposit_player_inventory;
                 use crate::network::listener::encode_block_snapshot;
-                use crate::network::listener::encode_construct_block_snapshot;
+                use crate::network::listener::encode_construct_block_snapshot_with_previous;
                 use crate::network::listener::encode_construct_finish;
                 use crate::network::listener::encode_rotate_block_frame;
                 use crate::network::listener::encode_take_items_frame;
@@ -919,11 +1032,29 @@ pub async fn handle_tcp(
                 let actor_team = player_team(&world, player);
                 match request_block_snapshot_target(&world, position, actor_team) {
                     SnapshotTarget::PendingBuild(build) => {
-                        let frame = encode_construct_block_snapshot(
+                        let progress =
+                            crate::network::buildings::construction::pending_construct_progress(
+                                &world, &build,
+                            );
+                        let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+                        let previous = world
+                            .tiles
+                            .get(&build.position)
+                            .filter(|tile| {
+                                crate::network::buildings::construction::is_construct_block(
+                                    tile.block,
+                                )
+                            })
+                            .map(|tile| tile.stored_item.max(0))
+                            .unwrap_or(build.previous_block.max(0));
+                        let frame = encode_construct_block_snapshot_with_previous(
                             build.position,
                             build.block,
                             build.rotation,
                             build.team,
+                            previous,
+                            progress,
+                            cost_mult,
                         )?;
                         writer.write_all(&frame).await?;
                     }
@@ -931,11 +1062,19 @@ pub async fn handle_tcp(
                         let rotation = dynamic_at(&world, build.position)
                             .map(|tile| tile.rotation)
                             .unwrap_or(0);
-                        let frame = encode_construct_block_snapshot(
+                        let progress =
+                            crate::network::buildings::construction::pending_break_progress(
+                                &world, &build,
+                            );
+                        let cost_mult = world.wave_rules.read().build_cost_multiplier.max(0.0);
+                        let frame = encode_construct_block_snapshot_with_previous(
                             build.position,
                             build.block,
                             rotation,
                             effective_building_team(&world, build.position),
+                            build.block,
+                            progress,
+                            cost_mult,
                         )?;
                         writer.write_all(&frame).await?;
                     }
@@ -986,6 +1125,14 @@ pub async fn handle_tcp(
                         encode_take_items_frame(origin, item, taken, player.unit_id)?,
                     );
                     broadcast_player_snapshot(player, &world, &connections)?;
+                    let tile_snapshot = world.tiles.get(&origin).map(|t| t.clone());
+                    if let Some(tile) = tile_snapshot {
+                        let power = compute_power_efficiency(&world);
+                        if let Some(snapshot_frame) = encode_block_snapshot(&world, &tile, &power)?
+                        {
+                            broadcast(&connections, snapshot_frame);
+                        }
+                    }
                     world.persistence_dirty.store(true, Ordering::Relaxed);
                 }
             }
@@ -1115,8 +1262,13 @@ pub async fn handle_tcp(
                         ));
                     }
                 }
-                if let Some(old_unit_id) = respawn_session_player(player, &world) {
+                if let Some(old_unit_id) =
+                    crate::network::listener::unit_clear_session_player(player, &world)
+                {
                     broadcast_respawn(&connections, player, &world, Some(old_unit_id))?;
+                    world.persistence_dirty.store(true, Ordering::Relaxed);
+                } else {
+                    broadcast_player_snapshot(player, &world, &connections)?;
                     world.persistence_dirty.store(true, Ordering::Relaxed);
                 }
             }
@@ -1384,7 +1536,10 @@ pub async fn handle_tcp(
                     // The controlled unit's controller tag changes from
                     // CommandAI to Player immediately; do not wait for the
                     // next 50 ms periodic entity batch.
-                    for snapshot in encode_enemy_entity_snapshots(&world)? {
+                    let viewer_team = player_team(&world, player);
+                    for snapshot in
+                        encode_enemy_entity_snapshots_visible_to(&world, Some(viewer_team))?
+                    {
                         broadcast(
                             &connections,
                             frame_generated_packet(ENTITY_SNAPSHOT_PACKET_ID, &snapshot, true)?,
@@ -1843,6 +1998,42 @@ pub async fn handle_tcp(
                     "ServerPacket '{}' from {} (no custom handler)",
                     packet_type, peer
                 );
+            }
+            Ok(Packet::Unknown {
+                id: REQUEST_WORLD_PACKET_ID,
+                ..
+            }) if joined => {
+                let template = network_template_with_plans(&world)?;
+                let player = session_player.as_ref().ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "RequestWorld before ConnectPacket")
+                })?;
+                let world_stream =
+                    crate::engine::world_stream::personalize_current_with_state_mode_and_rand(
+                        &template,
+                        player.id,
+                        &player.name,
+                        player.color,
+                        (player.x, player.y),
+                        world.game_state.wave.load(Ordering::Relaxed),
+                        *world.game_state.wave_time.read(),
+                        f64::from(*world.game_state.simulation_time.read()),
+                        world.game_state.extras.rand_seeds(),
+                    )?;
+                send_world_stream(&mut writer, &world_stream).await?;
+            }
+            Ok(Packet::Unknown {
+                id: REQUEST_ASSETS_PACKET_ID,
+                ..
+            }) => {
+                // Vanilla RequestAssets is the mod-asset catalog (NetworkIO.writeRequiredAssets).
+                // Oxide 0.1 has no mods (H20); an empty catalog (count=0) keeps official
+                // clients without kicking the session.
+                let payload = crate::network::session::replay::empty_asset_requirement_payload()?;
+                crate::network::session::replay::send_asset_requirement_stream(
+                    &mut writer,
+                    &payload,
+                )
+                .await?;
             }
             Ok(packet) => {
                 // PROTOCOL-RULES rule 9: unknown/unhandled packets are
