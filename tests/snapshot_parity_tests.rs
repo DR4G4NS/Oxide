@@ -310,7 +310,7 @@ fn shield_wall_snapshot_appends_shield_float() {
 
 #[test]
 fn light_snapshot_appends_color_int() {
-    let mut input = decode(encode(419, |t| t.light_color = 0x11223344));
+    let mut input = decode(encode(420, |t| t.light_color = 0x11223344));
     assert_eq!(input.read_b().unwrap(), 2 | 8);
     read_power_module(&mut input, &[], 0.0);
     read_base_tail_powered(&mut input);
@@ -1007,7 +1007,7 @@ fn reconstructor_command_lands_in_command_slot_not_optional_efficiency() {
 #[test]
 fn logic_processor_snapshots_match_logic_build_write() {
     // micro processor: no modules; hyper processor adds liquids.
-    for (block, bits) in [(431, 8), (432, 8), (433, 12)] {
+    for (block, bits) in [(432, 8), (433, 8), (434, 12)] {
         let mut input = decode(encode(block, |_| {}));
         assert_eq!(input.read_b().unwrap(), bits, "module bits");
         if bits & 4 != 0 {
@@ -1023,9 +1023,9 @@ fn logic_processor_snapshots_match_logic_build_write() {
         assert_eq!(input.read_i().unwrap(), 0, "variables");
         assert_eq!(input.read_i().unwrap(), 0, "memory");
         // Official LogicBuild.write (158.1): only privileged processors
-        // serialize instructionsPerTick. Hyper (433) is not privileged and
+        // serialize instructionsPerTick. Hyper (434) is not privileged and
         // must NOT write the field (VerifyProtocol158 full run).
-        if block == 442 {
+        if block == 443 {
             assert_eq!(input.read_s().unwrap(), 8, "world-processor ipt");
         }
         assert_eq!(input.read_b().unwrap(), 0, "null tag");
@@ -1038,20 +1038,20 @@ fn logic_processor_snapshots_match_logic_build_write() {
 
 #[test]
 fn world_only_logic_buildings_match_official_subclass_tails() {
-    // Blocks.worldProcessor/worldCell/worldMessage/worldSwitch (442-445) are
+    // Blocks.worldProcessor/worldCell/worldMessage/worldSwitch (443-446) are
     // the same Java build classes as their public counterparts, but their
     // IDs were previously falling through to the generator codec. The local
     // 158.1 sources define the exact tails: privileged LogicBuild writes ipt,
     // MemoryBuild writes its full capacity, and Message/Switch append their
     // normal fields. Byte lengths match a desktop.jar 158.1 Building.writeAll
     // fixture (health=40, team=sharded, empty program/memory/message):
-    // 442=45, 443=4111, 444=13, 445=12.
-    assert_eq!(encode(442, |_| {}).len(), 45);
-    assert_eq!(encode(443, |_| {}).len(), 4111);
-    assert_eq!(encode(444, |_| {}).len(), 13);
-    assert_eq!(encode(445, |_| {}).len(), 12);
+    // 443=45, 444=4111, 445=13, 446=12.
+    assert_eq!(encode(443, |_| {}).len(), 45);
+    assert_eq!(encode(444, |_| {}).len(), 4111);
+    assert_eq!(encode(445, |_| {}).len(), 13);
+    assert_eq!(encode(446, |_| {}).len(), 12);
 
-    let mut input = decode(encode(442, |_| {}));
+    let mut input = decode(encode(443, |_| {}));
     assert_eq!(input.read_b().unwrap(), 8, "world processor module bits");
     read_base_tail(&mut input, 255, 255);
     let compressed_len = input.read_i().unwrap();
@@ -1067,7 +1067,7 @@ fn world_only_logic_buildings_match_official_subclass_tails() {
     assert_eq!(input.read_f().unwrap(), 0.0, "accumulator");
     assert_consumed(&mut input);
 
-    let mut input = decode(encode(443, |t| t.memory = vec![1.5, -2.0]));
+    let mut input = decode(encode(444, |t| t.memory = vec![1.5, -2.0]));
     assert_eq!(input.read_b().unwrap(), 8, "world cell module bits");
     read_base_tail(&mut input, 255, 255);
     assert_eq!(input.read_i().unwrap(), 512, "world-cell capacity");
@@ -1078,20 +1078,20 @@ fn world_only_logic_buildings_match_official_subclass_tails() {
     }
     assert_consumed(&mut input);
 
-    let mut input = decode(encode(444, |t| t.message = Some("world".into())));
+    let mut input = decode(encode(445, |t| t.message = Some("world".into())));
     assert_eq!(input.read_b().unwrap(), 8, "world message module bits");
     read_base_tail(&mut input, 255, 255);
     assert_eq!(input.read_utf().unwrap(), "world");
     assert_consumed(&mut input);
 
-    let mut input = decode_base_manual(encode(445, |t| t.enabled = false), 0);
+    let mut input = decode_base_manual(encode(446, |t| t.enabled = false), 0);
     assert_eq!(input.read_b().unwrap(), 8, "world switch module bits");
     // SwitchBuild writes enabled in the base header and appends it again.
     read_base_tail(&mut input, 255, 255);
     assert!(!input.read_bool().unwrap(), "world switch disabled");
     assert_consumed(&mut input);
 
-    for block in 442..=445 {
+    for block in 443..=446 {
         assert!(is_block_snapshot_supported(block), "world block {block}");
     }
 }
@@ -1119,12 +1119,12 @@ fn logic_processor_passes_client_program_through_verbatim() {
     assert!(!valid_logic_config(&[1, 2, 3, 4, 5])); // not zlib
     assert!(!valid_logic_config(&[0])); // null sentinel is handled by the handler
 
-    for block in [431, 432, 433] {
+    for block in [432, 433, 434] {
         // DynamicTile stores the complete TileConfig TypeIO object. The
         // snapshot must extract its byte[] payload instead of attempting to
         // inflate the leading object tag as zlib data.
         let mut input = decode(encode(block, |t| t.config = typeio_object.clone()));
-        let expected_bits = if block == 433 { 12 } else { 8 };
+        let expected_bits = if block == 434 { 12 } else { 8 };
         assert_eq!(input.read_b().unwrap(), expected_bits, "module bits");
         if expected_bits & 4 != 0 {
             read_liquid_module(&mut input, &[]);
@@ -1137,7 +1137,7 @@ fn logic_processor_passes_client_program_through_verbatim() {
         assert_eq!(received, program, "program bytes verbatim");
         assert_eq!(input.read_i().unwrap(), 0, "variables");
         assert_eq!(input.read_i().unwrap(), 0, "memory");
-        if block == 442 {
+        if block == 443 {
             assert_eq!(input.read_s().unwrap(), 8, "world-processor ipt");
         }
         assert_eq!(input.read_b().unwrap(), 0, "null tag");
@@ -1154,7 +1154,7 @@ fn memory_snapshot_writes_cell_count_and_values() {
     // 512 for memory-bank): `i memory.length + f64*length`. Unwritten cells
     // are zeros (regression: empty tile.memory used to emit length 0, so the
     // client built a 0-length memory and all logic read/write was a no-op).
-    let mut input = decode(encode(434, |t| t.memory = vec![1.5, -2.0]));
+    let mut input = decode(encode(435, |t| t.memory = vec![1.5, -2.0]));
     assert_eq!(input.read_b().unwrap(), 8);
     read_base_tail(&mut input, 255, 255);
     assert_eq!(input.read_i().unwrap(), 64, "memory-cell capacity");
@@ -1165,7 +1165,7 @@ fn memory_snapshot_writes_cell_count_and_values() {
     }
     assert_consumed(&mut input);
 
-    let mut input = decode(encode(435, |t| t.memory = vec![7.0]));
+    let mut input = decode(encode(436, |t| t.memory = vec![7.0]));
     assert_eq!(input.read_b().unwrap(), 8);
     read_base_tail(&mut input, 255, 255);
     assert_eq!(input.read_i().unwrap(), 512, "memory-bank capacity");
@@ -1178,14 +1178,14 @@ fn memory_snapshot_writes_cell_count_and_values() {
 
 #[test]
 fn logic_display_and_canvas_snapshots_match_build_write() {
-    for block in [436, 437, 438] {
+    for block in [437, 438, 439] {
         let mut input = decode(encode(block, |_| {}));
         assert_eq!(input.read_b().unwrap(), 8);
         read_base_tail(&mut input, 255, 255);
         assert!(!input.read_bool().unwrap(), "no transform matrix");
         assert_consumed(&mut input);
     }
-    for block in [439, 440] {
+    for block in [440, 441] {
         let mut input = decode(encode(block, |_| {}));
         assert_eq!(input.read_b().unwrap(), 8);
         read_base_tail(&mut input, 255, 255);
@@ -1196,14 +1196,14 @@ fn logic_display_and_canvas_snapshots_match_build_write() {
 
 #[test]
 fn message_and_switch_snapshots_match_build_write() {
-    for block in [429, 441] {
+    for block in [430, 442] {
         let mut input = decode(encode(block, |_| {}));
         assert_eq!(input.read_b().unwrap(), 8);
         read_base_tail(&mut input, 255, 255);
         assert_eq!(input.read_utf().unwrap(), "", "message string");
         assert_consumed(&mut input);
     }
-    let mut input = decode(encode(430, |_| {}));
+    let mut input = decode(encode(431, |_| {}));
     assert_eq!(input.read_b().unwrap(), 8);
     read_base_tail(&mut input, 255, 255);
     assert!(input.read_bool().unwrap(), "switch enabled");
@@ -1211,7 +1211,7 @@ fn message_and_switch_snapshots_match_build_write() {
 
     // A toggled-off switch serializes the disabled state in the base byte
     // and the trailing bool (SwitchBlock.java write/readBase share `enabled`).
-    let mut input = decode_base_manual(encode(430, |t| t.enabled = false), 0);
+    let mut input = decode_base_manual(encode(431, |t| t.enabled = false), 0);
     assert_eq!(input.read_b().unwrap(), 8, "no modules");
     read_base_tail(&mut input, 255, 255);
     assert!(!input.read_bool().unwrap(), "switch disabled");
@@ -1250,7 +1250,7 @@ fn radar_snapshot_appends_progress() {
 
 #[test]
 fn launch_pad_and_accelerator_snapshots_match_build_write() {
-    let mut input = decode(encode(425, |t| t.production_progress = 12.0));
+    let mut input = decode(encode(426, |t| t.production_progress = 12.0));
     assert_eq!(input.read_b().unwrap(), 1 | 2 | 8);
     read_item_module(&mut input, &[]);
     read_power_module(&mut input, &[], 0.0);
@@ -1261,7 +1261,7 @@ fn launch_pad_and_accelerator_snapshots_match_build_write() {
     );
     assert_consumed(&mut input);
 
-    let mut input = decode(encode(426, |_| {}));
+    let mut input = decode(encode(427, |_| {}));
     assert_eq!(input.read_b().unwrap(), 1 | 2 | 4 | 8);
     read_item_module(&mut input, &[]);
     read_power_module(&mut input, &[], 0.0);
@@ -1270,7 +1270,7 @@ fn launch_pad_and_accelerator_snapshots_match_build_write() {
     assert_eq!(input.read_f().unwrap(), 0.0, "launchCounter");
     assert_consumed(&mut input);
 
-    let mut input = decode(encode(428, |t| t.production_progress = 3.0));
+    let mut input = decode(encode(429, |t| t.production_progress = 3.0));
     assert_eq!(input.read_b().unwrap(), 1 | 2 | 8);
     read_item_module(&mut input, &[]);
     read_power_module(&mut input, &[], 0.0);
@@ -1300,8 +1300,8 @@ fn every_constructible_block_has_a_snapshot_codec() {
         345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361, 362,
         363, 364, 365, 366, 367, 368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380,
         381, 382, 383, 384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398,
-        399, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 419, 425, 426, 427, 428, 429, 430,
-        431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441,
+        399, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 420, 426, 427, 428, 429, 430, 431,
+        432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442,
     ];
     assert_eq!(constructible.len(), 245);
     let missing: Vec<i16> = constructible
@@ -1320,13 +1320,13 @@ fn every_constructible_block_has_a_snapshot_codec() {
 
 #[test]
 fn memory_bank_snapshot_fits_arcnet_frame_limit() {
-    // A memory-bank (435) serializes 512 f64 cells (~4.1 KB per snapshot).
+    // A memory-bank (436) serializes 512 f64 cells (~4.1 KB per snapshot).
     // The official client reads block snapshots sequentially and the ArcNet
     // frame is capped at 32 KiB; a batch that exceeds it is silently dropped.
     // The full per-tile payload (pos + block + writeSync) must stay far below
     // 32 KiB so batching (official maxSnapshotSize=800 B) never overflows.
     use std::io::Read;
-    let mut input = decode(encode(435, |t| {
+    let mut input = decode(encode(436, |t| {
         t.memory = vec![0.0; 512];
         t.memory[0] = 1.0;
         t.memory[511] = -1.0;
