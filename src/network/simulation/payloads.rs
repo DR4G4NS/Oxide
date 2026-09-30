@@ -82,6 +82,7 @@ pub fn simulate_payload_conveyors(
                     payload_block_limit(next.block)
                         .is_some_and(|limit| payload_fits_limit(payload, limit))
                         && payload_block_accepts(next.block, payload)
+                        && front_accepts_payload(world, next, &snapshot, payload)
                 })
         });
         if can_transfer {
@@ -102,6 +103,15 @@ pub fn simulate_payload_conveyors(
                     target.payload = Some(payload);
                     target.payload_progress = 0.0;
                     target.payload_rotation = f32::from(snapshot.rotation) * 90.0;
+                    if is_unit_payload_block(target.block) || matches!(target.block, 393..=396) {
+                        let (x, y) = building_center(snapshot.position, snapshot.block);
+                        initialize_received_unit_payload(
+                            &mut target,
+                            x,
+                            y,
+                            snapshot.payload_rotation,
+                        );
+                    }
                 }
                 if let Some(mut source) = world.tiles.get_mut(&key) {
                     source.payload_progress = 0.0;

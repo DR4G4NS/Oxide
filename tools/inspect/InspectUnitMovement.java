@@ -4,7 +4,7 @@ import mindustry.Vars;
 import mindustry.core.ContentLoader;
 import mindustry.type.UnitType;
 
-/** Emits initialized unit physics fields for Serpulo units in the target JAR. */
+/** Emits initialized unit physics fields for every vanilla unit in the target JAR. */
 public final class InspectUnitMovement {
     public static void main(String[] args) {
         arc.util.Log.logger = (level, text) -> {};
@@ -15,7 +15,6 @@ public final class InspectUnitMovement {
         Vars.content.init();
         System.out.println("# ID hitSize physics allowLegStep legPhysicsLayer flying naval");
         for (UnitType unit : Vars.content.units()) {
-            if (unit.id >= 35) break;
             System.out.printf("%d\t%f\t%b\t%b\t%b\t%b\t%b%n",
                 unit.id, unit.hitSize, unit.physics, unit.allowLegStep,
                 unit.legPhysicsLayer, unit.flying, unit.naval);

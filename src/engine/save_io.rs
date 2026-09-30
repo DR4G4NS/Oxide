@@ -1440,6 +1440,14 @@ fn write_building_tail(
     // Nuclear/impact reactors append one value to GeneratorBuild; the
     // variable reactor appends three values (heat, instability, warmup).
     match tile.block {
+        200 | 201 => {
+            // GenericCrafterBuild writes normalized progress and warmup;
+            // HeatCrafter inherits the same two-float tail.
+            let time = crate::network::buildings::snapshot::generic_crafter_time(tile.block)
+                .unwrap_or(1.0);
+            out.extend_from_slice(&(tile.production_progress / time).to_be_bytes());
+            out.extend_from_slice(&0.0f32.to_be_bytes());
+        }
         315 | 316 => out.extend_from_slice(&tile.output_liquid_amount.max(0.0).to_be_bytes()),
         323 => {
             out.extend_from_slice(&0.0f32.to_be_bytes());
@@ -1706,6 +1714,23 @@ pub fn apply_msav_building_tail(
         return Ok(());
     }
     match tile.block {
+        200 | 201 => {
+            if extra.len() < 8 {
+                return Err(Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "truncated liquid crafter tail",
+                ));
+            }
+            let progress = f32::from_be_bytes(extra[..4].try_into().unwrap());
+            let time = crate::network::buildings::snapshot::generic_crafter_time(tile.block)
+                .unwrap_or(1.0);
+            tile.production_progress = if progress.is_finite() {
+                progress.clamp(0.0, 1.0) * time
+            } else {
+                0.0
+            };
+            Ok(())
+        }
         432..=434 | 443 => apply_logic_build_tail(tile, extra),
         315 | 316 => {
             // GeneratorBuild writes productionEfficiency + generateTime, then
@@ -2138,6 +2163,14 @@ pub(crate) fn read_unit_write<R: crate::network::codec::Reads + std::io::Seek>(
         authority: controller.authority,
         build_plans,
         update_building,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -2464,6 +2497,14 @@ mod tests {
                 authority: crate::network::world::UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
                 update_building: true,
+                missile_retarget: 0.0,
+                missile_target: None,
+                missile_shooter: None,
+                navanax_emp_reload: [0.0; 2],
+                navanax_emp_side: [false; 2],
+                navanax_lasers: Default::default(),
+                missile_source_position: None,
+                missile_source_generation: None,
                 missile_time: 0.0,
                 status_agg: None,
                 drown_progress: 0.0,
@@ -2499,6 +2540,14 @@ mod tests {
                 authority: crate::network::world::UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
                 update_building: true,
+                missile_retarget: 0.0,
+                missile_target: None,
+                missile_shooter: None,
+                navanax_emp_reload: [0.0; 2],
+                navanax_emp_side: [false; 2],
+                navanax_lasers: Default::default(),
+                missile_source_position: None,
+                missile_source_generation: None,
                 missile_time: 0.0,
                 status_agg: None,
                 drown_progress: 0.0,
@@ -2880,6 +2929,14 @@ mod tests {
             authority: crate::network::world::UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -3526,6 +3583,14 @@ mod tests {
             authority,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,

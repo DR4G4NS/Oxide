@@ -699,6 +699,10 @@ pub struct DynamicWorld {
     pub(crate) next_player_unit_id: AtomicI32,
     pub(crate) next_enemy_id: AtomicI32,
     pub(crate) projectiles: DashMap<i32, Projectile>,
+    /// Scheduled shots which have not yet become live projectiles.
+    pub(crate) pending_projectiles: DashMap<i32, PendingProjectile>,
+    /// Current weapon aim by (building owner, entity/packed tile id).
+    pub(crate) weapon_aims: DashMap<(bool, i32), (f32, f32)>,
     pub(crate) next_projectile_id: AtomicI32,
     pub(crate) overdrive_boosts: DashMap<i32, TimedBoost>,
     pub(crate) heal_suppression: DashMap<i32, f32>,
@@ -734,6 +738,9 @@ pub struct DynamicWorld {
     /// cache + unreachable-plan abandonment). Runtime-only, never persisted.
     pub(crate) ai_rebuild_state: parking_lot::Mutex<AiRebuildState>,
     pub(crate) navigation_revision: AtomicU64,
+    /// Position-target fields must never be shared between world instances.
+    pub(crate) toward_navigation:
+        parking_lot::Mutex<crate::network::combat::enemy::TowardNavigationCache>,
     pub(crate) ground_navigation: parking_lot::Mutex<Option<NavigationField>>,
     pub(crate) leg_navigation: parking_lot::Mutex<Option<NavigationField>>,
     /// Naval flowfield (audit H13): water-only passability for naval units.
@@ -1278,9 +1285,40 @@ pub struct EnemyUnit {
     /// Only aged for `entity_class == 39`; the wire mirrors `lifetime`.
     #[serde(default)]
     pub missile_time: f32,
+    #[serde(default)]
+    pub missile_retarget: f32,
+    #[serde(skip)]
+    pub(crate) missile_target: Option<ProjectileHit>,
+    /// Launcher ownership, retained separately from missile control authority.
+    #[serde(default)]
+    pub missile_shooter: Option<i32>,
+    #[serde(default)]
+    pub navanax_emp_reload: [f32; 2],
+    #[serde(default)]
+    pub navanax_emp_side: [bool; 2],
+    #[serde(default)]
+    pub navanax_lasers: [NavanaxLaserMount; 4],
+    #[serde(default)]
+    pub missile_source_position: Option<i32>,
+    #[serde(default)]
+    pub missile_source_generation: Option<u64>,
     /// Official `Unit.drownTime` 0..1. Reaches 1 in deep liquid floors.
     #[serde(default)]
     pub drown_progress: f32,
+}
+
+/// Independent autonomous Navanax plasma mount state. Runtime target/beam
+/// handles are reacquired after loading a checkpoint.
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct NavanaxLaserMount {
+    pub reload: f32,
+    pub rotation: f32,
+    #[serde(skip)]
+    pub retarget: f32,
+    #[serde(skip)]
+    pub(crate) target: Option<ProjectileHit>,
+    #[serde(skip)]
+    pub beam: Option<i32>,
 }
 
 pub(crate) const fn default_update_building() -> bool {
@@ -1326,6 +1364,16 @@ pub(crate) enum ProjectileHit {
     Core(u8, i32),
 }
 
+/// A scheduled weapon shot, invisible to collision, interception and replay.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingProjectile {
+    pub(crate) remaining_ticks: f32,
+    pub(crate) projectile: Projectile,
+    pub(crate) frame: Vec<u8>,
+    /// Lateral mount offset, pattern angle offset, velocity scale.
+    pub(crate) pattern: [f32; 3],
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Projectile {
     pub(crate) target_id: i32,
@@ -1369,6 +1417,9 @@ pub(crate) struct Projectile {
     pub(crate) damage_timer: f32,
     /// BulletComp.collided: a piercing projectile hits each body once.
     pub(crate) collided: Vec<ProjectileHit>,
+    /// Original aim coordinates; negative components fall back to bullet position.
+    pub(crate) aim_x: f32,
+    pub(crate) aim_y: f32,
 }
 
 #[derive(Clone, Debug)]

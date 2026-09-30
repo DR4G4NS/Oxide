@@ -324,7 +324,10 @@ pub fn simulate_allied_oxynoe_repair(
     snapshot: &EnemyUnit,
     delta_ticks: f32,
 ) -> bool {
-    if snapshot.unit_type != 31 {
+    if snapshot.unit_type != 31
+        || unit_has_stance(world, snapshot.id, 1)
+        || !unit_can_shoot(snapshot)
+    {
         return false;
     }
     let Some((position, target_x, target_y)) =
@@ -349,7 +352,7 @@ pub fn simulate_allied_oxynoe_repair(
             crate::network::combat::spawn_allied_unit_projectile_lateral(
                 world,
                 out,
-                0,
+                snapshot.id,
                 -1,
                 Some(position),
                 volley,
@@ -359,7 +362,7 @@ pub fn simulate_allied_oxynoe_repair(
                 target_y,
                 lateral,
                 u8::try_from(shot).unwrap_or(u8::MAX),
-                1,
+                snapshot.team,
             );
         }
     }
@@ -380,7 +383,8 @@ pub fn simulate_allied_units(
         .collect::<Vec<_>>()
         .into_iter()
         .filter(|unit| {
-            !unit_is_player_controlled(world, unit.id)
+            unit.entity_class != 39
+                && !unit_is_player_controlled(world, unit.id)
                 && (unit_bound_to_logic(world, unit.id) || unit_uses_command_ai(Some(world), unit))
         })
         .map(|unit| unit.id)
@@ -518,6 +522,9 @@ pub fn simulate_allied_units(
         if let Some((building_position, target_x, target_y)) =
             ordered_opposing_building(world, &snapshot)
         {
+            world
+                .weapon_aims
+                .insert((false, snapshot.id), (target_x, target_y));
             let mut attack = false;
             let mut authoritative_fire = None;
             if let Some(mut ally) = world.enemies.get_mut(&allied_id) {
@@ -635,6 +642,9 @@ pub fn simulate_allied_units(
             }
             continue;
         };
+        world
+            .weapon_aims
+            .insert((false, snapshot.id), (target_x, target_y));
         let dx = target_x - snapshot.x;
         let dy = target_y - snapshot.y;
         let distance = dx.hypot(dy);
@@ -776,7 +786,6 @@ pub fn simulate_controlled_unit_weapons(
         if snapshot.health <= 0.0 || player_team(world, &controller) != snapshot.team {
             continue;
         }
-        changed |= simulate_controlled_navanax_lasers(world, out, &snapshot, delta_ticks);
         // Stop a stuck manual trigger if snapshots cease without a clean
         // disconnect. Autonomous mounts above remain active, like Java.
         if !controller.shooting
@@ -860,44 +869,6 @@ pub fn simulate_controlled_unit_weapons(
         changed = true;
     }
     changed
-}
-
-pub(crate) fn simulate_controlled_navanax_lasers(
-    world: &DynamicWorld,
-    out: &dyn crate::network::outbound::FrameEmit,
-    unit: &EnemyUnit,
-    delta_ticks: f32,
-) -> bool {
-    if unit.unit_type != 34 {
-        return false;
-    }
-    let target = world
-        .enemies
-        .iter()
-        .filter(|target| target.team != unit.team)
-        .filter_map(|target| {
-            let distance = (target.x - unit.x).hypot(target.y - unit.y);
-            (distance <= 90.0).then_some((distance, target.id, target.x, target.y))
-        })
-        .min_by(|left, right| left.0.total_cmp(&right.0));
-    let Some((_, target_id, target_x, target_y)) = target else {
-        return false;
-    };
-    let (shots, multiplier) = if let Some(mut live) = world.enemies.get_mut(&unit.id) {
-        live.secondary_attack_reload += effective_unit_reload_delta(&live, delta_ticks);
-        let shots = (live.secondary_attack_reload / 170.0).floor() as usize;
-        live.secondary_attack_reload %= 170.0;
-        (shots, effective_unit_damage_multiplier(&live))
-    } else {
-        return false;
-    };
-    for _ in 0..shots {
-        spawn_navanax_lasers(
-            world, out, unit.team, multiplier, unit.id, target_id, None, false, unit.x, unit.y,
-            target_x, target_y,
-        );
-    }
-    shots > 0
 }
 
 /// Official per-tick repair output of the Erekir core-unit RepairBeamWeapons:

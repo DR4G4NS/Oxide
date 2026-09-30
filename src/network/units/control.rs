@@ -11,6 +11,9 @@ pub(crate) fn unit_move_physics(unit_type: i16) -> (f32, f32, f32, bool, f32) {
     // (speed, accel, drag, omni_movement, rotate_speed)
     // Official UnitType defaults: accel 0.5 / drag 0.4 for ground; flying
     // units typically use accel 0.08 / drag 0.04 (flare).
+    if let Some(spec) = crate::game::unit_types::unit_missile_spec(unit_type) {
+        return (spec.speed, spec.accel, spec.drag, false, spec.rotate_speed);
+    }
     let movement = crate::game::content::unit_movement(unit_type);
     let spec_speed = enemy_spec(unit_type).map(|spec| spec.speed).unwrap_or(1.0);
     match unit_type {

@@ -66,9 +66,24 @@ pub(crate) fn spawn_projectile_for_team(
     lifetime_scale: f32,
     team: u8,
 ) -> i32 {
+    if let Some(owner) = source_position.map(|p| (true, p)) {
+        world.weapon_aims.insert(owner, (target_x, target_y));
+    }
     let angle = (target_y - source_y)
         .atan2(target_x - source_x)
         .to_degrees();
+    if let Some(id) = spawn_launcher_unit(
+        world,
+        bullet_id,
+        team,
+        None,
+        source_position,
+        source_x,
+        source_y,
+        angle,
+    ) {
+        return id;
+    }
     let total_ticks = if speed <= 0.0 { 0.0 } else { distance / speed };
     let projectile_id = world.next_projectile_id.fetch_add(1, Ordering::Relaxed);
     // C2: uninventoried ids must not silently degrade to plain direct damage.
@@ -111,6 +126,8 @@ pub(crate) fn spawn_projectile_for_team(
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: target_x,
+            aim_y: target_y,
         },
     );
     if let Ok(payload) = encode_create_bullet_payload(
@@ -215,6 +232,8 @@ pub(crate) fn spawn_enemy_horizon_bomb(
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     if let Ok(payload) = encode_create_bullet_payload(
@@ -272,7 +291,7 @@ pub(crate) struct EnemyProjectileVolley {
 
 /// Approximate TargetPriority (TargetPriority.java: wall -3, transport -1,
 /// base 0, turret 1, core 2) for the blocks the port can classify.
-fn building_target_priority(block: i16) -> i8 {
+pub(crate) fn building_target_priority(block: i16) -> i8 {
     if matches!(block, 339..=344) {
         2 // cores
     } else if crate::network::buildings::snapshot::is_snapshot_item_turret(block)
@@ -1194,8 +1213,8 @@ pub(crate) fn sap_strength(bullet_id: i16) -> f32 {
 
 /// Weapon.shoot.shotDelay per bullet id: burst shots of a volley are fired
 /// `shotDelay` ticks apart (UnitTypes.java scepter-weapon shotDelay 4,
-/// flare shotDelay 3). The spawn helpers add `delay * shot_index` to each
-/// shot's total flight time so the authoritative impacts stay spaced.
+/// flare shotDelay 3). Pending shots are excluded from collision and replay
+/// until creation; their flight lifetime starts only at launch.
 pub(crate) fn volley_shot_delay(bullet_id: i16) -> f32 {
     match bullet_id {
         10 => 4.0, // scepter-weapon burst (3 shots)
@@ -1422,7 +1441,8 @@ pub(crate) fn enemy_projectile_volley(unit_type: i16) -> Option<EnemyProjectileV
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_navanax_lasers(
+fn spawn_navanax_laser(
+    bullet_id: i16,
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
     team: u8,
@@ -1435,7 +1455,7 @@ pub(crate) fn spawn_navanax_lasers(
     source_y: f32,
     target_x: f32,
     target_y: f32,
-) {
+) -> i32 {
     let dx = target_x - source_x;
     let dy = target_y - source_y;
     let distance = dx.hypot(dy);
@@ -1449,61 +1469,62 @@ pub(crate) fn spawn_navanax_lasers(
         (source_x, source_y)
     };
     let angle = dy.atan2(dx).to_degrees();
-    for bullet_id in 61..=64 {
-        let projectile_id = world.next_projectile_id.fetch_add(1, Ordering::Relaxed);
-        world.projectiles.insert(
-            projectile_id,
-            Projectile {
-                target_id: projectile_target_id,
-                shooter_id,
-                team,
-                bullet_id,
-                damage: 27.0 * damage_multiplier,
-                splash_damage: 0.0,
-                splash_radius: 0.0,
-                status_effect: -1,
-                status_duration: 0.0,
-                pierce_units: u8::MAX,
-                pierce_buildings: 0,
-                spawn_reign_frags: false,
-                homing_range: 0.0,
-                homing_power: 0.0,
-                homing_delay: -1.0,
-                collides_air: true,
-                collides_ground: true,
-                heals: false,
-                enemy_target_position: target_position,
-                enemy_target_core: target_core,
-                apply_direct_on_impact: true,
-                armor_multiplier: 1.0,
-                remaining_ticks: 155.0,
-                total_ticks: 155.0,
-                source_x,
-                source_y,
-                target_x: impact_x,
-                target_y: impact_y,
-                lifetime_scale: 1.0,
-                source_position: None,
-                damage_interval: Some(5.0),
-                damage_timer: 0.0,
-                collided: Vec::new(),
-            },
-        );
-        if let Ok(payload) = encode_create_bullet_payload(
-            bullet_id,
+    let projectile_id = world.next_projectile_id.fetch_add(1, Ordering::Relaxed);
+    world.projectiles.insert(
+        projectile_id,
+        Projectile {
+            target_id: projectile_target_id,
+            shooter_id,
             team,
+            bullet_id,
+            damage: 27.0 * damage_multiplier,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
+            status_effect: -1,
+            status_duration: 0.0,
+            pierce_units: u8::MAX,
+            pierce_buildings: 0,
+            spawn_reign_frags: false,
+            homing_range: 0.0,
+            homing_power: 0.0,
+            homing_delay: -1.0,
+            collides_air: true,
+            collides_ground: true,
+            heals: false,
+            enemy_target_position: target_position,
+            enemy_target_core: target_core,
+            apply_direct_on_impact: true,
+            armor_multiplier: 1.0,
+            remaining_ticks: 155.0,
+            total_ticks: 155.0,
             source_x,
             source_y,
-            angle,
-            27.0 * damage_multiplier,
-            1.0,
-            1.0,
-        ) {
-            if let Ok(frame) = frame_generated_packet(CREATE_BULLET_PACKET_ID, &payload, false) {
-                out.broadcast(frame);
-            }
+            target_x: impact_x,
+            target_y: impact_y,
+            lifetime_scale: 1.0,
+            source_position: None,
+            damage_interval: Some(5.0),
+            damage_timer: 0.0,
+            collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
+        },
+    );
+    if let Ok(payload) = encode_create_bullet_payload(
+        bullet_id,
+        team,
+        source_x,
+        source_y,
+        angle,
+        27.0 * damage_multiplier,
+        1.0,
+        1.0,
+    ) {
+        if let Ok(frame) = frame_generated_packet(CREATE_BULLET_PACKET_ID, &payload, false) {
+            out.broadcast(frame);
         }
     }
+    projectile_id
 }
 
 /// Number of mounts that fire one weapon definition per reload. Vanilla
@@ -1654,6 +1675,9 @@ pub(crate) fn spawn_unit_projectile_for_team(
     shot_index: u8,
     team: u8,
 ) -> i32 {
+    if let Some(owner) = Some((false, shooter_id)) {
+        world.weapon_aims.insert(owner, (target_x, target_y));
+    }
     let dx = target_x - source_x;
     let dy = target_y - source_y;
     let distance = dx.hypot(dy);
@@ -1681,22 +1705,40 @@ pub(crate) fn spawn_unit_projectile_for_team(
     let angle_offset = (shot_fraction - 0.5) * volley.inaccuracy;
     let velocity_scale = 1.0 + (shot_fraction * 2.0 - 1.0) * volley.velocity_random;
     let maximum_travel = projectile_maximum_travel(volley, velocity_scale);
-    let travel = distance.min(maximum_travel);
-    let (impact_x, impact_y) = if distance > 0.001 {
-        (
-            source_x + dx / distance * travel,
-            source_y + dy / distance * travel,
-        )
+    let collision = crate::game::bullet_catalog::bullet_collision(volley.bullet_id);
+    let physical = collision.collides && unit_weapon_beam_length(volley.bullet_id).is_none();
+    let travel = if physical && !collision.scale_life {
+        maximum_travel
     } else {
-        (source_x, source_y)
+        distance.min(maximum_travel)
     };
+    let angle = dy.atan2(dx).to_degrees() + angle_offset;
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (impact_x, impact_y) = (source_x + cos * travel, source_y + sin * travel);
     let adjusted_speed = volley.speed * velocity_scale;
     let total_ticks = if adjusted_speed > 0.0 {
         travel / adjusted_speed
     } else {
         volley.lifetime
-    } + volley_shot_delay(volley.bullet_id) * f32::from(shot_index);
-    let angle = dy.atan2(dx).to_degrees() + angle_offset;
+    };
+    let lifetime_scale = if physical && collision.scale_life {
+        total_ticks / volley.lifetime.max(0.0001)
+    } else {
+        1.0
+    };
+    let delay = volley_shot_delay(volley.bullet_id) * f32::from(shot_index);
+    if let Some(id) = spawn_launcher_unit(
+        world,
+        volley.bullet_id,
+        team,
+        Some(shooter_id),
+        None,
+        source_x,
+        source_y,
+        angle,
+    ) {
+        return id;
+    }
     let projectile_id = world.next_projectile_id.fetch_add(1, Ordering::Relaxed);
     let rule = fire_damage_rule(world, team, false);
     world.projectiles.insert(
@@ -1730,11 +1772,13 @@ pub(crate) fn spawn_unit_projectile_for_team(
             source_y,
             target_x: impact_x,
             target_y: impact_y,
-            lifetime_scale: 1.0,
+            lifetime_scale,
             source_position: None,
             damage_interval: continuous_damage_interval(volley.bullet_id),
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: target_x,
+            aim_y: target_y,
         },
     );
     if let Ok(payload) = encode_create_bullet_payload(
@@ -1745,10 +1789,17 @@ pub(crate) fn spawn_unit_projectile_for_team(
         angle,
         volley.direct_damage * rule,
         velocity_scale,
-        1.0,
+        lifetime_scale,
     ) {
         if let Ok(frame) = frame_generated_packet(CREATE_BULLET_PACKET_ID, &payload, false) {
-            out.broadcast(frame);
+            launch_or_schedule_projectile(
+                world,
+                out,
+                projectile_id,
+                delay,
+                frame,
+                [mount_lateral, angle_offset, velocity_scale],
+            );
         }
     }
     projectile_id
@@ -1769,6 +1820,9 @@ pub(crate) fn spawn_enemy_projectile(
     mount_lateral: f32,
     shot_index: u8,
 ) -> i32 {
+    if let Some(owner) = Some((false, source_id)) {
+        world.weapon_aims.insert(owner, (target_x, target_y));
+    }
     let dx = target_x - source_x;
     let dy = target_y - source_y;
     let distance = dx.hypot(dy);
@@ -1796,22 +1850,40 @@ pub(crate) fn spawn_enemy_projectile(
     let angle_offset = (shot_fraction - 0.5) * volley.inaccuracy;
     let velocity_scale = 1.0 + (shot_fraction * 2.0 - 1.0) * volley.velocity_random;
     let maximum_travel = projectile_maximum_travel(volley, velocity_scale);
-    let travel = distance.min(maximum_travel);
-    let (impact_x, impact_y) = if distance > 0.001 {
-        (
-            source_x + dx / distance * travel,
-            source_y + dy / distance * travel,
-        )
+    let collision = crate::game::bullet_catalog::bullet_collision(volley.bullet_id);
+    let physical = collision.collides && unit_weapon_beam_length(volley.bullet_id).is_none();
+    let travel = if physical && !collision.scale_life {
+        maximum_travel
     } else {
-        (source_x, source_y)
+        distance.min(maximum_travel)
     };
+    let angle = dy.atan2(dx).to_degrees() + angle_offset;
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (impact_x, impact_y) = (source_x + cos * travel, source_y + sin * travel);
     let adjusted_speed = volley.speed * velocity_scale;
     let total_ticks = if adjusted_speed > 0.0 {
         travel / adjusted_speed
     } else {
         volley.lifetime
-    } + volley_shot_delay(volley.bullet_id) * f32::from(shot_index);
-    let angle = dy.atan2(dx).to_degrees() + angle_offset;
+    };
+    let lifetime_scale = if physical && collision.scale_life {
+        total_ticks / volley.lifetime.max(0.0001)
+    } else {
+        1.0
+    };
+    let delay = volley_shot_delay(volley.bullet_id) * f32::from(shot_index);
+    if let Some(id) = spawn_launcher_unit(
+        world,
+        volley.bullet_id,
+        2,
+        Some(source_id),
+        None,
+        source_x,
+        source_y,
+        angle,
+    ) {
+        return id;
+    }
     let projectile_id = world.next_projectile_id.fetch_add(1, Ordering::Relaxed);
     let rule = fire_damage_rule(world, 2, false);
     world.projectiles.insert(
@@ -1846,11 +1918,13 @@ pub(crate) fn spawn_enemy_projectile(
             source_y,
             target_x: impact_x,
             target_y: impact_y,
-            lifetime_scale: 1.0,
+            lifetime_scale,
             source_position: None,
             damage_interval: continuous_damage_interval(volley.bullet_id),
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: target_x,
+            aim_y: target_y,
         },
     );
     if let Ok(payload) = encode_create_bullet_payload(
@@ -1861,10 +1935,17 @@ pub(crate) fn spawn_enemy_projectile(
         angle,
         volley.direct_damage * rule,
         velocity_scale,
-        1.0,
+        lifetime_scale,
     ) {
         if let Ok(frame) = frame_generated_packet(CREATE_BULLET_PACKET_ID, &payload, false) {
-            out.broadcast(frame);
+            launch_or_schedule_projectile(
+                world,
+                out,
+                projectile_id,
+                delay,
+                frame,
+                [mount_lateral, angle_offset, velocity_scale],
+            );
         }
     }
     projectile_id
@@ -2041,7 +2122,11 @@ pub(crate) fn encode_projectile_replay_payload(
             projectile.source_y + (projectile.target_y - projectile.source_y) * progress,
         )
     };
-    let (target_x, target_y) = current_target.unwrap_or((projectile.target_x, projectile.target_y));
+    let (target_x, target_y) = if continuous {
+        current_target.unwrap_or((projectile.target_x, projectile.target_y))
+    } else {
+        (projectile.target_x, projectile.target_y)
+    };
     let angle = (target_y - y).atan2(target_x - x).to_degrees();
     encode_create_bullet_payload(
         projectile.bullet_id,
@@ -2126,12 +2211,9 @@ pub(crate) fn spawn_continuous_projectile_for_team(
     }
 }
 
-/// Official `BulletType.spawnUnit` payloads (JAR 158.1 `BulletType.create`):
-/// these launcher bullets never become bullet entities; they carry a
-/// MissileUnitType that joins the shooter's team. The headless flight model
-/// keeps the launcher projectile until its target point and inserts the unit
-/// there (vanilla inserts it immediately at the launch site with
-/// `spawned.rotation = angle`).
+/// Official 160.5 `BulletType.spawnUnit` payloads. Direct carriers spawn a
+/// missile at the muzzle instead of becoming a bullet. Quell103 first flies
+/// as a real bullet and its104 fragment carrier spawns on termination.
 pub(crate) fn spawn_unit_bullet_payload(bullet_id: i16) -> Option<i16> {
     match bullet_id {
         92 => Some(46), // anthicus -> anthicus-missile
@@ -2171,20 +2253,32 @@ pub(crate) fn spawn_unit_frag_carrier(bullet_id: i16) -> i16 {
 /// Returns true when a unit joined `world.enemies`. Unit types without an
 /// enemy spec are refused (same rule as console spawn), keeping the old
 /// no-insert behaviour instead of guessing stats.
+#[allow(clippy::too_many_arguments)]
 fn spawn_projectile_unit(
     world: &DynamicWorld,
     bullet_id: i16,
     team: u8,
+    shooter_id: i32,
     source_x: f32,
     source_y: f32,
     x: f32,
     y: f32,
 ) -> bool {
-    let Some(unit_type) = spawn_unit_bullet_payload(bullet_id) else {
+    if bullet_id != 104 {
         return false;
-    };
+    }
     let rotation = (y - source_y).atan2(x - source_x).to_degrees();
-    crate::network::units::spawn_unit_world(world, unit_type, team, x, y, rotation).is_some()
+    spawn_launcher_unit(
+        world,
+        bullet_id,
+        team,
+        (shooter_id >= 0).then_some(shooter_id),
+        None,
+        x,
+        y,
+        rotation,
+    )
+    .is_some()
 }
 
 /// Physical bullets collide with swept hitboxes as they travel. A cached aim
@@ -2349,6 +2443,7 @@ fn projectile_impact_effects(
         world,
         spawn_unit_frag_carrier(p.bullet_id),
         p.team,
+        p.shooter_id,
         p.source_x,
         p.source_y,
         x,
@@ -2373,9 +2468,15 @@ pub(crate) fn simulate_projectiles(
     out: &dyn crate::network::outbound::FrameEmit,
     delta_ticks: f32,
 ) -> bool {
-    let mut world_changed = false;
+    prune_weapon_aims(world);
+    let mut world_changed = simulate_navanax_mounts(world, out, delta_ticks);
+    let newly_launched = advance_pending_projectiles(world, out, delta_ticks);
     let ids: Vec<_> = world.projectiles.iter().map(|entry| *entry.key()).collect();
     for id in ids {
+        let delta_ticks = newly_launched.get(&id).copied().unwrap_or(delta_ticks);
+        if newly_launched.contains_key(&id) && delta_ticks <= 0.0 {
+            continue;
+        }
         let absorbed = world
             .projectiles
             .get(&id)
@@ -2386,7 +2487,7 @@ pub(crate) fn simulate_projectiles(
             continue;
         }
         // Official BulletType.updateHoming calls Units.closestTarget every
-        // tick from the bullet position: the missile homes toward the NEAREST
+        // tick around the original aim (or current position when unset): the missile homes toward the NEAREST
         // opposing live target inside homingRange, retargeting as units move
         // or die. Snapshot first and drop the guard before touching another
         // map (DashMap DM rule).
@@ -2411,6 +2512,8 @@ pub(crate) fn simulate_projectiles(
                 collides_air,
                 collides_ground,
                 heals,
+                aim_x,
+                aim_y,
             ) = {
                 let p = world.projectiles.get(&id).unwrap();
                 (
@@ -2425,10 +2528,20 @@ pub(crate) fn simulate_projectiles(
                     p.collides_air,
                     p.collides_ground,
                     p.heals,
+                    p.aim_x,
+                    p.aim_y,
                 )
             };
-            let bx = source_x + (target_x - source_x) * progress;
-            let by = source_y + (target_y - source_y) * progress;
+            let bx = if aim_x >= 0.0 {
+                aim_x
+            } else {
+                source_x + (target_x - source_x) * progress
+            };
+            let by = if aim_y >= 0.0 {
+                aim_y
+            } else {
+                source_y + (target_y - source_y) * progress
+            };
             // Official updateHoming / Units.closestTarget order:
             // 1. heals() branch or aimTile.build (non-heals, collidesGround).
             // 2. nearest opposing UNIT passing checkTarget(air, ground) --
@@ -2475,68 +2588,102 @@ pub(crate) fn simulate_projectiles(
                     }
                 }
             }
-            let mut found_unit = false;
-            // Vanilla closestTarget aims at the OPPOSING team for normal
-            // bullets; heals() bolts pass targetTeam = bullet.team, so they
-            // scan ALLIED units (checkTarget only -- no damaged gate on
-            // units, unlike allied buildings).
-            let scan_allied_units = heals;
-            if (team == 2) != scan_allied_units {
-                for entry in world.players.iter() {
-                    if entry.dead || possessed_unit_id(world, *entry.key()).is_some() {
-                        continue;
+            if best.is_none() {
+                let mut found_unit = false;
+                // Vanilla closestTarget aims at the OPPOSING team for normal
+                // bullets; heals() bolts pass targetTeam = bullet.team, so they
+                // scan ALLIED units (checkTarget only -- no damaged gate on
+                // units, unlike allied buildings).
+                let scan_allied_units = heals;
+                if (team == 2) != scan_allied_units {
+                    for entry in world.players.iter() {
+                        if entry.dead || possessed_unit_id(world, *entry.key()).is_some() {
+                            continue;
+                        }
+                        // PlayerCombatState carries no unit type; treat riders as
+                        // grounded (collidesGround is true for every homing id).
+                        found_unit |= {
+                            let snapshot = best;
+                            unit_in_range(&mut best, snapshot, entry.x, entry.y, 0.0)
+                        };
                     }
-                    // PlayerCombatState carries no unit type; treat riders as
-                    // grounded (collidesGround is true for every homing id).
-                    found_unit |= {
-                        let snapshot = best;
-                        unit_in_range(&mut best, snapshot, entry.x, entry.y, 0.0)
-                    };
+                } else {
+                    for entry in world.enemies.iter() {
+                        let movement = crate::game::content::unit_movement(entry.unit_type);
+                        let flying = movement.flying || entry.elevation > 0.01;
+                        // Unit.checkTarget(collidesAir, collidesGround).
+                        if (!collides_air && flying) || (!collides_ground && !flying) {
+                            continue;
+                        }
+                        let hit_size =
+                            crate::network::combat::unit_combat::unit_hit_size(entry.unit_type);
+                        found_unit |= {
+                            let snapshot = best;
+                            unit_in_range(&mut best, snapshot, entry.x, entry.y, hit_size)
+                        };
+                    }
                 }
-            } else {
-                for entry in world.enemies.iter() {
-                    let movement = crate::game::content::unit_movement(entry.unit_type);
-                    let flying = movement.flying || entry.elevation > 0.01;
-                    // Unit.checkTarget(collidesAir, collidesGround).
-                    if (!collides_air && flying) || (!collides_ground && !flying) {
-                        continue;
+                if !found_unit && collides_ground {
+                    // findEnemyTile: highest TargetPriority wins regardless of
+                    // distance; ties break by distance (BlockIndexer.java:470+).
+                    let mut building_best: Option<(i8, f32, (f32, f32))> = None;
+                    for tile in world.tiles.iter() {
+                        if tile.block == 0 || tile.team == team {
+                            continue;
+                        }
+                        let priority = building_target_priority(tile.block);
+                        let tx = (tile.position >> 16) as i16 as f32 * 8.0;
+                        let ty = tile.position as i16 as f32 * 8.0;
+                        let hit_size =
+                            f32::from(crate::game::content::block_size(tile.block)) * 8.0;
+                        let effective = (tx - bx).hypot(ty - by) - hit_size / 2.0;
+                        if effective >= homing_range {
+                            continue;
+                        }
+                        // heals() bolts home toward damaged ALLIED buildings
+                        // only (closestTarget with targetTeam = bullet.team);
+                        // they NEVER target enemies. Normal bullets keep the
+                        // opposing-team filter.
+                        let candidate_team_ok = if heals {
+                            tile.team == team
+                                && tile.health < crate::game::content::block_health(tile.block)
+                        } else {
+                            tile.team != team
+                        };
+                        if candidate_team_ok {
+                            let candidate = (priority, effective, (tx, ty));
+                            let replace = match building_best {
+                                None => true,
+                                Some((bp, bd, _)) => {
+                                    priority > bp || (priority == bp && effective < bd)
+                                }
+                            };
+                            if replace {
+                                building_best = Some(candidate);
+                            }
+                        }
                     }
-                    let hit_size =
-                        crate::network::combat::unit_combat::unit_hit_size(entry.unit_type);
-                    found_unit |= {
-                        let snapshot = best;
-                        unit_in_range(&mut best, snapshot, entry.x, entry.y, hit_size)
-                    };
-                }
-            }
-            if !found_unit && collides_ground {
-                // findEnemyTile: highest TargetPriority wins regardless of
-                // distance; ties break by distance (BlockIndexer.java:470+).
-                let mut building_best: Option<(i8, f32, (f32, f32))> = None;
-                for tile in world.tiles.iter() {
-                    if tile.block == 0 || tile.team == team {
-                        continue;
-                    }
-                    let priority = building_target_priority(tile.block);
-                    let tx = (tile.position >> 16) as i16 as f32 * 8.0;
-                    let ty = tile.position as i16 as f32 * 8.0;
-                    let hit_size = f32::from(crate::game::content::block_size(tile.block)) * 8.0;
-                    let effective = (tx - bx).hypot(ty - by) - hit_size / 2.0;
-                    if effective >= homing_range {
-                        continue;
-                    }
-                    // heals() bolts home toward damaged ALLIED buildings
-                    // only (closestTarget with targetTeam = bullet.team);
-                    // they NEVER target enemies. Normal bullets keep the
-                    // opposing-team filter.
-                    let candidate_team_ok = if heals {
-                        tile.team == team
-                            && tile.health < crate::game::content::block_health(tile.block)
-                    } else {
-                        tile.team != team
-                    };
-                    if candidate_team_ok {
-                        let candidate = (priority, effective, (tx, ty));
+                    for building in world.base_buildings.iter() {
+                        if heals {
+                            if building.team != team
+                                || building.health
+                                    >= crate::game::content::block_health(building.block)
+                            {
+                                continue;
+                            }
+                        } else if building.team == team {
+                            continue;
+                        }
+                        let bx2 = (building.position >> 16) as i16 as f32 * 8.0;
+                        let by2 = building.position as i16 as f32 * 8.0;
+                        let priority = building_target_priority(building.block);
+                        let hit_size =
+                            f32::from(crate::game::content::block_size(building.block)) * 8.0;
+                        let effective = (bx2 - bx).hypot(by2 - by) - hit_size / 2.0;
+                        if effective >= homing_range {
+                            continue;
+                        }
+                        let candidate = (priority, effective, (bx2, by2));
                         let replace = match building_best {
                             None => true,
                             Some((bp, bd, _)) => {
@@ -2547,37 +2694,9 @@ pub(crate) fn simulate_projectiles(
                             building_best = Some(candidate);
                         }
                     }
-                }
-                for building in world.base_buildings.iter() {
-                    if heals {
-                        if building.team != team
-                            || building.health >= crate::game::content::block_health(building.block)
-                        {
-                            continue;
-                        }
-                    } else if building.team == team {
-                        continue;
+                    if let Some((_, _, aim)) = building_best {
+                        best = Some((0.0, aim));
                     }
-                    let bx2 = (building.position >> 16) as i16 as f32 * 8.0;
-                    let by2 = building.position as i16 as f32 * 8.0;
-                    let priority = building_target_priority(building.block);
-                    let hit_size =
-                        f32::from(crate::game::content::block_size(building.block)) * 8.0;
-                    let effective = (bx2 - bx).hypot(by2 - by) - hit_size / 2.0;
-                    if effective >= homing_range {
-                        continue;
-                    }
-                    let candidate = (priority, effective, (bx2, by2));
-                    let replace = match building_best {
-                        None => true,
-                        Some((bp, bd, _)) => priority > bp || (priority == bp && effective < bd),
-                    };
-                    if replace {
-                        building_best = Some(candidate);
-                    }
-                }
-                if let Some((_, _, aim)) = building_best {
-                    best = Some((0.0, aim));
                 }
             }
             best.map(|(_, aim)| aim)
@@ -2620,6 +2739,12 @@ pub(crate) fn simulate_projectiles(
                         let (sin, cos) = step.sin_cos();
                         projectile.target_x = bx + to_target_x * cos - to_target_y * sin;
                         projectile.target_y = by + to_target_x * sin + to_target_y * cos;
+                        if progress < 1.0 {
+                            projectile.source_x =
+                                (bx - projectile.target_x * progress) / (1.0 - progress);
+                            projectile.source_y =
+                                (by - projectile.target_y * progress) / (1.0 - progress);
+                        }
                     }
                 }
                 // turn_rate <= 0 cannot happen here (gate above), and even if
@@ -2980,14 +3105,13 @@ pub(crate) fn simulate_projectiles(
                 }
             }
             if expired {
-                // Official BulletType.spawnUnit: launcher payloads insert
-                // their MissileUnitType on the shooter's team at the impact
-                // point (see spawn_projectile_unit). Quell routes through its
-                // fragBullet carrier (103 -> 104 -> 53).
+                // Only staged Quell103 terminates into a104 spawn-unit carrier.
+                // Direct launchers already spawned at the muzzle.
                 world_changed |= spawn_projectile_unit(
                     world,
                     spawn_unit_frag_carrier(bullet_id),
                     team,
+                    shooter_id,
                     source_x,
                     source_y,
                     impact_x,
@@ -3182,13 +3306,13 @@ pub(crate) fn simulate_projectiles(
             }
         }
         if expired {
-            // Official BulletType.spawnUnit: launcher payloads insert their
-            // MissileUnitType on the shooter's team at the impact point.
-            // Quell routes through its fragBullet carrier (103 -> 104 -> 53).
+            // Quell's staged carrier spawns on termination; direct launchers
+            // already spawned at the muzzle.
             world_changed |= spawn_projectile_unit(
                 world,
                 spawn_unit_frag_carrier(bullet_id),
                 team,
+                shooter_id,
                 source_x,
                 source_y,
                 impact_x,
@@ -3198,7 +3322,11 @@ pub(crate) fn simulate_projectiles(
                 world, out, team, bullet_id, id, source_x, source_y, impact_x, impact_y,
             );
         }
-        if expired || dead || !world.enemies.contains_key(&target_id) {
+        let persistent_beam = world
+            .projectiles
+            .get(&id)
+            .is_some_and(|p| p.damage_interval.is_some());
+        if expired || (!persistent_beam && (dead || !world.enemies.contains_key(&target_id))) {
             world.projectiles.remove(&id);
         }
         if dead {
@@ -3206,4 +3334,387 @@ pub(crate) fn simulate_projectiles(
         }
     }
     world_changed
+}
+
+fn launch_or_schedule_projectile(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    id: i32,
+    delay: f32,
+    frame: Vec<u8>,
+    pattern: [f32; 3],
+) {
+    if delay > 0.0 {
+        if let Some((_, projectile)) = world.projectiles.remove(&id) {
+            world.pending_projectiles.insert(
+                id,
+                PendingProjectile {
+                    remaining_ticks: delay,
+                    projectile,
+                    frame,
+                    pattern,
+                },
+            );
+        }
+    } else {
+        out.broadcast(frame);
+    }
+}
+
+fn advance_pending_projectiles(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta: f32,
+) -> HashMap<i32, f32> {
+    let ids: Vec<_> = world.pending_projectiles.iter().map(|p| *p.key()).collect();
+    let mut launched = HashMap::new();
+    for id in ids {
+        let ready = if let Some(mut shot) = world.pending_projectiles.get_mut(&id) {
+            shot.remaining_ticks -= delta.max(0.0);
+            shot.remaining_ticks <= 0.0
+        } else {
+            false
+        };
+        if ready {
+            if let Some((
+                _,
+                PendingProjectile {
+                    remaining_ticks: remaining,
+                    mut projectile,
+                    mut frame,
+                    pattern,
+                },
+            )) = world.pending_projectiles.remove(&id)
+            {
+                // A removed unit cannot finish a scheduled weapon burst.
+                if projectile.shooter_id >= 0 && !world.enemies.contains_key(&projectile.shooter_id)
+                {
+                    continue;
+                }
+                if let Some(shooter) = world.enemies.get(&projectile.shooter_id).map(|u| u.clone())
+                {
+                    let (aim_x, aim_y) = current_unit_weapon_aim(world, &shooter)
+                        .unwrap_or((projectile.aim_x, projectile.aim_y));
+                    let angle = (aim_y - shooter.y).atan2(aim_x - shooter.x);
+                    let source_x = shooter.x + pattern[0] * angle.sin();
+                    let source_y = shooter.y - pattern[0] * angle.cos();
+                    let heading =
+                        (aim_y - source_y).atan2(aim_x - source_x) + pattern[1].to_radians();
+                    let distance = (projectile.target_x - projectile.source_x)
+                        .hypot(projectile.target_y - projectile.source_y);
+                    projectile.source_x = source_x;
+                    projectile.source_y = source_y;
+                    projectile.target_x = source_x + heading.cos() * distance;
+                    projectile.target_y = source_y + heading.sin() * distance;
+                    projectile.aim_x = aim_x;
+                    projectile.aim_y = aim_y;
+                    if let Ok(payload) = encode_create_bullet_payload(
+                        projectile.bullet_id,
+                        projectile.team,
+                        source_x,
+                        source_y,
+                        heading.to_degrees(),
+                        projectile.damage,
+                        pattern[2],
+                        projectile.lifetime_scale,
+                    ) {
+                        if let Ok(updated) =
+                            frame_generated_packet(CREATE_BULLET_PACKET_ID, &payload, false)
+                        {
+                            frame = updated;
+                        }
+                    }
+                }
+                world.projectiles.insert(id, projectile);
+                out.broadcast(frame);
+                launched.insert(id, -remaining);
+            }
+        }
+    }
+    launched
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_launcher_unit(
+    world: &DynamicWorld,
+    bullet_id: i16,
+    team: u8,
+    shooter: Option<i32>,
+    source_position: Option<i32>,
+    x: f32,
+    y: f32,
+    angle: f32,
+) -> Option<i32> {
+    let unit_type = spawn_unit_bullet_payload(bullet_id)?;
+    let source_generation = source_position.and_then(|p| {
+        world
+            .tiles
+            .get(&p)
+            .map(|t| t.generation)
+            .or_else(|| world.base_buildings.contains_key(&p).then_some(u64::MAX))
+    });
+    let id = crate::network::units::spawn_unit_world(world, unit_type, team, x, y, angle)?;
+    if let Some(mut missile) = world.enemies.get_mut(&id) {
+        missile.missile_shooter = shooter;
+        missile.missile_source_position = source_position;
+        missile.missile_source_generation = source_generation;
+        if let Some(spec) = crate::game::unit_types::unit_missile_spec(unit_type) {
+            if spec.acceleration_time <= 0.0 {
+                missile.velocity_x = angle.to_radians().cos() * spec.speed;
+                missile.velocity_y = angle.to_radians().sin() * spec.speed;
+            }
+        }
+    }
+    Some(id)
+}
+
+pub(crate) fn weapon_target_position(
+    world: &DynamicWorld,
+    target: ProjectileHit,
+    team: u8,
+) -> Option<(f32, f32)> {
+    match target {
+        ProjectileHit::Unit(id) => world
+            .enemies
+            .get(&id)
+            .filter(|u| u.team != team && u.health > 0.0)
+            .map(|u| (u.x, u.y)),
+        ProjectileHit::Player(id) => world
+            .players
+            .get(&id)
+            .filter(|u| u.team != team && !u.dead)
+            .map(|u| (u.x, u.y)),
+        ProjectileHit::Building(position) | ProjectileHit::Core(_, position) => {
+            let hostile = world
+                .tiles
+                .get(&position)
+                .map(|t| t.team != team && t.health > 0.0)
+                .or_else(|| {
+                    world
+                        .base_buildings
+                        .get(&position)
+                        .map(|b| b.team != team && b.health > 0.0)
+                })
+                .unwrap_or(false);
+            hostile.then_some((
+                (position >> 16) as i16 as f32 * 8.0,
+                position as i16 as f32 * 8.0,
+            ))
+        }
+    }
+}
+
+fn navanax_mount_target(world: &DynamicWorld, team: u8, x: f32, y: f32) -> Option<ProjectileHit> {
+    let mut units = Vec::new();
+    for u in world.enemies.iter() {
+        if u.team != team && u.health > 0.0 {
+            let d = (u.x - x).hypot(u.y - y);
+            if d < 102.0 {
+                units.push((d, ProjectileHit::Unit(u.id)));
+            }
+        }
+    }
+    for u in world.players.iter() {
+        if u.team != team && !u.dead && possessed_unit_id(world, *u.key()).is_none() {
+            let d = (u.x - x).hypot(u.y - y);
+            if d < 102.0 {
+                units.push((d, ProjectileHit::Player(*u.key())));
+            }
+        }
+    }
+    if let Some((_, target)) = units.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)) {
+        return Some(target);
+    }
+    let mut buildings = Vec::new();
+    for t in world.tiles.iter() {
+        if t.team != team && t.block != 0 && t.health > 0.0 {
+            let tx = (t.position >> 16) as i16 as f32 * 8.0;
+            let ty = t.position as i16 as f32 * 8.0;
+            let d = (tx - x).hypot(ty - y);
+            if d < 102.0 {
+                buildings.push((
+                    building_target_priority(t.block),
+                    d,
+                    ProjectileHit::Building(t.position),
+                ));
+            }
+        }
+    }
+    for t in world.base_buildings.iter() {
+        if t.team != team && t.health > 0.0 {
+            let tx = (t.position >> 16) as i16 as f32 * 8.0;
+            let ty = t.position as i16 as f32 * 8.0;
+            let d = (tx - x).hypot(ty - y);
+            if d < 102.0 {
+                buildings.push((
+                    building_target_priority(t.block),
+                    d,
+                    ProjectileHit::Building(t.position),
+                ));
+            }
+        }
+    }
+    buildings
+        .into_iter()
+        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)))
+        .map(|(_, _, t)| t)
+}
+
+/// One independent update of every autonomous plasma mount, regardless of
+/// whether the owning Navanax is controlled by AI, a player, or logic.
+fn simulate_navanax_mounts(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta: f32,
+) -> bool {
+    let units: Vec<_> = world
+        .enemies
+        .iter()
+        .filter(|u| u.unit_type == 34)
+        .map(|u| u.clone())
+        .collect();
+    let mut changed = false;
+    for mut unit in units {
+        let can = unit_can_shoot(&unit);
+        let reload_delta = effective_unit_reload_delta(&unit, delta);
+        let damage = effective_unit_damage_multiplier(&unit);
+        let (sin, cos) = (unit.rotation - 90.0).to_radians().sin_cos();
+        for (index, (x, y)) in [(-21.0, -29.25), (21.0, -29.25), (-21.0, 12.5), (21.0, 12.5)]
+            .into_iter()
+            .enumerate()
+        {
+            let mount_x = unit.x + x * cos - y * sin;
+            let mount_y = unit.y + x * sin + y * cos;
+            let mount = &mut unit.navanax_lasers[index];
+            mount.reload = (mount.reload - reload_delta).max(0.0);
+            mount.retarget -= delta;
+            if mount.retarget <= 0.0 {
+                mount.target = navanax_mount_target(world, unit.team, mount_x, mount_y);
+                mount.retarget = if mount.target.is_some() { 35.0 } else { 20.0 };
+            }
+            let target = mount
+                .target
+                .and_then(|t| weapon_target_position(world, t, unit.team))
+                .filter(|(x, y)| (*x - mount_x).hypot(*y - mount_y) <= 102.0);
+            if target.is_none() {
+                mount.target = None;
+            }
+            let desired =
+                target.map(|(x, y)| (y - mount_y).atan2(x - mount_x).to_degrees() - unit.rotation);
+            if can {
+                if let Some(desired) = desired {
+                    let difference = (desired - mount.rotation + 180.0).rem_euclid(360.0) - 180.0;
+                    mount.rotation += difference.clamp(-3.5 * delta, 3.5 * delta);
+                }
+            }
+            let angle = (unit.rotation + mount.rotation).to_radians();
+            let (dy, dx) = angle.sin_cos();
+            let source_x = mount_x + 7.0 * dx;
+            let source_y = mount_y + 7.0 * dy;
+            let end_x = source_x + 95.0 * dx;
+            let end_y = source_y + 95.0 * dy;
+            if let Some(id) = mount.beam {
+                if let Some(mut beam) = world.projectiles.get_mut(&id) {
+                    if beam.remaining_ticks > 0.0 {
+                        beam.source_x = source_x;
+                        beam.source_y = source_y;
+                        beam.target_x = end_x;
+                        beam.target_y = end_y;
+                        mount.reload = 170.0;
+                    } else {
+                        mount.beam = None;
+                    }
+                } else {
+                    mount.beam = None;
+                }
+            }
+            let aligned = desired.is_some_and(|a| {
+                ((a - mount.rotation + 180.0).rem_euclid(360.0) - 180.0).abs() <= 5.0
+            });
+            if can && aligned && mount.reload <= 0.0001 {
+                let (target_id, position) = match mount.target {
+                    Some(ProjectileHit::Unit(id) | ProjectileHit::Player(id)) => (id, None),
+                    Some(ProjectileHit::Building(p) | ProjectileHit::Core(_, p)) => (-1, Some(p)),
+                    None => continue,
+                };
+                mount.beam = Some(spawn_navanax_laser(
+                    61 + index as i16,
+                    world,
+                    out,
+                    unit.team,
+                    damage,
+                    unit.id,
+                    target_id,
+                    position,
+                    false,
+                    source_x,
+                    source_y,
+                    end_x,
+                    end_y,
+                ));
+                mount.reload = 170.0;
+                changed = true;
+            }
+        }
+        if let Some(mut live) = world.enemies.get_mut(&unit.id) {
+            live.navanax_lasers = unit.navanax_lasers;
+        }
+    }
+    changed
+}
+
+pub(crate) fn current_unit_weapon_aim(
+    world: &DynamicWorld,
+    shooter: &EnemyUnit,
+) -> Option<(f32, f32)> {
+    if let Some(session) = world
+        .player_sessions
+        .iter()
+        .find(|s| s.controlled_unit.standard_id() == Some(shooter.id))
+    {
+        if session.mouse_x.is_finite() && session.mouse_y.is_finite() {
+            return Some((session.mouse_x, session.mouse_y));
+        }
+    }
+    world.weapon_aims.get(&(false, shooter.id)).map(|aim| *aim)
+}
+
+fn prune_weapon_aims(world: &DynamicWorld) {
+    let owners: Vec<_> = world.weapon_aims.iter().map(|entry| *entry.key()).collect();
+    for owner in owners {
+        let alive = if owner.0 {
+            world
+                .tiles
+                .get(&owner.1)
+                .is_some_and(|t| t.block != 0 && t.health > 0.0)
+                || world
+                    .base_buildings
+                    .get(&owner.1)
+                    .is_some_and(|b| b.health > 0.0)
+        } else {
+            world.enemies.contains_key(&owner.1)
+        };
+        if !alive {
+            world.weapon_aims.remove(&owner);
+        }
+    }
+}
+
+pub(crate) fn current_building_weapon_aim(
+    world: &DynamicWorld,
+    position: i32,
+) -> Option<(f32, f32)> {
+    if let Some(session) = crate::network::units::controlling_session_for_building(world, position)
+    {
+        return Some((session.mouse_x, session.mouse_y));
+    }
+    let logic = world.tiles.get(&position).and_then(|t| t.logic_control);
+    if let Some((x, y, _, target_id)) = logic {
+        return world
+            .enemies
+            .get(&target_id)
+            .map(|u| (u.x, u.y))
+            .or(Some((x, y)));
+    }
+    world.weapon_aims.get(&(true, position)).map(|a| *a)
 }

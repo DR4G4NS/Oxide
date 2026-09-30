@@ -70,15 +70,15 @@ pub(crate) use projectiles::{
     projectile_maximum_travel, retusa_mine_shots_between, sap_strength, simulate_projectiles,
     spawn_allied_unit_projectile, spawn_allied_unit_projectile_lateral,
     spawn_continuous_projectile, spawn_continuous_projectile_for_team, spawn_enemy_horizon_bomb,
-    spawn_enemy_projectile, spawn_enemy_volley, spawn_navanax_lasers, spawn_projectile,
-    spawn_projectile_for_team, spawn_unit_bullet_payload, spawn_unit_frag_carrier,
-    spawn_unit_projectile_for_team, unit_weapon_beam_length, volley_mount_count,
-    volley_mount_lateral, volley_shot_delay, volley_with_mount_offset, EnemyProjectileVolley,
-    AEGIRES_PD, ANTUMBRA_CANNON, ANTUMBRA_MISSILE, ARKYID_ARTILLERY, ARKYID_SAP, ATRAX_SLAG,
-    BRYDE_ARTILLERY, BRYDE_MISSILES, CORVUS_LASER, ECLIPSE_FLAK, ECLIPSE_LASER, FLARE_BOLT,
-    MEGA_HEAL_A, MEGA_HEAL_B, MINKE_ARTILLERY, MINKE_GUN, OMURA_RAIL, POLY_MISSILE, QUAD_BOMB,
-    RETUSA_BOLT, RETUSA_MINE, RISSO_GUN, RISSO_MISSILE, SCEPTER_BOLT, SCEPTER_MOUNT, SEI_CANNON,
-    SEI_LAUNCHER, SPIROCT_SAP, SPIROCT_SAP_MOUNT, TOXOPID_CANNON, TOXOPID_SHRAPNEL, VELA_BEAM,
+    spawn_enemy_projectile, spawn_enemy_volley, spawn_projectile, spawn_projectile_for_team,
+    spawn_unit_bullet_payload, spawn_unit_frag_carrier, spawn_unit_projectile_for_team,
+    unit_weapon_beam_length, volley_mount_count, volley_mount_lateral, volley_shot_delay,
+    volley_with_mount_offset, EnemyProjectileVolley, AEGIRES_PD, ANTUMBRA_CANNON, ANTUMBRA_MISSILE,
+    ARKYID_ARTILLERY, ARKYID_SAP, ATRAX_SLAG, BRYDE_ARTILLERY, BRYDE_MISSILES, CORVUS_LASER,
+    ECLIPSE_FLAK, ECLIPSE_LASER, FLARE_BOLT, MEGA_HEAL_A, MEGA_HEAL_B, MINKE_ARTILLERY, MINKE_GUN,
+    OMURA_RAIL, POLY_MISSILE, QUAD_BOMB, RETUSA_BOLT, RETUSA_MINE, RISSO_GUN, RISSO_MISSILE,
+    SCEPTER_BOLT, SCEPTER_MOUNT, SEI_CANNON, SEI_LAUNCHER, SPIROCT_SAP, SPIROCT_SAP_MOUNT,
+    TOXOPID_CANNON, TOXOPID_SHRAPNEL, VELA_BEAM,
 };
 mod lightning;
 pub(crate) use lightning::{
@@ -106,7 +106,7 @@ mod tests {
     use super::*;
     use crate::network::units::StatusContainer;
 
-    fn test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>) {
+    pub(super) fn test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>) {
         let state = crate::state::game_state::GameState::new();
         state.start_hosting(
             "combat-test".into(),
@@ -140,6 +140,8 @@ mod tests {
             unit_group_order: parking_lot::Mutex::new(Vec::new()),
             damaged_window: parking_lot::Mutex::new(Vec::new()),
             projectiles: DashMap::new(),
+            pending_projectiles: Default::default(),
+            weapon_aims: Default::default(),
             next_projectile_id: std::sync::atomic::AtomicI32::new(4_000_000),
             overdrive_boosts: DashMap::new(),
             heal_suppression: DashMap::new(),
@@ -152,6 +154,7 @@ mod tests {
             ai_rebuild_state: Default::default(),
             tile_footprint: DashMap::new(),
             navigation_revision: std::sync::atomic::AtomicU64::new(0),
+            toward_navigation: Default::default(),
             ground_navigation: parking_lot::Mutex::new(None),
             leg_navigation: parking_lot::Mutex::new(None),
             naval_navigation: parking_lot::Mutex::new(None),
@@ -179,7 +182,7 @@ mod tests {
         (world, DashMap::new())
     }
 
-    fn enemy_unit(id: i32) -> EnemyUnit {
+    pub(super) fn enemy_unit(id: i32) -> EnemyUnit {
         EnemyUnit {
             id,
             unit_type: 0,
@@ -211,6 +214,14 @@ mod tests {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -263,7 +274,8 @@ mod tests {
             let mut counts = std::collections::BTreeMap::new();
             for _ in 0..780 {
                 for fire in collect_allied_weapon_fire_tick(&mut unit, 1.0, 50.0).unwrap() {
-                    if let AlliedWeaponFire::Projectile(volley) = fire {
+                    {
+                        let AlliedWeaponFire::Projectile(volley) = fire;
                         *counts.entry(volley.bullet_id).or_insert(0) += 1;
                     }
                 }
@@ -621,6 +633,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         world.wave_rules.write().unit_damage_multiplier = 9.0;
@@ -713,6 +727,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         simulate_projectiles(&world, &connections, 1.0);
@@ -723,69 +739,36 @@ mod tests {
     }
 
     #[test]
-    fn p201_spawn_unit_launchers_insert_missile_units_on_impact() {
-        // Vanilla 158.1 anthicus/quell/disrupt launchers set spawnUnit
-        // (BulletType.create): the payload joins the shooter's team as a
-        // MissileUnitType entity and the launcher bullet itself never hits()
-        // or splashes (create returns null). The headless model flies the
-        // launcher projectile to its target point and inserts the unit there.
+    fn p201_spawn_unit_launchers_insert_missile_units_at_fire() {
         let (world, _) = test_world();
         let (connections, mut _rx) = recording_connections();
         world.enemies.insert(1, enemy_unit(1));
-        world.projectiles.insert(
-            7,
-            Projectile {
-                target_id: 1,
-                shooter_id: -1,
-                team: 1,
-                bullet_id: 92,
-                damage: 0.75,
-                splash_damage: 0.0,
-                splash_radius: 0.0,
-                status_effect: -1,
-                status_duration: 0.0,
-                pierce_units: 0,
-                pierce_buildings: 0,
-                spawn_reign_frags: false,
-                homing_range: 0.0,
-                homing_power: 0.0,
-                homing_delay: -1.0,
-                collides_air: true,
-                collides_ground: true,
-                heals: false,
-                enemy_target_position: None,
-                enemy_target_core: false,
-                apply_direct_on_impact: true,
-                armor_multiplier: 1.0,
-                remaining_ticks: 0.0,
-                total_ticks: 1.0,
-                source_x: 0.0,
-                source_y: 0.0,
-                target_x: 50.0,
-                target_y: 0.0,
-                lifetime_scale: 1.0,
-                source_position: None,
-                damage_interval: None,
-                damage_timer: 0.0,
-                collided: Vec::new(),
-            },
+        let mut volley = RISSO_MISSILE;
+        volley.bullet_id = 92;
+        spawn_unit_projectile_for_team(
+            &world,
+            &connections,
+            99,
+            1,
+            None,
+            volley,
+            0.0,
+            0.0,
+            50.0,
+            0.0,
+            0.0,
+            0,
+            1,
         );
-        simulate_projectiles(&world, &connections, 1.0);
         assert!(world.projectiles.is_empty());
-        // The anthicus-missile joined the shooter's team at the impact point.
-        let missile = world
-            .enemies
-            .iter()
-            .find(|unit| unit.unit_type == 46)
-            .expect("spawnUnit payload must insert an anthicus-missile");
-        assert_eq!(missile.team, 1);
-        assert_eq!(missile.entity_class, 39, "MissileUnitType entity class");
-        assert!((missile.x - 50.0).abs() < 1e-3 && missile.y.abs() < 1e-3);
-        assert!((missile.health - 55.0).abs() < 1e-3, "spec health");
-        assert!(missile.missile_time > 0.0, "TimedKillUnit countdown set");
-        // No terminal splash on the launcher: only its 0.75 direct damage.
-        let target_health = world.enemies.get(&1).unwrap().health;
-        assert!((target_health - 99.25).abs() < 1e-3);
+        let missile = world.enemies.iter().find(|u| u.unit_type == 46).unwrap();
+        assert_eq!((missile.team, missile.entity_class), (1, 39));
+        assert_eq!((missile.x, missile.y), (0.0, 0.0));
+        assert_eq!(missile.missile_shooter, Some(99));
+        assert!((missile.health - 55.0).abs() < 0.001);
+        assert!(missile.missile_time > 0.0);
+        drop(missile);
+        assert_eq!(world.enemies.get(&1).unwrap().health, 100.0);
     }
 
     #[test]
@@ -829,6 +812,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         simulate_projectiles(&world, &connections, 1.0);
@@ -917,6 +902,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         simulate_projectiles(&world, &connections, 1.0);
@@ -970,6 +957,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         simulate_projectiles(&world, &connections, 1.0);
@@ -995,6 +984,7 @@ mod tests {
             let mut unit = enemy_unit(id);
             unit.x = x;
             unit.team = 2;
+            unit.health = 200.0;
             world.enemies.insert(id, unit);
         }
         world.projectiles.insert(
@@ -1033,6 +1023,8 @@ mod tests {
                 damage_interval: Some(5.0),
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         // Ticks 1-4: inside the first damageInterval, no damage yet.
@@ -1040,7 +1032,7 @@ mod tests {
             simulate_projectiles(&world, &connections, 1.0);
         }
         assert!(
-            world.enemies.iter().all(|unit| unit.health == 100.0),
+            world.enemies.iter().all(|unit| unit.health == 200.0),
             "no damage before the first damageInterval elapses"
         );
         // Ticks 5-15: three interval hits of 35 along the piercing line.
@@ -1050,14 +1042,14 @@ mod tests {
         let damaged = world
             .enemies
             .iter()
-            .filter(|unit| unit.health < 100.0)
+            .filter(|unit| unit.health < 200.0)
             .count();
         assert_eq!(damaged, 3, "interval damage reaches the whole beam line");
         assert!(
             world
                 .enemies
                 .iter()
-                .all(|unit| (unit.health - 65.0).abs() < 0.001),
+                .all(|unit| (unit.health - 95.0).abs() < 0.001),
             "three 35-dmg interval ticks accumulated, got {:?}",
             world.enemies.iter().map(|u| u.health).collect::<Vec<_>>()
         );
@@ -1111,6 +1103,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         assert!(simulate_enemy_point_defense(&world, 9.0));
@@ -1159,6 +1153,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         assert!(simulate_enemy_point_defense(&world, 9.0));
@@ -1212,6 +1208,8 @@ mod tests {
                     damage_interval: None,
                     damage_timer: 0.0,
                     collided: Vec::new(),
+                    aim_x: -1.0,
+                    aim_y: -1.0,
                 },
             );
         }
@@ -1370,6 +1368,8 @@ mod tests {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
             homing_delay: -1.0,
         }
     }
@@ -1383,7 +1383,7 @@ mod tests {
         insert_wall_at_team(world, position, block_override.unwrap_or(216), 1, health);
     }
 
-    fn insert_wall_at_team(
+    pub(super) fn insert_wall_at_team(
         world: &crate::network::world::DynamicWorld,
         position: i32,
         block: i16,
@@ -2126,3 +2126,6 @@ mod tests {
         drop(tracked);
     }
 }
+
+#[cfg(test)]
+mod parity_regressions;

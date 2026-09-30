@@ -71,6 +71,7 @@ Until subclass-typed state exists:
 
 | Domain | Field | Meaning |
 |---|---|---|
+| Electrolyzer 200 / AtmosphericConcentrator 201 | `liquid_inventory` | authoritative per-liquid storage; primary fields mirror water (200) or nitrogen (201) |
 | NuclearReactor 315 | `production_progress` | fuel timer |
 | NuclearReactor 315 | `output_liquid_amount` | heat; never cryofluid |
 | ImpactReactor 316 | `output_liquid_amount` | warmup |
@@ -81,8 +82,9 @@ Until subclass-typed state exists:
 | Turret (logic control, H18) | `logic_control` | `Some((aim_x, aim_y, shooting, unit_id))`: `control shoot/shootp` aim state; `None` = automatic targeting |
 | Conveyor | `conveyor_items` | FIFO `(item, progress)`, front at index 0 |
 | UnitFactory 377-379 / 386-388, Reconstructor 380-383 / 389-392 | `payload` | held `UnitPayload` (incoming or completed); released only after `moveOutPayload` |
-| UnitFactory / Reconstructor | `payload_accum` | official `payVector.x`, `payVector.y` (length 2); empty means the origin |
-| UnitFactory / Reconstructor | `payload_rotation` | official `payRotation` (degrees) |
+| UnitFactory / Reconstructor / UnitAssembler / Module 393-396 | `payload_accum` | official `payVector.x`, `payVector.y` (length 2); empty means the origin |
+| UnitFactory / Reconstructor / UnitAssembler / Module 393-396 | `payload_rotation` | official `payRotation` (degrees) |
+| UnitAssembler 393-395 / Module 396 | `payload` / `payload_inventory` | one incoming UnitPayload/BuildPayload sliding to the centre; assembler stores deposited local plan stacks, while powered modules forward to their linked assembler |
 | Reconstructor | `stored_amount` | legacy held-unit type + 1 marker; never authoritative for consumption or snapshot efficiency (use `payload`) |
 | ConstructBlock 5..=20 | `production_progress` | `ConstructBuild.progress` (0..=1) |
 | ConstructBlock 5..=20 | `stored_item` | `ConstructBuild.previous.id` (air = 0) |

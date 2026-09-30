@@ -632,6 +632,14 @@ fn base_map_turrets_fire_at_enemies_in_range() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -1182,6 +1190,14 @@ fn diffuse_fires_fifteen_projectiles_for_one_three_ammo_volley() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -1406,6 +1422,8 @@ fn erekir_test_world() -> DynamicWorld {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: std::sync::atomic::AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -1418,6 +1436,7 @@ fn erekir_test_world() -> DynamicWorld {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: std::sync::atomic::AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -1641,6 +1660,14 @@ fn ground_unit_on_tile(
         authority: crate::network::world::UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -2802,6 +2829,7 @@ fn assembler_tier_zero_consumes_loaded_payloads_not_core_items() {
     asm.stored_liquid = CYANOGEN_LIQUID;
     asm.liquid_amount = 10_000.0;
     world.tiles.insert(assembler, asm);
+    assembler_spawn_regressions::seed_positioned_assembler_drones(&world, assembler);
     {
         let mut items = crate::network::economy::items_for_team_mut(&world, 1);
         items[16] = 40; // beryllium
@@ -2820,8 +2848,19 @@ fn assembler_tier_zero_consumes_loaded_payloads_not_core_items() {
     let items = crate::network::economy::items_for_team(&world, 1);
     assert_eq!(items[16], 40, "core inventory untouched by assemblers");
     assert_eq!(items[9], 40, "core inventory untouched by assemblers");
-    assert_eq!(world.enemies.len(), 1);
-    let unit = world.enemies.iter().next().unwrap();
+    assert_eq!(
+        world
+            .enemies
+            .iter()
+            .filter(|unit| unit.unit_type != 63)
+            .count(),
+        1
+    );
+    let unit = world
+        .enemies
+        .iter()
+        .find(|unit| unit.unit_type != 63)
+        .unwrap();
     assert_eq!(unit.unit_type, 41, "tier 0 vanquish without any module");
     assert_eq!(unit.team, 1);
     let asm = world.tiles.get(&assembler).unwrap().clone();
@@ -2832,53 +2871,35 @@ fn assembler_tier_zero_consumes_loaded_payloads_not_core_items() {
 }
 
 #[test]
-fn assembler_without_payloads_draws_the_drone_proxy_from_the_core() {
-    // Documented deviation (README gaps row): assembly-drones fly via
-    // AssemblerAI, but payload ferrying is not modeled, so when the build
-    // has no loaded stacks the team core stands in for the drone ferry and
-    // is charged at completion. Without cyanogen nothing may progress
-    // regardless of stock.
+fn assembler_without_payloads_never_substitutes_core_items() {
     let world = erekir_test_world();
     let assembler = (10 << 16) | 10;
     let mut asm = erekir_tile(assembler, 393, 0);
     asm.occupied = vec![assembler];
+    asm.stored_liquid = CYANOGEN_LIQUID;
+    asm.liquid_amount = 10_000.0;
     world.tiles.insert(assembler, asm);
-    {
-        let mut items = crate::network::economy::items_for_team_mut(&world, 1);
-        items[16] = 999; // beryllium
-        items[9] = 999; // silicon
-        items[7] = 999; // tungsten
-    }
-    let mut power = std::collections::HashMap::new();
-    power.insert(assembler, 1.0);
-    let connections = DashMap::new();
-    // No cyanogen -> ConsumeLiquid.efficiency == 0 -> zero progress.
+    assembler_spawn_regressions::seed_positioned_assembler_drones(&world, assembler);
+    items_for_team_mut(&world, 1).fill(999);
+    let power = HashMap::from([(assembler, 1.0)]);
     assert!(!simulate_erekir_assemblers(
         &world,
-        &connections,
+        &DashMap::new(),
         60.0 * 50.0 + 1.0,
         &power
     ));
-    assert!(world.enemies.is_empty(), "no cyanogen, no assembly");
-    if let Some(mut tile) = world.tiles.get_mut(&assembler) {
-        tile.stored_liquid = CYANOGEN_LIQUID;
-        tile.liquid_amount = 10_000.0;
-    }
-    assert!(simulate_erekir_assemblers(
-        &world,
-        &connections,
-        60.0 * 50.0 + 1.0,
-        &power
-    ));
-    assert_eq!(world.enemies.len(), 1, "core proxy completes the plan");
-    let items = crate::network::economy::items_for_team(&world, 1);
-    assert_eq!(items[16], 999 - 40, "beryllium proxy stack charged");
-    assert_eq!(items[9], 999 - 40, "silicon proxy stack charged");
+    assert!(world.enemies.iter().all(|unit| unit.unit_type == 63));
+    assert!(items_for_team(&world, 1)
+        .iter()
+        .all(|amount| *amount == 999));
+    let asm = world.tiles.get(&assembler).unwrap().clone();
+    assert_eq!(asm.production_progress, 0.0);
+    assert_eq!(asm.liquid_amount, 10_000.0);
 }
 
 #[test]
 fn assembler_module_raises_plan_tier() {
-    // SOL-010: an adjacent basic-assembler-module (396, tier 1) RAISES the
+    // SOL-010: a correctly facing perimeter module (396, tier 1) RAISES the
     // effective plan tier to 1 (conquer 42, 180s) — mirroring
     // UnitAssembler.UnitAssemblerBuild.checkTier() (UnitAssembler.java:
     // 315-390) and UnitAssemblerModule tier = 1 (UnitAssemblerModule.java:
@@ -2889,15 +2910,16 @@ fn assembler_module_raises_plan_tier() {
     asm.occupied = vec![assembler];
     assert_eq!(assembler_tier(&world, &asm), 0, "no module -> tier 0");
     world.tiles.insert(assembler, asm);
-    let module = (11 << 16) | 10;
-    let mut module_tile = erekir_tile(module, 396, 0);
+    assembler_spawn_regressions::seed_positioned_assembler_drones(&world, assembler);
+    let module = (28 << 16) | 10;
+    let mut module_tile = erekir_tile(module, 396, 2);
     module_tile.occupied = vec![module];
     world.tiles.insert(module, module_tile);
     let snapshot = world.tiles.get(&assembler).unwrap().clone();
     assert_eq!(
         assembler_tier(&world, &snapshot),
         1,
-        "adjacent module raises the tier"
+        "perimeter module raises the tier"
     );
     // Official conquer PayloadStack.list(UnitTypes.locus, 6,
     // Blocks.carbideWallLarge, 20): locus unit id 39, carbide-wall-large
@@ -2909,7 +2931,7 @@ fn assembler_module_raises_plan_tier() {
     // plan; tier 1 assembly drains it per tick (ConsumeLiquidsDynamic).
     if let Some(mut tile) = world.tiles.get_mut(&assembler) {
         tile.stored_liquid = CYANOGEN_LIQUID;
-        tile.liquid_amount = 100.0;
+        tile.liquid_amount = 10_000.0;
     }
     let mut power = std::collections::HashMap::new();
     power.insert(assembler, 1.0);
@@ -2926,12 +2948,12 @@ fn assembler_module_raises_plan_tier() {
         &power
     ));
     assert!(
-        world.enemies.is_empty(),
+        world.enemies.iter().all(|unit| unit.unit_type == 63),
         "tier 1 without cyanogen never progresses"
     );
     if let Some(mut tile) = world.tiles.get_mut(&assembler) {
         tile.stored_liquid = CYANOGEN_LIQUID;
-        tile.liquid_amount = 100.0;
+        tile.liquid_amount = 10_000.0;
     }
     assert!(simulate_erekir_assemblers(
         &world,
@@ -2939,14 +2961,18 @@ fn assembler_module_raises_plan_tier() {
         60.0 * 180.0 + 1.0,
         &power
     ));
-    let unit = world.enemies.iter().next().unwrap();
+    let unit = world
+        .enemies
+        .iter()
+        .find(|unit| unit.unit_type != 63)
+        .unwrap();
     assert_eq!(unit.unit_type, 42, "tier 1 conquer (id 42, not 44)");
     // Cyanogen drained while assembling (ConsumeLiquidsDynamic.update,
-    // 9/60 per powered tick for tankAssembler); this single oversized call
-    // clamps to the build's whole store.
+    // 9/60 per powered tick for tankAssembler). Stock covers the entire
+    // build; a fractional supply is tested separately.
     let asm = world.tiles.get(&assembler).unwrap().clone();
     assert!(
-        asm.liquid_amount < 100.0 && asm.liquid_amount >= 0.0,
+        asm.liquid_amount < 10_000.0 && asm.liquid_amount >= 0.0,
         "cyanogen must be drained by assembly, got {}",
         asm.liquid_amount
     );
@@ -2967,6 +2993,7 @@ fn assembler_progress_exact_per_tick_and_stalled_by_occupied_output() {
     let mut asm = erekir_tile(assembler, 393, 0); // rotation 0 -> +x output
     asm.occupied = vec![assembler];
     world.tiles.insert(assembler, asm);
+    assembler_spawn_regressions::seed_positioned_assembler_drones(&world, assembler);
     // Full official tier-0 payload stack: stell(38)x4 + tungsten-wall-large
     // (238)x10; payloads are only consumed at spawn.
     if let Some(mut tile) = world.tiles.get_mut(&assembler) {
@@ -2985,7 +3012,10 @@ fn assembler_progress_exact_per_tick_and_stalled_by_occupied_output() {
         60.0 * 50.0 - 5.0,
         &power
     ));
-    assert!(world.enemies.is_empty(), "plan not finished yet");
+    assert!(
+        world.enemies.iter().all(|unit| unit.unit_type == 63),
+        "plan not finished yet"
+    );
     // The remaining 5 ticks complete exactly one vanquish.
     assert!(simulate_erekir_assemblers(
         &world,
@@ -2993,8 +3023,20 @@ fn assembler_progress_exact_per_tick_and_stalled_by_occupied_output() {
         5.0,
         &power
     ));
-    assert_eq!(world.enemies.len(), 1);
-    let unit = world.enemies.iter().next().unwrap().clone();
+    assert_eq!(
+        world
+            .enemies
+            .iter()
+            .filter(|unit| unit.unit_type != 63)
+            .count(),
+        1
+    );
+    let unit = world
+        .enemies
+        .iter()
+        .find(|unit| unit.unit_type != 63)
+        .unwrap()
+        .clone();
     assert_eq!(unit.unit_type, 41, "vanquish");
     assert_eq!(unit.team, 1, "block team");
     // Spawned on the output side (rotation 0 -> larger x than the block).
@@ -3021,7 +3063,15 @@ fn assembler_progress_exact_per_tick_and_stalled_by_occupied_output() {
         60.0 * 50.0 + 1.0,
         &power
     ));
-    assert_eq!(world.enemies.len(), 1, "occupied output stalls assembly");
+    assert_eq!(
+        world
+            .enemies
+            .iter()
+            .filter(|unit| unit.unit_type != 63)
+            .count(),
+        1,
+        "occupied output stalls assembly"
+    );
     // Once the output frees up, the next craft completes.
     if let Some(mut parked) = world.enemies.get_mut(&unit.id) {
         parked.x += 200.0;
@@ -3032,7 +3082,15 @@ fn assembler_progress_exact_per_tick_and_stalled_by_occupied_output() {
         60.0 * 50.0 + 1.0,
         &power
     ));
-    assert_eq!(world.enemies.len(), 2, "second vanquish after output freed");
+    assert_eq!(
+        world
+            .enemies
+            .iter()
+            .filter(|unit| unit.unit_type != 63)
+            .count(),
+        2,
+        "second vanquish after output freed"
+    );
 }
 
 #[test]
@@ -4716,41 +4774,6 @@ fn pump_conduit_tank_chain_conserves_water_over_300_ticks() {
 }
 
 #[test]
-fn electrolyzer_turns_water_into_ozone_and_hydrogen() {
-    // electrolyzer (200): water 10/60 -> ozone 4/60 + hydrogen 6/60.
-    let world = erekir_test_world();
-    let pos = (22 << 16) | 22;
-    let tank = (23 << 16) | 22; // liquid-tank acceptor, adjacent
-    let mut tile = erekir_tile(pos, 200, 0);
-    tile.stored_liquid = 0; // water
-    tile.liquid_amount = 100.0;
-    let mut acceptor = erekir_tile(tank, 291, 0);
-    acceptor.stored_liquid = -1;
-    acceptor.liquid_amount = 0.0;
-    world.tiles.insert(pos, tile);
-    world.tiles.insert(tank, acceptor);
-    let mut power = std::collections::HashMap::new();
-    power.insert(pos, 1.0);
-    simulate_erekir_crafters(&world, 600.0, &power);
-    let after = world.tiles.get(&pos).unwrap();
-    assert!(
-        after.liquid_amount < 100.0,
-        "water consumed: {}",
-        after.liquid_amount
-    );
-    let tank_after = world.tiles.get(&tank).unwrap();
-    assert!(
-        tank_after.liquid_amount > 0.0,
-        "acceptor received a liquid output"
-    );
-    assert!(
-        tank_after.stored_liquid == 7 || tank_after.stored_liquid == 8,
-        "ozone or hydrogen delivered, got {}",
-        tank_after.stored_liquid
-    );
-}
-
-#[test]
 fn oxidation_chamber_consumes_ozone_for_oxide() {
     // oxidation-chamber (202): ozone + 1 beryllium -> 1 oxide per 120s.
     let world = erekir_test_world();
@@ -5641,6 +5664,8 @@ fn ability_projectile(id: i32, team: u8, damage: f32, x: f32, y: f32) -> (i32, P
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     )
 }
@@ -8983,7 +9008,7 @@ fn assembler_ai_spawns_drones_and_flies_them_to_the_perimeter() {
         "AssemblerAI must fly the drone toward its perimeter slot on the spawn tick, moved {from_center}"
     );
     for _ in 0..3 {
-        crate::network::economy::simulate_repair_and_cargo(&world, 1.0, &power);
+        crate::network::economy::simulate_repair_and_cargo(&world, 240.0, &power);
     }
     assert_eq!(world.assembler_drone_ids(pos).len(), 4);
     let calls = world.game_state.extras.take_calls();
@@ -9608,17 +9633,18 @@ fn f04_reconstructor_four_orientations_and_enabled() {
     let world = erekir_test_world();
     let dagger = ground_unit_on_tile(1, 0, (4 << 16) | 4, 150.0, 0.0);
     let payload = CarriedPayload::Unit(dagger);
+    let source = erekir_tile((12 << 16) | 12, 377, 0);
     for rot in 0u8..4 {
         let front = offset_position_by((12 << 16) | 12, rot, 2);
         let mut rec = erekir_tile(front, 380, rot);
         rec.enabled = true;
         assert!(
-            front_accepts_payload(&world, &rec, &payload),
+            front_accepts_payload(&world, &rec, &source, &payload),
             "additive reconstructor rot {rot} accepts dagger"
         );
         rec.enabled = false;
         assert!(
-            !front_accepts_payload(&world, &rec, &payload),
+            !front_accepts_payload(&world, &rec, &source, &payload),
             "disabled reconstructor rot {rot} rejects"
         );
     }
@@ -9628,12 +9654,13 @@ fn f04_reconstructor_four_orientations_and_enabled() {
     assert!(!front_accepts_payload(
         &world,
         &rec,
+        &source,
         &CarriedPayload::Unit(oct)
     ));
     world.wave_rules.write().banned_units = vec![1];
     let dagger = ground_unit_on_tile(3, 0, (4 << 16) | 4, 150.0, 0.0);
     assert!(
-        !front_accepts_payload(&world, &rec, &CarriedPayload::Unit(dagger)),
+        !front_accepts_payload(&world, &rec, &source, &CarriedPayload::Unit(dagger)),
         "banned mace result rejects the dagger upgrade"
     );
 }
@@ -10468,3 +10495,9 @@ fn c05_mine_stance_payload_save_and_mega_gates() {
         "possessed mega must not auto-repair"
     );
 }
+
+#[path = "liquid_crafter_tests.rs"]
+mod liquid_crafter_regressions;
+
+#[path = "assembler_spawn_tests.rs"]
+mod assembler_spawn_regressions;

@@ -132,17 +132,17 @@ pub(crate) use power::{
 
 mod erekir;
 pub(crate) use erekir::{
-    assembler_plan, assembler_proxy_items, assembler_tier, beam_drill_facing,
-    configured_item_local, deliver_item_to, duct_accept_item, duct_bridge_input_occupied,
-    duct_bridge_link, duct_output_targets, duct_speed, duct_store_item, dump_erekir_drill,
-    erekir_drill_spec, erekir_heat_at, erekir_liquid_turret_ammo, erekir_offset_by,
-    erekir_power_turret_weapon, erekir_turret_accept_ammo, erekir_turret_ammo_spec,
-    erekir_turret_params, erekir_turret_pull_ammo, heat_apply_craft, heat_block_spec,
-    heat_inputs_available, heat_value_at, is_erekir_conveyor_block, is_erekir_duct_block,
-    is_erekir_turret_block, module_tier, peek_unloader_item, ready_source_item, relative_direction,
-    remove_source_item, simulate_erekir_assemblers, simulate_erekir_crafters,
-    simulate_erekir_drills, simulate_erekir_ducts, simulate_erekir_turrets, simulate_heat_network,
-    take_unloader_item, tiles_adjacent, wall_ore_drop, HeatKind,
+    assembler_plan, assembler_tier, beam_drill_facing, configured_item_local, deliver_item_to,
+    duct_accept_item, duct_bridge_input_occupied, duct_bridge_link, duct_output_targets,
+    duct_speed, duct_store_item, dump_erekir_drill, erekir_drill_spec, erekir_heat_at,
+    erekir_liquid_turret_ammo, erekir_offset_by, erekir_power_turret_weapon,
+    erekir_turret_accept_ammo, erekir_turret_ammo_spec, erekir_turret_params,
+    erekir_turret_pull_ammo, heat_apply_craft, heat_block_spec, heat_inputs_available,
+    heat_value_at, is_erekir_conveyor_block, is_erekir_duct_block, is_erekir_turret_block,
+    module_tier, peek_unloader_item, ready_source_item, relative_direction, remove_source_item,
+    simulate_erekir_assemblers, simulate_erekir_crafters, simulate_erekir_drills,
+    simulate_erekir_ducts, simulate_erekir_turrets, simulate_heat_network, take_unloader_item,
+    wall_ore_drop, HeatKind,
 };
 
 #[cfg(test)]

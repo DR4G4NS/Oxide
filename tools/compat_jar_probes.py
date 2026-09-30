@@ -35,7 +35,19 @@ def compile_probe(jar: Path) -> None:
          str(REPO_ROOT / "tools/inspect/InspectUnitProduction.java"),
          str(REPO_ROOT / "tools/inspect/CheckUnitReload.java"),
          str(REPO_ROOT / "tools/inspect/CheckReconstructorSnapshots.java"),
-         str(REPO_ROOT / "tools/inspect/CheckSupportSnapshots.java")],
+         str(REPO_ROOT / "tools/inspect/CheckSupportSnapshots.java"),
+         str(REPO_ROOT / "tools/inspect/CheckLiquidCrafterSnapshots.java"),
+         str(REPO_ROOT / "tools/inspect/CheckOxynoeRepair.java"),
+         str(REPO_ROOT / "tools/inspect/CheckAssemblerSemantics.java"),
+         str(REPO_ROOT / "tools/inspect/TraceNavanax.java"),
+         str(REPO_ROOT / "tools/inspect/TraceNavanaxLasers.java"),
+         str(REPO_ROOT / "tools/inspect/CheckMissileGuidance.java"),
+         str(REPO_ROOT / "tools/inspect/CheckMissileMetadata.java"),
+         str(REPO_ROOT / "tools/inspect/ExportBlockUnderBullets.java"),
+         str(REPO_ROOT / "tools/inspect/InspectUnitMovement.java"),
+         str(REPO_ROOT / "tools/inspect/CheckDelayedWeaponOrigin.java"),
+         str(REPO_ROOT / "tools/inspect/CheckMissileProximity.java"),
+         str(REPO_ROOT / "tools/inspect/ExportUnitTargetPriority.java")],
         capture_output=True,
         text=True,
     )
@@ -95,8 +107,75 @@ def main() -> int:
         fail(f"Unit reload probe failed:\n{reload_check.stdout}\n{reload_check.stderr}")
     print(reload_check.stdout.strip())
 
+    under_bullets = subprocess.run(
+        ["java", "-cp", f"{jar_path}:{TOOLS_CLASSES}", "ExportBlockUnderBullets"],
+        capture_output=True, text=True,
+    )
+    if under_bullets.returncode or under_bullets.stdout != (REPO_ROOT / "src/game/block_under_bullets.tsv").read_text():
+        fail(f"Block underBullets table differs from target JAR:\n{under_bullets.stderr}")
+    print("OK initialized block underBullets table")
+    movement = subprocess.run(
+        ["java", "-cp", f"{jar_path}:{TOOLS_CLASSES}", "InspectUnitMovement"],
+        capture_output=True, text=True,
+    )
+    if movement.returncode or movement.stdout != (REPO_ROOT / "src/game/unit_movement.tsv").read_text():
+        fail(f"Unit movement table differs from initialized target JAR:\n{movement.stderr}")
+    print("OK initialized unit movement table")
+    priority = subprocess.run(
+        ["java", "-cp", f"{jar_path}:{TOOLS_CLASSES}", "ExportUnitTargetPriority"],
+        capture_output=True, text=True,
+    )
+    if priority.returncode or priority.stdout != (REPO_ROOT / "src/game/unit_target_priority.tsv").read_text():
+        fail(f"Unit target priority table differs from target JAR:\n{priority.stderr}")
+    print("OK initialized unit target priority table")
+
+
+
+    for test in ["export_liquid_crafter_current_jar_fixtures",
+                 "export_electrolyzer_prediction_across_snapshot_fixtures"]:
+        generated = subprocess.run(
+            ["cargo", "test", "--lib", test, "--", "--test-threads=1"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if generated.returncode or "1 passed; 0 failed" not in generated.stdout:
+            fail(f"Liquid fixture generation failed:\n{generated.stdout}\n{generated.stderr}")
+    for probe, args, marker in [
+        ("CheckLiquidCrafterSnapshots", [str(REPO_ROOT / "target/liquid-crafter-fixtures")], "LIQUID_CRAFTER_ORACLE_PASS"),
+        ("CheckOxynoeRepair", [], "OXYNOE_REPAIR_WEAPON_ORACLE_PASS"),
+        ("TraceNavanax", [], "OK TraceNavanax "),
+        ("TraceNavanaxLasers", [], "OK TraceNavanaxLasers "),
+        ("CheckMissileGuidance", [], "OK MissileAI owner aim delay, turn rate and acceleration"),
+        ("CheckDelayedWeaponOrigin", [], "OK Weapon.bullet re-evaluates live muzzle/aim and cancels removed shooter"),
+        ("CheckMissileProximity", [], "OK MissileAI proximity acquisition cases=42"),
+        ("CheckMissileMetadata", [str(REPO_ROOT / "src/game/unit_missiles.tsv")], "OK initialized missile metadata rows=7"),
+    ]:
+        checked = subprocess.run(
+            ["java", "-cp", f"{jar_path}:{TOOLS_CLASSES}", probe, *args],
+            capture_output=True, text=True,
+        )
+        if checked.returncode or marker not in checked.stdout:
+            fail(f"{probe} failed:\n{checked.stdout}\n{checked.stderr}")
+        print(checked.stdout.strip())
+
     with tempfile.TemporaryDirectory(prefix="jar-probes-") as tmp:
         tmp_path = Path(tmp)
+        assembler_env = dict(os.environ, OXIDE_ASSEMBLER_FIXTURE_DIR=str(tmp_path))
+        for test in ["assembler_progress_and_typed_payloads_survive_480_tick_snapshot_window",
+                     "assembler_received_unit_and_block_payloads_have_complete_in_transit_snapshots",
+                     "assembler_module_in_transit_snapshots_and_actual_json_checkpoint_keep_payloads"]:
+            assembler_fixture = subprocess.run(
+                ["cargo", "test", "--lib", test, "--", "--test-threads=1"],
+                cwd=REPO_ROOT, env=assembler_env, capture_output=True, text=True,
+            )
+            if assembler_fixture.returncode or "1 passed; 0 failed" not in assembler_fixture.stdout:
+                fail(f"Assembler fixture generation failed:\n{assembler_fixture.stdout}\n{assembler_fixture.stderr}")
+        assembler = subprocess.run(
+            ["java", "-cp", f"{jar_path}:{TOOLS_CLASSES}", "CheckAssemblerSemantics", str(tmp_path)],
+            capture_output=True, text=True,
+        )
+        if assembler.returncode or "ASSEMBLER_CLIENT_480_TICKS_SNAPSHOT_PASS" not in assembler.stdout:
+            fail(f"Assembler oracle failed:\n{assembler.stdout}\n{assembler.stderr}")
+        print(assembler.stdout.strip())
         fixture_env = dict(os.environ, OXIDE_RECONSTRUCTOR_FIXTURE_DIR=str(tmp_path))
         for test in ["survival_conveyor_delivery_reconstructor_consumes_power_from_actual_payload",
                      "f03_unit_factory_plan_minus_one_deselects"]:

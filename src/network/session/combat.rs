@@ -185,6 +185,8 @@ pub fn spawn_team_projectile(
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     if let Ok(payload) = encode_create_bullet_payload(

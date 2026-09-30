@@ -99,10 +99,54 @@ pub(crate) fn liquid_capacity(block: i16) -> Option<f32> {
     }
 }
 
+// Multi-output crafters own their liquid dumping; their input must never leak
+// through the generic current-liquid transport path.
+pub(crate) fn set_crafter_liquid(tile: &mut DynamicTile, liquid: i16, amount: f32) {
+    if tile.stored_liquid >= 0
+        && !tile
+            .liquid_inventory
+            .iter()
+            .any(|(id, _)| *id == tile.stored_liquid)
+    {
+        tile.liquid_inventory
+            .push((tile.stored_liquid, tile.liquid_amount));
+    }
+    if let Some(entry) = tile
+        .liquid_inventory
+        .iter_mut()
+        .find(|(id, _)| *id == liquid)
+    {
+        entry.1 = amount.max(0.0);
+    } else {
+        tile.liquid_inventory.push((liquid, amount.max(0.0)));
+    }
+    tile.liquid_inventory.retain(|(_, n)| *n > 0.000001);
+    tile.stored_liquid = if tile.block == 200 { 0 } else { 9 };
+    tile.liquid_amount = tile
+        .liquid_inventory
+        .iter()
+        .find(|(id, _)| *id == tile.stored_liquid)
+        .map_or(0.0, |(_, n)| *n);
+}
+
 pub(crate) fn liquid_can_output(block: i16, liquid: i16) -> bool {
     !matches!(
         block,
-        182 | 186 | 315 | 316 | 321 | 322 | 324 | 330 | 353 | 360 | 382 | 383 | 408 | 415
+        182 | 186
+            | 200
+            | 201
+            | 315
+            | 316
+            | 321
+            | 322
+            | 324
+            | 330
+            | 353
+            | 360
+            | 382
+            | 383
+            | 408
+            | 415
     ) && (block != 189 || liquid == 3)
 }
 
@@ -399,6 +443,16 @@ pub(crate) fn accept_liquid_from(
     let Some(capacity) = liquid_capacity(target.block) else {
         return 0.0;
     };
+    if matches!(target.block, 200 | 201) {
+        // GenericCrafter accepts only consumed liquids, never its products.
+        if target.block != 200 || liquid != 0 {
+            return 0.0;
+        }
+        let current = stored_liquid_amount(&target, liquid);
+        let accepted = amount.max(0.0).min((capacity - current).max(0.0));
+        set_crafter_liquid(&mut target, liquid, current + accepted);
+        return accepted;
+    }
     if is_conduit(target.block) || target.block == 298 {
         // ConduitBuild.acceptLiquid (Conduit.java:129-133): a conduit only
         // accepts from its back — the direction it faces; liquid pushed into

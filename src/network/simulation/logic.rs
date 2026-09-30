@@ -367,6 +367,9 @@ pub fn simulate_logic_fire(
             order.target_y.unwrap_or(snapshot.y),
         )
     };
+    world
+        .weapon_aims
+        .insert((false, snapshot.id), (target_x, target_y));
     let angle = (target_x - snapshot.x)
         .atan2(target_y - snapshot.y)
         .to_degrees();

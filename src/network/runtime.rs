@@ -127,6 +127,8 @@ pub(crate) fn apply_mode_switch_world_state(
             // In-flight damage from the finished game must not land after
             // the switch.
             world.projectiles.clear();
+            world.pending_projectiles.clear();
+            world.weapon_aims.clear();
             world
                 .game_state
                 .enemies_count
@@ -806,6 +808,8 @@ mod tests {
             unit_group_order: parking_lot::Mutex::new(Vec::new()),
             damaged_window: parking_lot::Mutex::new(Vec::new()),
             projectiles: DashMap::new(),
+            pending_projectiles: Default::default(),
+            weapon_aims: Default::default(),
             next_projectile_id: AtomicI32::new(4_000_000),
             overdrive_boosts: DashMap::new(),
             heal_suppression: DashMap::new(),
@@ -818,6 +822,7 @@ mod tests {
             ai_rebuild_state: Default::default(),
             tile_footprint: DashMap::new(),
             navigation_revision: AtomicU64::new(0),
+            toward_navigation: Default::default(),
             ground_navigation: parking_lot::Mutex::new(None),
             leg_navigation: parking_lot::Mutex::new(None),
             naval_navigation: parking_lot::Mutex::new(None),
@@ -876,6 +881,14 @@ mod tests {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -952,6 +965,8 @@ mod tests {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         // A finished previous game must not leak into the next mode.

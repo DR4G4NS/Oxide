@@ -107,6 +107,14 @@ pub(crate) fn spawn_enemy_units(
                 update_building: true,
                 // TimedKillUnit self-destruct countdown (all MissileUnitType
                 // content): vanilla spawns with time = type.lifetime.
+                missile_retarget: 0.0,
+                missile_target: None,
+                missile_shooter: None,
+                navanax_emp_reload: [0.0; 2],
+                navanax_emp_side: [false; 2],
+                navanax_lasers: Default::default(),
+                missile_source_position: None,
+                missile_source_generation: None,
                 missile_time: if spec.entity_class == 39 {
                     crate::game::unit_types::unit_missile_lifetime(spec.unit_type).unwrap_or(102.0)
                 } else {
@@ -175,6 +183,14 @@ pub(crate) fn spawn_unit_world(
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: if spec.entity_class == 39 {
                 crate::game::unit_types::unit_missile_lifetime(spec.unit_type).unwrap_or(102.0)
             } else {

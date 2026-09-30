@@ -99,7 +99,7 @@ pub(crate) fn payload_block_limit(block: i16) -> Option<f32> {
     match block {
         // UnitFactory / Reconstructor / Erekir fabricator+refabricator: the
         // official payloadLimit is the block size (PayloadBlock default).
-        377..=383 | 386..=392 => Some(f32::from(crate::game::content::block_size(block))),
+        377..=383 | 386..=396 => Some(f32::from(crate::game::content::block_size(block))),
         398..=401 => Some(3.0),
         402 => Some(2.5),
         403 => Some(4.0),
@@ -144,6 +144,12 @@ pub(crate) fn payload_block_accepts(block: i16, payload: &CarriedPayload) -> boo
             CarriedPayload::Unit(unit) => reconstructor_upgrade(block, unit.unit_type).is_some(),
             CarriedPayload::Build(_) => false,
         },
+        393..=395 => (0..=1).any(|tier| {
+            assembler_plan(block, tier).is_some_and(|(_, _, requirements)| match payload {
+                CarriedPayload::Unit(unit) => requirements[0].0 == unit.unit_type,
+                CarriedPayload::Build(build) => requirements[1].0 == build.tile.block,
+            })
+        }),
         404 | 405 => match payload {
             CarriedPayload::Unit(unit) => {
                 crate::game::content::unit_requirements(unit.unit_type).is_some()
@@ -174,10 +180,12 @@ pub(crate) fn insert_into_payload_conveyor(
         return false;
     };
     if tile.team != carrier.team
-        || !tile.enabled
+        || (!tile.enabled && !matches!(tile.block, 393..=396))
         || tile.payload.is_some()
         || !payload_fits_limit(&payload, limit)
         || !payload_block_accepts(tile.block, &payload)
+        || (matches!(tile.block, 393..=396)
+            && !front_accepts_payload(world, &tile, &tile, &payload))
     {
         return false;
     }
@@ -187,7 +195,7 @@ pub(crate) fn insert_into_payload_conveyor(
     live.payload = Some(Box::new(payload));
     live.payload_progress = 0.0;
     live.payload_rotation = carrier.rotation;
-    if is_unit_payload_block(live.block) {
+    if is_unit_payload_block(live.block) || matches!(live.block, 393..=396) {
         initialize_received_unit_payload(&mut live, carrier.x, carrier.y, carrier.rotation);
     }
     if matches!(live.block, 399 | 401) {
@@ -300,7 +308,10 @@ pub(crate) fn transfer_payload_forward(world: &DynamicWorld, source: &DynamicTil
     let Some(limit) = payload_block_limit(target.block) else {
         return false;
     };
-    if target.team != source.team || !target.enabled || target.payload.is_some() {
+    if target.team != source.team
+        || (!target.enabled && !matches!(target.block, 393..=396))
+        || target.payload.is_some()
+    {
         return false;
     }
     let Some(payload) = source.payload.as_deref() else {
@@ -309,8 +320,8 @@ pub(crate) fn transfer_payload_forward(world: &DynamicWorld, source: &DynamicTil
     if !payload_fits_limit(payload, limit) || !payload_block_accepts(target.block, payload) {
         return false;
     }
-    if reconstructor_recipe(target.block).is_some()
-        && !front_accepts_payload(world, &target, payload)
+    if (reconstructor_recipe(target.block).is_some() || matches!(target.block, 393..=396))
+        && !front_accepts_payload(world, &target, source, payload)
     {
         return false;
     }
@@ -325,8 +336,10 @@ pub(crate) fn transfer_payload_forward(world: &DynamicWorld, source: &DynamicTil
         receiver.payload = Some(payload);
         receiver.payload_progress = 0.0;
         receiver.payload_rotation = f32::from(source.rotation) * 90.0;
-        receiver.production_progress = 0.0;
-        if is_unit_payload_block(receiver.block) {
+        if !matches!(receiver.block, 393..=396) {
+            receiver.production_progress = 0.0;
+        }
+        if is_unit_payload_block(receiver.block) || matches!(receiver.block, 393..=396) {
             let (sx, sy) = building_center(source.position, source.block);
             initialize_received_unit_payload(&mut receiver, sx, sy, source.payload_rotation);
         }

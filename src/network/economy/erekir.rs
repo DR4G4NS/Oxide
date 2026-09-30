@@ -1142,33 +1142,38 @@ pub(crate) fn heat_value_at(
     let Some(snapshot) = world.tiles.get(&position).map(|tile| tile.clone()) else {
         return 0.0;
     };
-    let Some(spec) = heat_block_spec(snapshot.block) else {
+    if heat_block_spec(snapshot.block).is_none() {
         return 0.0;
-    };
+    }
     let mut total = 0.0f32;
-    for rel in 0..4u8 {
-        let neighbor_position = offset_position(position, rel);
-        let Some(neighbor) = world
-            .tiles
-            .iter()
-            .find(|tile| {
-                tile.position == neighbor_position || tile.occupied.contains(&neighbor_position)
-            })
-            .map(|tile| tile.clone())
-        else {
+    let footprint = if snapshot.occupied.is_empty() {
+        vec![position]
+    } else {
+        snapshot.occupied.clone()
+    };
+    let mut contacts = std::collections::BTreeMap::<(i32, u8), usize>::new();
+    for cell in &footprint {
+        for rel in 0..4u8 {
+            let next = offset_position(*cell, rel);
+            if footprint.contains(&next) {
+                continue;
+            }
+            if let Some(neighbor) = dynamic_at(world, next) {
+                if neighbor.position != position && neighbor.team == snapshot.team {
+                    *contacts.entry((neighbor.position, rel)).or_default() += 1;
+                }
+            }
+        }
+    }
+    for ((neighbor_key, rel), contact) in contacts {
+        let Some(neighbor) = world.tiles.get(&neighbor_key).map(|tile| tile.clone()) else {
             continue;
         };
-        // Use the neighbour's base position (multi-tile heat blocks register
-        // their key, not every occupied tile, in producer_heat/memo/chain).
-        let neighbor_key = neighbor.position;
-        if neighbor.team != snapshot.team {
-            continue;
-        }
         let Some(neighbor_spec) = heat_block_spec(neighbor.block) else {
             continue;
         };
         if !matches!(neighbor_spec.kind, HeatKind::Producer | HeatKind::Conductor) {
-            continue; // consumers (HeatCrafter) do not implement HeatBlock.
+            continue;
         }
         let facing_ok = if neighbor_spec.split {
             rel != neighbor.rotation
@@ -1182,22 +1187,13 @@ pub(crate) fn heat_value_at(
             producer_heat.get(&neighbor_key).copied().unwrap_or(0.0)
         } else {
             if chain.contains(&neighbor_key) {
-                continue; // cycle: ignore its heat (cameFrom check).
+                continue;
             }
             chain.push(neighbor_key);
             let value = heat_value_at(world, neighbor_key, producer_heat, memo, chain);
             chain.pop();
             value
         };
-        let (x1, y1) = ((position >> 16) as i16 as i32, position as i16 as i32);
-        let (x2, y2) = (
-            (neighbor_position >> 16) as i16 as i32,
-            neighbor_position as i16 as i32,
-        );
-        let diff = (x2 - x1).abs().min((y2 - y1).abs()) as f32;
-        let contact =
-            ((spec.size as f32 / 2.0 + neighbor_spec.size as f32 / 2.0) - diff).max(0.0) as i32;
-        let contact = contact.min(spec.size.min(neighbor_spec.size) as i32);
         let mut add = neighbor_heat / f32::from(neighbor_spec.size) * contact as f32;
         if neighbor_spec.split {
             add /= 3.0;
@@ -1380,7 +1376,7 @@ pub(crate) fn simulate_heat_network(
             }
             continue;
         }
-        if spec.kind != HeatKind::Consumer {
+        if spec.kind != HeatKind::Consumer || snapshot.block == 201 {
             continue;
         }
         let efficiency = power.get(key).copied().unwrap_or(0.0);
@@ -2034,6 +2030,7 @@ pub(crate) fn simulate_erekir_turrets(
         let Some((target_id, distance, target_x, target_y)) = target else {
             continue;
         };
+        world.weapon_aims.insert((true, key), (target_x, target_y));
         let heat_eff = if heat_requirement > 0.0 {
             (heat / heat_requirement).min(3.0) // maxHeatEfficiency 3
         } else {
@@ -2106,8 +2103,8 @@ pub(crate) fn simulate_erekir_turrets(
     changed
 }
 
-/// Official UnitAssembler (Blocks.java v158.1): assembles a large unit from a
-/// plan (AssemblerUnitPlan) while adjacent UnitAssemblerModule(396) blocks
+/// Official UnitAssembler (Blocks.java v160.5): assembles a large unit from a
+/// plan (AssemblerUnitPlan) while perimeter UnitAssemblerModule(396) blocks
 /// provide the tier. Plans (block -> tier 0 / tier 1):
 ///   393 tank-assembler: vanquish(41) 50s | conquer(42) 180s
 ///   394 ship-assembler: quell(52) 60s   | disrupt(54) 180s
@@ -2129,14 +2126,35 @@ pub(crate) fn simulate_erekir_assemblers(
         .filter(|tile| matches!(tile.block, 393..=395))
         .map(|tile| *tile.key())
         .collect();
-    let mut changed = false;
+    let mut changed = simulate_assembler_module_payloads(world, delta_ticks, power);
     for key in keys {
-        let Some(snapshot) = world.tiles.get(&key).map(|tile| tile.clone()) else {
+        let Some(mut snapshot) = world.tiles.get(&key).map(|tile| tile.clone()) else {
             continue;
         };
+        // PayloadBlock.moveInPayload runs independently of production
+        // efficiency. Once centred, UnitAssembler deposits the one received
+        // payload into its local stack store if the output area is clear.
+        if snapshot.payload.is_some() {
+            let occupied = assembler_output_occupied(world, &snapshot);
+            if let Some(mut assembler) = world.tiles.get_mut(&key) {
+                if super::factories::apply_move_in(&mut assembler, delta_ticks.max(0.0))
+                    && !occupied
+                {
+                    if let Some(payload) = assembler.payload.take() {
+                        let content = match *payload {
+                            CarriedPayload::Unit(unit) => unit.unit_type,
+                            CarriedPayload::Build(build) => build.tile.block,
+                        };
+                        inventory_add(&mut assembler.payload_inventory, content, 1);
+                    }
+                }
+            }
+            changed = true;
+            snapshot = world.tiles.get(&key).unwrap().clone();
+        }
         // Official UnitAssemblerBuild (UnitAssembler.java:315-390): currentTier
         // starts at 0 and the base (tier 0) plan is buildable WITHOUT any
-        // module; adjacent UnitAssemblerModules RAISE the effective plan tier
+        // module; correctly positioned modules RAISE the effective plan tier
         // (checkTier/plan). plan() clamps to the last plan, so tier 2+ behaves
         // as tier 1 for the two-plan tank/ship/mech assemblers.
         let tier = assembler_tier(world, &snapshot).min(1);
@@ -2145,22 +2163,23 @@ pub(crate) fn simulate_erekir_assemblers(
             continue;
         };
         let efficiency = power.get(&key).copied().unwrap_or(0.0);
-        if efficiency <= 0.0 {
+        if efficiency <= 0.0 || !snapshot.enabled {
             continue;
         }
         let team = snapshot.team;
+        let cost_multiplier = assembler_cost_multiplier(world, team);
+        let payload_reqs: Vec<_> = payload_reqs
+            .iter()
+            .map(|(content, amount)| (*content, (*amount as f32 * cost_multiplier).round() as i32))
+            .collect();
         // Official updateTile gates assembly on Units.canCreate(team,
         // plan.unit): the team unit cap / ban applies to assemblers too.
         if !crate::network::economy::can_create_unit(world, team, unit_type) {
             continue;
         }
         // ConsumePayloadDynamic.efficiency (UnitAssembler.java init()):
-        // required stacks must be present IN THE BUILD. Oxide models
-        // assemblyDrones for AssemblerAI movement, but they do not ferry
-        // payload stacks; when the build has not been fed by hand or via
-        // payload conveyors the team CORE stands in for the drone ferry and
-        // the same stacks are drawn from its inventory (documented deviation,
-        // README gaps row).
+        // the required payload stacks must be present in this build. Core
+        // items are not a substitute for delivered unit/building payloads.
         let payloads_cover = |snapshot_payloads: &[(i16, i32)]| {
             payload_reqs.iter().all(|(content, amount)| {
                 snapshot_payloads
@@ -2171,31 +2190,35 @@ pub(crate) fn simulate_erekir_assemblers(
                     >= *amount
             })
         };
-        let proxy_items = crate::network::economy::assembler_proxy_items(snapshot.block, tier);
-        let items = crate::network::economy::items_for_team(world, team);
-        let core_covers = proxy_items
-            .iter()
-            .all(|(item, amount)| items.get(*item as usize).copied().unwrap_or(0) >= *amount);
-        if !payloads_cover(&snapshot.payload_inventory) && !core_covers {
+        if !payloads_cover(&snapshot.payload_inventory) {
             continue;
         }
-        let feed_from_core = !payloads_cover(&snapshot.payload_inventory);
         // Blocks.java consumeLiquid(cyanogen, 9f/60f | 12f/60f) is an
         // UNCONDITIONAL block consumer for every plan/tier
         // (ConsumeLiquid.efficiency returns 0 without it, so updateTile never
         // accumulates progress): stack.amount * edelta per tick.
-        if snapshot.stored_liquid != CYANOGEN_LIQUID || snapshot.liquid_amount <= 0.0001 {
+        let liquid_rate = assembler_cyanogen_per_tick(snapshot.block) * cost_multiplier;
+        // Consumption efficiency is the minimum of the power and liquid
+        // consumers. A partial cyanogen supply must reduce progress too.
+        let efficiency = efficiency.min(continuous_liquid_efficiency(
+            &snapshot,
+            CYANOGEN_LIQUID,
+            liquid_rate,
+            delta_ticks.max(0.0),
+        ));
+        if efficiency <= 0.0 {
             continue;
         }
         let cyanogen_cost =
-            (delta_ticks * efficiency * assembler_cyanogen_per_tick(snapshot.block))
-                .min(snapshot.liquid_amount);
+            (delta_ticks.max(0.0) * efficiency * liquid_rate).min(snapshot.liquid_amount);
         // Official updateTile only progresses while the spawn area is free
         // (!wasOccupied, UnitAssembler.checkSolid): any grounded unit parked
         // on the spawn point stalls assembly until it moves away.
         if assembler_output_occupied(world, &snapshot) {
             continue;
         }
+        let build_speed = world.wave_rules.read().unit_build_speed_for(team).max(0.0);
+        let drone_fraction = super::repair::assembler_positioned_drone_fraction(world, &snapshot);
         let completed = if let Some(mut asm) = world.tiles.get_mut(&key) {
             // ConsumeLiquidsDynamic.update drains cyanogen every tick the
             // build is assembling, before progress accumulates.
@@ -2203,32 +2226,23 @@ pub(crate) fn simulate_erekir_assemblers(
             if asm.liquid_amount <= 0.0001 {
                 asm.liquid_amount = 0.0;
             }
-            asm.production_progress += delta_ticks * efficiency;
+            asm.production_progress +=
+                delta_ticks.max(0.0) * efficiency * build_speed * drone_fraction;
             if asm.production_progress >= build_time {
                 asm.production_progress %= build_time;
                 // spawned() -> consume() -> ConsumePayloadDynamic.trigger:
-                // the full payload stacks leave the build at completion (or,
-                // in the drone-proxy deviation, the team core inventory).
-                if feed_from_core {
-                    let mut items = crate::network::economy::items_for_team_mut(world, team);
-                    for (item, amount) in proxy_items {
-                        if let Some(stored) = items.get_mut(*item as usize) {
-                            *stored = stored.saturating_sub(*amount);
+                // the full payload stacks leave the build at completion.
+                for (content, amount) in payload_reqs.iter() {
+                    let mut left = *amount;
+                    for entry in asm.payload_inventory.iter_mut() {
+                        if entry.0 == *content && left > 0 {
+                            let take = left.min(entry.1.max(0));
+                            entry.1 -= take;
+                            left -= take;
                         }
                     }
-                } else {
-                    for (content, amount) in payload_reqs.iter() {
-                        let mut left = *amount;
-                        for entry in asm.payload_inventory.iter_mut() {
-                            if entry.0 == *content && left > 0 {
-                                let take = left.min(entry.1.max(0));
-                                entry.1 -= take;
-                                left -= take;
-                            }
-                        }
-                    }
-                    asm.payload_inventory.retain(|(_, n)| *n > 0);
                 }
+                asm.payload_inventory.retain(|(_, n)| *n > 0);
                 true
             } else {
                 false
@@ -2247,23 +2261,200 @@ pub(crate) fn simulate_erekir_assemblers(
     changed
 }
 
-/// Approximation of UnitAssembler.checkSolid(spawn): the spawn point sits
-/// `tilesize * (areaSize + size) / 2` world units in front of the block
-/// (areaSize 13, size 5 -> 72), and assembly stalls while ANY live unit
-/// overlaps it. The port approximates the official hitSize*1.4 overlap box
-/// with a fixed 24-unit radius circle around the spawn point.
+fn assembler_cost_multiplier(world: &DynamicWorld, team: u8) -> f32 {
+    let rules = world.wave_rules.read();
+    (rules.unit_cost_multiplier * rules.team_rule(team).unit_cost_multiplier).max(0.0)
+}
+
+/// UnitAssembler.acceptPayload uses the selected plan's typed payload
+/// requirements and its local stack count, with the team's unit-cost scale.
+pub(crate) fn assembler_accepts_payload(
+    world: &DynamicWorld,
+    assembler: &DynamicTile,
+    payload: &CarriedPayload,
+) -> bool {
+    assembler_accepts_payload_from(world, assembler, payload, false)
+}
+
+fn assembler_accepts_payload_from(
+    world: &DynamicWorld,
+    assembler: &DynamicTile,
+    payload: &CarriedPayload,
+    from_module: bool,
+) -> bool {
+    if assembler.payload.is_some() && !from_module {
+        return false;
+    }
+    let Some((_, _, requirements)) =
+        assembler_plan(assembler.block, assembler_tier(world, assembler).min(1))
+    else {
+        return false;
+    };
+    let (content, expected) = match payload {
+        CarriedPayload::Unit(unit) => (unit.unit_type, requirements.first()),
+        CarriedPayload::Build(build) => (build.tile.block, requirements.get(1)),
+    };
+    let pending = i32::from(
+        from_module
+            && assembler
+                .payload
+                .as_deref()
+                .is_some_and(|held| match (held, payload) {
+                    (CarriedPayload::Unit(a), CarriedPayload::Unit(b)) => {
+                        a.unit_type == b.unit_type
+                    }
+                    (CarriedPayload::Build(a), CarriedPayload::Build(b)) => {
+                        a.tile.block == b.tile.block
+                    }
+                    _ => false,
+                }),
+    );
+    expected.is_some_and(|(required, amount)| {
+        content == *required
+            && inventory_count(&assembler.payload_inventory, content)
+                < (*amount as f32 * assembler_cost_multiplier(world, assembler.team)).round() as i32
+                    - pending
+    })
+}
+
+fn assembler_for_module(world: &DynamicWorld, module: &DynamicTile) -> Option<DynamicTile> {
+    world
+        .tiles
+        .iter()
+        .filter(|assembler| {
+            matches!(assembler.block, 393..=395)
+                && assembler.team == module.team
+                && assembler_module_fits(assembler, module)
+        })
+        .map(|assembler| assembler.clone())
+        .min_by_key(|assembler| assembler.position)
+}
+
+pub(crate) fn assembler_module_accepts_payload(
+    world: &DynamicWorld,
+    module: &DynamicTile,
+    payload: &CarriedPayload,
+) -> bool {
+    module.payload.is_none()
+        && assembler_for_module(world, module).is_some_and(|assembler| {
+            assembler_accepts_payload_from(world, &assembler, payload, true)
+        })
+}
+
+fn simulate_assembler_module_payloads(
+    world: &DynamicWorld,
+    delta_ticks: f32,
+    power: &std::collections::HashMap<i32, f32>,
+) -> bool {
+    let modules: Vec<_> = world
+        .tiles
+        .iter()
+        .filter(|tile| tile.block == 396 && tile.payload.is_some())
+        .map(|tile| tile.clone())
+        .collect();
+    let mut changed = false;
+    for module in modules {
+        let arrived = world
+            .tiles
+            .get_mut(&module.position)
+            .is_some_and(|mut tile| {
+                super::factories::apply_move_in(&mut tile, delta_ticks.max(0.0))
+            });
+        changed = true;
+        if !arrived || !module.enabled || power.get(&module.position).copied().unwrap_or(0.0) <= 0.0
+        {
+            continue;
+        }
+        let Some(assembler) = assembler_for_module(world, &module) else {
+            continue;
+        };
+        let Some(payload) = module.payload.as_deref() else {
+            continue;
+        };
+        if assembler_output_occupied(world, &assembler)
+            || !assembler_accepts_payload_from(world, &assembler, payload, true)
+        {
+            continue;
+        }
+        let Some(payload) = world
+            .tiles
+            .get_mut(&module.position)
+            .and_then(|mut tile| tile.payload.take())
+        else {
+            continue;
+        };
+        let content = match payload.as_ref() {
+            CarriedPayload::Unit(unit) => unit.unit_type,
+            CarriedPayload::Build(build) => build.tile.block,
+        };
+        if let Some(mut tile) = world.tiles.get_mut(&assembler.position) {
+            inventory_add(&mut tile.payload_inventory, content, 1);
+        } else if let Some(mut tile) = world.tiles.get_mut(&module.position) {
+            tile.payload = Some(payload);
+        }
+    }
+    changed
+}
+
+/// UnitAssembler.checkSolid (160.5): ground outputs check solid tiles over
+/// their hit-size square, then all outputs check compatible unit layers in
+/// a 1.4 * hit-size square. Core-spawned units never obstruct assembly.
 pub(crate) fn assembler_output_occupied(world: &DynamicWorld, assembler: &DynamicTile) -> bool {
-    let center_x = (assembler.position >> 16) as i16 as f32 * 8.0;
-    let center_y = assembler.position as i16 as f32 * 8.0;
-    let angle = f32::from(assembler.rotation) * 90.0;
-    let radians = angle.to_radians();
-    let len = 8.0 * (13.0 + f32::from(crate::game::content::block_size(assembler.block))) / 2.0;
-    let spawn_x = center_x + radians.cos() * len;
-    let spawn_y = center_y + radians.sin() * len;
+    let (spawn_x, spawn_y) = super::factories::factory_unit_spawn_position(assembler);
+    let tier = assembler_tier(world, assembler).min(1);
+    let Some((output_type, _, _)) = assembler_plan(assembler.block, tier) else {
+        return false;
+    };
+    let output = crate::game::content::unit_movement(output_type);
+    if !output.flying {
+        let half = output.hit_size / 2.0;
+        let min_x = ((spawn_x - half - 4.0) / 8.0).floor() as i32;
+        let max_x = ((spawn_x + half + 4.0) / 8.0).ceil() as i32;
+        let min_y = ((spawn_y - half - 4.0) / 8.0).floor() as i32;
+        let max_y = ((spawn_y + half + 4.0) / 8.0).ceil() as i32;
+        for x in min_x..=max_x {
+            for y in min_y..=max_y {
+                // Rect.overlaps excludes edges that merely touch.
+                if (x as f32 * 8.0 - spawn_x).abs() >= half + 4.0
+                    || (y as f32 * 8.0 - spawn_y).abs() >= half + 4.0
+                {
+                    continue;
+                }
+                let Some(index) = crate::network::combat::enemy::navigation_index(world, x, y)
+                else {
+                    return true;
+                };
+                let floor = crate::network::combat::floor_at_tile(world, x, y);
+                if crate::game::content::block_navigation(floor).solid {
+                    return true;
+                }
+                let position = (x << 16) | (y as u16 as i32);
+                let solid = if let Some(tile) = dynamic_at(world, position) {
+                    crate::game::content::building_check_solid(tile.block, tile.door_open)
+                } else {
+                    let block = crate::network::combat::enemy::base_building_at(world, position)
+                        .map(|tile| tile.block)
+                        .unwrap_or(world.base_blocks[index]);
+                    crate::game::content::building_check_solid(block, false)
+                };
+                if solid {
+                    return true;
+                }
+            }
+        }
+    }
     world.enemies.iter().any(|unit| {
-        let dx = unit.x - spawn_x;
-        let dy = unit.y - spawn_y;
-        dx.hypot(dy) < 24.0
+        if unit.health <= 0.0 || unit_spawned_by_core(unit.unit_type) {
+            return false;
+        }
+        let other = crate::game::content::unit_movement(unit.unit_type);
+        let same_layer = (output.allow_leg_step && other.allow_leg_step)
+            || (output.flying && unit.elevation >= 0.09)
+            || (!output.flying && unit_is_grounded(unit.elevation));
+        // Units.anyEntities intersects Unit.hitboxTile, whose width is
+        // min(hitSize * .66, 7.8), not the full combat hit box.
+        let half = (output.hit_size * 1.4 + (other.hit_size * 0.66).min(7.8)) / 2.0;
+        same_layer && (unit.x - spawn_x).abs() < half && (unit.y - spawn_y).abs() < half
     })
 }
 
@@ -2304,34 +2495,6 @@ pub(crate) fn assembler_cyanogen_per_tick(block: i16) -> f32 {
     }
 }
 
-/// Drone-ferry proxy (documented deviation): when an assembler has no loaded
-/// payload stacks, these equivalent CORE ITEMS stand in for the plan stacks
-/// (unit payloads approximated by their build-cost materials).
-pub(crate) fn assembler_proxy_items(block: i16, tier: usize) -> &'static [(i16, i32)] {
-    match (block, tier) {
-        (393, 0) => &[(16, 40), (9, 40)],  // beryllium, silicon
-        (393, 1) => &[(18, 60), (10, 40)], // oxide, phase fabric
-        (394, 0) => &[(16, 50), (3, 50)],  // beryllium, graphite
-        (394, 1) => &[(18, 50), (10, 30)], // oxide, phase fabric
-        (395, 0) => &[(16, 50), (17, 40)], // beryllium, tungsten
-        (395, 1) => &[(18, 40), (10, 40)], // oxide, phase fabric
-        _ => &[],
-    }
-}
-
-/// Whether two tiles' footprints are adjacent (official module adjacency).
-pub(crate) fn tiles_adjacent(a: &DynamicTile, b: &DynamicTile) -> bool {
-    a.occupied.iter().any(|pa| {
-        b.occupied.iter().any(|pb| {
-            let ax = (*pa >> 16) as i16 as i32;
-            let ay = *pa as i16 as i32;
-            let bx = (*pb >> 16) as i16 as i32;
-            let by = *pb as i16 as i32;
-            (ax - bx).abs() + (ay - by).abs() == 1
-        })
-    })
-}
-
 /// UnitAssemblerModule tier (UnitAssemblerModule.java:21-24:
 /// `public int tier = 1;` — vanilla has only the basic-assembler-module).
 pub(crate) fn module_tier(block: i16) -> usize {
@@ -2342,12 +2505,48 @@ pub(crate) fn module_tier(block: i16) -> usize {
     }
 }
 
+/// UnitAssembler.moduleFits (160.5): a module faces the assembly area and
+/// its front cell lies on the inner perimeter, not next to the assembler.
+fn assembler_module_fits(assembler: &DynamicTile, module: &DynamicTile) -> bool {
+    let (spawn_x, spawn_y) = super::factories::factory_unit_spawn_position(assembler);
+    let (x, y) = building_center(module.position, module.block);
+    let dx = spawn_x - x;
+    let dy = spawn_y - y;
+    let facing = if dx.abs() > dy.abs() {
+        if dx >= 1.0 {
+            Some(0)
+        } else if dx <= -1.0 {
+            Some(2)
+        } else {
+            None
+        }
+    } else if dy >= 1.0 {
+        Some(1)
+    } else if dy <= -1.0 {
+        Some(3)
+    } else {
+        None
+    };
+    if facing != Some(module.rotation % 4) {
+        return false;
+    }
+    let front_distance = (f32::from(crate::game::content::block_size(module.block)) + 1.0) * 4.0;
+    let (front_x, front_y) = match module.rotation % 4 {
+        0 => (x + front_distance, y),
+        1 => (x, y + front_distance),
+        2 => (x - front_distance, y),
+        _ => (x, y - front_distance),
+    };
+    let distance = (front_x - spawn_x).abs().max((front_y - spawn_y).abs());
+    (distance - 48.0).abs() <= 0.000_001
+}
+
 /// Effective UnitAssembler plan tier, mirroring
 /// UnitAssembler.UnitAssemblerBuild.checkTier() (UnitAssembler.java:315-390):
-/// `currentTier` starts at 0 (the base plan needs NO module) and adjacent
+/// `currentTier` starts at 0 (the base plan needs NO module) and fitting
 /// modules raise it only when a module's tier equals the running max or
 /// max + 1 (sorted ascending; a tier gap stops the chain, matching the
-/// official loop). All vanilla modules are tier 1, so one adjacent module
+/// official loop). All vanilla modules are tier 1, so one fitting module
 /// yields tier 1.
 pub(crate) fn assembler_tier(world: &DynamicWorld, assembler: &DynamicTile) -> usize {
     let mut module_tiers: Vec<usize> = world
@@ -2355,7 +2554,7 @@ pub(crate) fn assembler_tier(world: &DynamicWorld, assembler: &DynamicTile) -> u
         .iter()
         .filter(|tile| {
             let t = tile.value();
-            t.block == 396 && t.team == assembler.team && tiles_adjacent(t, assembler)
+            t.block == 396 && t.team == assembler.team && assembler_module_fits(assembler, t)
         })
         .map(|tile| module_tier(tile.block))
         .collect();
@@ -2376,10 +2575,10 @@ pub(crate) fn assembler_tier(world: &DynamicWorld, assembler: &DynamicTile) -> u
 ///      power 5, itemCapacity 30 (item -> item).
 ///   200 electrolyzer: consumes water 10/60 continuously, outputs ozone 4/60 +
 ///      hydrogen 6/60 continuously (official GenericCrafterBuild.updateTile
-///      `outputLiquids` per tick), power 1. The port stores one liquid per
-///      tile, so both outputs are delivered straight to adjacent acceptors.
+///      `outputLiquids` per tick), power 1. Input and both products are
+///      retained separately; products dump from their rotated output sides.
 ///   201 atmospheric-concentrator: HeatCrafter, heatRequirement 24, power 2,
-///      outputs nitrogen 16/60 continuously while heat >= 24.
+///      outputs nitrogen 16/60 continuously, scaled by available heat.
 ///   202 oxidation-chamber: HeatProducer, consumes ozone 2/60 + 1 beryllium,
 ///      outputs 1 oxide per 120s craft, power 0.5.
 pub(crate) fn simulate_erekir_crafters(
@@ -2437,71 +2636,8 @@ pub(crate) fn simulate_erekir_crafters(
                 }
                 changed = true;
             }
-            200 => {
-                // electrolyzer: needs water stored, then continuously turns
-                // 10/60 water/tick into ozone (7) 4/60 + hydrogen (8) 6/60.
-                if snapshot.stored_liquid != 0 || snapshot.liquid_amount < 0.001 {
-                    continue;
-                }
-                if efficiency <= 0.0 {
-                    continue;
-                }
-                let inc = delta_ticks * building_time_scale(world, key) * efficiency;
-                let consumed = (10.0 / 60.0) * inc;
-                let ozone_out = (4.0 / 60.0) * inc;
-                let hydrogen_out = (6.0 / 60.0) * inc;
-                if let Some(mut factory) = world.tiles.get_mut(&key) {
-                    factory.liquid_amount = (factory.liquid_amount - consumed).max(0.0);
-                    if factory.liquid_amount <= 0.0001 {
-                        factory.liquid_amount = 0.0;
-                        factory.stored_liquid = -1;
-                    }
-                }
-                let mut remaining_ozone = ozone_out;
-                let mut remaining_hydrogen = hydrogen_out;
-                for rotation in 0..4 {
-                    let target = offset_position(key, rotation);
-                    if snapshot.occupied.contains(&target) {
-                        continue;
-                    }
-                    if remaining_ozone > 0.0001 {
-                        let accepted =
-                            accept_liquid_from(world, Some(key), target, 7, remaining_ozone);
-                        remaining_ozone -= accepted;
-                    }
-                    if remaining_hydrogen > 0.0001 {
-                        let accepted =
-                            accept_liquid_from(world, Some(key), target, 8, remaining_hydrogen);
-                        remaining_hydrogen -= accepted;
-                    }
-                }
-                changed = true;
-            }
-            201 => {
-                // atmospheric-concentrator: HeatCrafter with heatRequirement
-                // 24; efficiency = clamp(heat / 24, 0, 1) * power efficiency.
-                let heat = erekir_heat_at(world, key);
-                if heat < 24.0 {
-                    continue;
-                }
-                let eff = (heat / 24.0).min(1.0) * efficiency;
-                if eff <= 0.0 {
-                    continue;
-                }
-                let inc = delta_ticks * building_time_scale(world, key) * eff;
-                let nitrogen = (16.0 / 60.0) * inc;
-                let mut remaining = nitrogen;
-                for rotation in 0..4 {
-                    let target = offset_position(key, rotation);
-                    if snapshot.occupied.contains(&target) {
-                        continue;
-                    }
-                    if remaining > 0.0001 {
-                        let accepted = accept_liquid_from(world, Some(key), target, 9, remaining);
-                        remaining -= accepted;
-                    }
-                }
-                changed = true;
+            200 | 201 => {
+                changed |= simulate_liquid_crafter(world, &snapshot, delta_ticks, efficiency);
             }
             202 => {
                 // oxidation-chamber: needs ozone (7) stored + 1 beryllium
@@ -2548,6 +2684,124 @@ pub(crate) fn simulate_erekir_crafters(
                 changed = true;
             }
             _ => {}
+        }
+    }
+    changed
+}
+
+/// Store each output independently before dumping at the real block perimeter.
+/// GenericCrafter permits excess of a full coproduct (dumpExtraLiquid=true),
+/// but stops when all outputs are full and keeps every non-excess remainder.
+fn simulate_liquid_crafter(
+    world: &DynamicWorld,
+    snapshot: &DynamicTile,
+    delta: f32,
+    power: f32,
+) -> bool {
+    let key = snapshot.position;
+    let capacity = liquid_capacity(snapshot.block).unwrap_or(0.0);
+    let outputs: &[(i16, f32, Option<u8>)] = if snapshot.block == 200 {
+        &[(7, 4.0 / 60.0, Some(1)), (8, 6.0 / 60.0, Some(3))]
+    } else {
+        &[(9, 16.0 / 60.0, None)]
+    };
+    let heat_efficiency = if snapshot.block == 201 {
+        (erekir_heat_at(world, key) / 24.0).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let mut inc = if snapshot.enabled {
+        delta.max(0.0) * building_time_scale(world, key) * power.max(0.0) * heat_efficiency
+    } else {
+        0.0
+    };
+    if snapshot.block == 200 {
+        inc = inc.min(stored_liquid_amount(snapshot, 0) / (10.0 / 60.0));
+    }
+    let consume_ticks = inc;
+    if outputs
+        .iter()
+        .all(|(id, _, _)| stored_liquid_amount(snapshot, *id) >= capacity - 0.001)
+    {
+        inc = 0.0;
+    }
+    let max_output_ticks = outputs
+        .iter()
+        .map(|(id, rate, _)| (capacity - stored_liquid_amount(snapshot, *id)).max(0.0) / rate)
+        .fold(0.0_f32, f32::max);
+    inc = inc.min(max_output_ticks);
+    let mut changed = false;
+    if inc > 0.0 {
+        if let Some(mut tile) = world.tiles.get_mut(&key) {
+            if snapshot.block == 200 {
+                super::liquids::set_crafter_liquid(
+                    &mut tile,
+                    0,
+                    (stored_liquid_amount(snapshot, 0) - consume_ticks * (10.0 / 60.0)).max(0.0),
+                );
+            }
+            for (id, rate, _) in outputs {
+                super::liquids::set_crafter_liquid(
+                    &mut tile,
+                    *id,
+                    (stored_liquid_amount(snapshot, *id) + rate * inc).min(capacity),
+                );
+            }
+            let craft_time = generic_crafter_time(snapshot.block).unwrap_or(1.0);
+            tile.production_progress = (tile.production_progress + inc) % craft_time;
+            changed = true;
+        }
+    }
+    // Output dumping runs even without power/input, matching GenericCrafter.
+    let size = i32::from(crate::game::content::block_size(snapshot.block));
+    let low = -(size - 1) / 2;
+    let high = low + size - 1;
+    let x = (key >> 16) as i16 as i32;
+    let y = key as i16 as i32;
+    for (liquid, _, direction) in outputs {
+        let mut visited = std::collections::HashSet::new();
+        for side in 0..4u8 {
+            if direction.is_some_and(|dir| (dir + snapshot.rotation) % 4 != side) {
+                continue;
+            }
+            for offset in low..=high {
+                let (dx, dy) = match side {
+                    0 => (high + 1, offset),
+                    1 => (offset, high + 1),
+                    2 => (low - 1, offset),
+                    _ => (offset, low - 1),
+                };
+                let target = ((x + dx) << 16) | ((y + dy) & 0xffff);
+                let dest = resolve_liquid_destination(world, key, target);
+                let Some(receiver) = dynamic_at(world, dest) else {
+                    continue;
+                };
+                if receiver.position == key
+                    || receiver.team != snapshot.team
+                    || !visited.insert(receiver.position)
+                {
+                    continue;
+                }
+                let live = world
+                    .tiles
+                    .get(&key)
+                    .map(|tile| stored_liquid_amount(&tile, *liquid))
+                    .unwrap_or(0.0);
+                let offer = super::liquids::dump_liquid_offer(
+                    live,
+                    capacity,
+                    stored_liquid_amount(&receiver, *liquid),
+                    liquid_capacity(receiver.block).unwrap_or(0.0),
+                    2.0,
+                );
+                let accepted = accept_liquid_from(world, Some(key), dest, *liquid, offer);
+                if accepted > 0.0 {
+                    if let Some(mut tile) = world.tiles.get_mut(&key) {
+                        super::liquids::set_crafter_liquid(&mut tile, *liquid, live - accepted);
+                    }
+                    changed = true;
+                }
+            }
         }
     }
     changed

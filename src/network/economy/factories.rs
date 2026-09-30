@@ -43,10 +43,12 @@ pub(crate) fn initialize_received_unit_payload(
     source_y: f32,
     rotation: f32,
 ) {
-    let Some(CarriedPayload::Unit(unit)) = tile.payload.as_deref() else {
-        return;
+    let assembler = matches!(tile.block, 393..=396);
+    let unit_type = match tile.payload.as_deref() {
+        Some(CarriedPayload::Unit(unit)) => Some(unit.unit_type),
+        Some(CarriedPayload::Build(_)) if assembler => None,
+        _ => return,
     };
-    let unit_type = unit.unit_type;
     let (cx, cy) = building_center(tile.position, tile.block);
     let half = unit_block_half(tile.block);
     set_pay_vector(
@@ -55,8 +57,10 @@ pub(crate) fn initialize_received_unit_payload(
         (source_y - cy).clamp(-half, half),
     );
     tile.payload_rotation = rotation;
-    tile.production_progress = 0.0;
-    tile.stored_amount = i32::from(unit_type) + 1;
+    if !assembler {
+        tile.production_progress = 0.0;
+        tile.stored_amount = i32::from(unit_type.unwrap()) + 1;
+    }
 }
 
 fn approach_vec(current: (f32, f32), dest: (f32, f32), step: f32) -> (f32, f32) {
@@ -88,7 +92,7 @@ fn front_position(tile: &DynamicTile) -> i32 {
     offset_position_by(tile.position, tile.rotation, trns)
 }
 
-fn apply_move_in(tile: &mut DynamicTile, delta: f32) -> bool {
+pub(super) fn apply_move_in(tile: &mut DynamicTile, delta: f32) -> bool {
     let dest_rot = f32::from(tile.rotation) * 90.0;
     tile.payload_rotation = move_toward_angle(
         tile.payload_rotation,
@@ -151,9 +155,21 @@ fn unit_on_building_footprint(
 pub(crate) fn front_accepts_payload(
     world: &DynamicWorld,
     front: &DynamicTile,
+    source: &DynamicTile,
     payload: &CarriedPayload,
 ) -> bool {
-    if !front.enabled || front.payload.is_some() {
+    if front.block == 396 {
+        return front.team == source.team
+            && super::erekir::assembler_module_accepts_payload(world, front, payload);
+    }
+    if matches!(front.block, 393..=395) {
+        return front.team == source.team
+            && super::erekir::assembler_accepts_payload(world, front, payload);
+    }
+    if front.payload.is_some()
+        || (!front.enabled
+            && (front.position != source.position || reconstructor_recipe(front.block).is_none()))
+    {
         return false;
     }
     if let Some(limit) = payload_block_limit(front.block) {
@@ -166,6 +182,33 @@ pub(crate) fn front_accepts_payload(
     }
     if let CarriedPayload::Unit(unit) = payload {
         if reconstructor_recipe(front.block).is_some() {
+            // Reconstructor.acceptPayload rejects its output face. The
+            // sender's origin is needed here: facing payload blocks may
+            // otherwise feed into each other's output sides.
+            let (source_x, source_y) = building_center(source.position, source.block);
+            let (front_x, front_y) = building_center(front.position, front.block);
+            let dx = source_x - front_x;
+            let dy = source_y - front_y;
+            // Building.relativeTo(Building) chooses the dominant axis of
+            // the world centres, with ties on Y and self returning -1.
+            let input_face = if dx.abs() > dy.abs() {
+                if dx >= 1.0 {
+                    Some(0)
+                } else if dx <= -1.0 {
+                    Some(2)
+                } else {
+                    None
+                }
+            } else if dy >= 1.0 {
+                Some(1)
+            } else if dy <= -1.0 {
+                Some(3)
+            } else {
+                None
+            };
+            if input_face == Some(front.rotation % 4) {
+                return false;
+            }
             let Some(output) = reconstructor_upgrade(front.block, unit.unit_type) else {
                 return false;
             };
@@ -206,7 +249,8 @@ fn move_out_unit_payload(
             .as_ref()
             .zip(snapshot.payload.as_deref())
             .is_some_and(|(front, payload)| {
-                front.team == snapshot.team && front_accepts_payload(world, front, payload)
+                front.team == snapshot.team
+                    && front_accepts_payload(world, front, &snapshot, payload)
             });
     if front_accepts {
         if let Some(front) = front {
@@ -727,6 +771,14 @@ fn create_unit_for_block(
         authority: crate::network::world::UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: Default::default(),
         drown_progress: 0.0,
@@ -805,6 +857,29 @@ fn release_held_unit(
     }
 }
 
+/// Assemblers release into the centre of their assembly area. Keep the
+/// clearance check and entity creation on the same geometry; other direct
+/// factory spawns retain their existing 20-world-unit offset.
+pub(crate) fn factory_unit_spawn_position(factory: &DynamicTile) -> (f32, f32) {
+    let (center_x, center_y) = building_center(factory.position, factory.block);
+    if matches!(factory.block, 393..=395) {
+        // UnitAssembler.getUnitSpawn (160.5): all three vanilla assemblers
+        // have areaSize 13, with the block size supplied by content metadata.
+        let distance = 8.0 * (13.0 + f32::from(block_size(factory.block))) / 2.0;
+        return match factory.rotation % 4 {
+            0 => (center_x + distance, center_y),
+            1 => (center_x, center_y + distance),
+            2 => (center_x - distance, center_y),
+            _ => (center_x, center_y - distance),
+        };
+    }
+    let radians = (f32::from(factory.rotation) * 90.0).to_radians();
+    (
+        center_x + radians.cos() * 20.0,
+        center_y + radians.sin() * 20.0,
+    )
+}
+
 pub(crate) fn spawn_factory_unit(
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
@@ -814,10 +889,7 @@ pub(crate) fn spawn_factory_unit(
     let Some(mut unit) = create_unit_for_block(world, factory, unit_type) else {
         return;
     };
-    let (center_x, center_y) = building_center(factory.position, factory.block);
-    let radians = (f32::from(factory.rotation) * 90.0).to_radians();
-    unit.x = center_x + radians.cos() * 20.0;
-    unit.y = center_y + radians.sin() * 20.0;
+    (unit.x, unit.y) = factory_unit_spawn_position(factory);
     insert_released_unit(world, out, factory, unit);
 }
 

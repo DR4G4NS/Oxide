@@ -44,7 +44,6 @@ use crate::network::combat::simulate_turrets;
 use crate::network::combat::spawn_allied_unit_projectile;
 use crate::network::combat::spawn_enemy_horizon_bomb;
 use crate::network::combat::spawn_enemy_projectile;
-use crate::network::combat::spawn_navanax_lasers;
 use crate::network::combat::unit_combat::{
     boost_properties, collect_allied_weapon_fire, collect_manual_weapon_fire,
     collision_position_passable, damaged_allied_building_target, effective_unit_build_speed,
@@ -511,9 +510,7 @@ pub use waves::{
     simulate_waves_and_enemies,
 };
 pub(crate) mod units;
-pub(crate) use units::{
-    mono_target_item, simulate_controlled_navanax_lasers, simulate_controlled_repair_beam,
-};
+pub(crate) use units::{mono_target_item, simulate_controlled_repair_beam};
 pub use units::{
     simulate_all_unit_statuses, simulate_allied_oxynoe_repair, simulate_allied_units,
     simulate_assist_units, simulate_builder_units, simulate_controlled_unit_weapons,

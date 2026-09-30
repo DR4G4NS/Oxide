@@ -355,6 +355,14 @@ pub(crate) fn should_consume_power(world: &DynamicWorld, tile: &DynamicTile) -> 
     if !tile.enabled {
         return false;
     }
+    if tile.block == 200 {
+        return stored_liquid_amount(tile, 0) > 0.000_001
+            && (stored_liquid_amount(tile, 7) < 50.0 - 0.001
+                || stored_liquid_amount(tile, 8) < 50.0 - 0.001);
+    }
+    if tile.block == 201 {
+        return stored_liquid_amount(tile, 9) < 60.0 - 0.001;
+    }
     if matches!(tile.block, 408 | 409) {
         return tile.payload.is_some();
     }
@@ -408,7 +416,6 @@ pub(crate) fn should_consume_power(world: &DynamicWorld, tile: &DynamicTile) -> 
                 && inventory_count(&tile.inventory, 4) >= 4
                 && inventory_total(&tile.inventory) - 5 + 4 <= 30
         }
-        200 => stored_liquid_amount(tile, 0) > 0.000_001,
         377..=383 | 386..=392 => unit_block_consumption_ready(
             tile,
             &world.wave_rules.read(),

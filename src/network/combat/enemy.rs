@@ -170,8 +170,22 @@ pub(crate) fn navigation_field_class(
     costs
 }
 
-/// Pathfinder `PositionTarget` field (audit H13): cost-to-go toward an
-/// arbitrary tile instead of the team's core. Cached per (class, team, goal, revision).
+/// A bounded cache owned by one world; revisions are local to that world.
+#[derive(Default)]
+pub(crate) struct TowardNavigationCache {
+    revision: u64,
+    dimensions: (i32, i32),
+    fields: Vec<TowardNavigationEntry>,
+}
+
+struct TowardNavigationEntry {
+    class: NavigationClass,
+    team: u8,
+    goal: (i32, i32),
+    costs: Arc<Vec<u32>>,
+}
+
+/// Pathfinder `PositionTarget` field toward an arbitrary tile.
 pub(crate) fn navigation_field_toward(
     world: &DynamicWorld,
     class: NavigationClass,
@@ -180,34 +194,30 @@ pub(crate) fn navigation_field_toward(
     agent_team: u8,
 ) -> Arc<Vec<u32>> {
     let revision = world.navigation_revision.load(Ordering::Relaxed);
-    let packed = (goal_x << 16) | (goal_y as u16 as i32);
-    let class_id = match class {
-        NavigationClass::Ground => 0u8,
-        NavigationClass::Legs => 1,
-        NavigationClass::Naval => 2,
-    };
-    type TowardCache = Vec<(u64, u8, u8, i32, Arc<Vec<u32>>)>;
-    thread_local! {
-        static CACHE: std::cell::RefCell<TowardCache> =
-            const { std::cell::RefCell::new(Vec::new()) };
+    let mut cache = world.toward_navigation.lock();
+    if cache.revision != revision || cache.dimensions != (world.width, world.height) {
+        cache.fields.clear();
+        cache.revision = revision;
+        cache.dimensions = (world.width, world.height);
     }
-    CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some((_, _, _, _, costs)) = cache.iter().find(|(rev, cid, team, goal, _)| {
-            *rev == revision && *cid == class_id && *team == agent_team && *goal == packed
-        }) {
-            return costs.clone();
-        }
-        let costs = Arc::new(build_navigation_field_toward(
-            world, class, goal_x, goal_y, agent_team,
-        ));
-        cache.retain(|(rev, _, _, _, _)| *rev == revision);
-        if cache.len() >= 16 {
-            cache.remove(0);
-        }
-        cache.push((revision, class_id, agent_team, packed, costs.clone()));
-        costs
-    })
+    if let Some(entry) = cache.fields.iter().find(|entry| {
+        entry.class == class && entry.team == agent_team && entry.goal == (goal_x, goal_y)
+    }) {
+        return entry.costs.clone();
+    }
+    let costs = Arc::new(build_navigation_field_toward(
+        world, class, goal_x, goal_y, agent_team,
+    ));
+    if cache.fields.len() >= 16 {
+        cache.fields.remove(0);
+    }
+    cache.fields.push(TowardNavigationEntry {
+        class,
+        team: agent_team,
+        goal: (goal_x, goal_y),
+        costs: costs.clone(),
+    });
+    costs
 }
 
 /// Legacy two-variant wrapper (ground/legs).
@@ -616,6 +626,7 @@ pub(crate) fn damage_building(
     drop(building);
     if let Some(building) = destroyed_state {
         world.base_buildings.remove(&position);
+        world.weapon_aims.remove(&(true, position));
         world
             .tiles
             .insert(position, base_building_tombstone(&building));
@@ -1110,6 +1121,8 @@ pub(crate) fn enemy_max_health(enemy: &EnemyUnit) -> f32 {
 /// after they reconnect and rebuild their world stream.
 pub(crate) fn cancel_transient_world_actions(world: &DynamicWorld) {
     world.projectiles.clear();
+    world.pending_projectiles.clear();
+    world.weapon_aims.clear();
     world.pending_builds.clear();
     world.pending_breaks.clear();
     // Team plans are the visual half of PendingBuild, not durable work by
@@ -1303,6 +1316,14 @@ pub(crate) fn insert_wave_unit(
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: Default::default(),
         drown_progress: 0.0,
@@ -1398,6 +1419,14 @@ fn payload_unit_for_wave(unit_type: i16, team: u8) -> Option<EnemyUnit> {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: Default::default(),
         drown_progress: 0.0,

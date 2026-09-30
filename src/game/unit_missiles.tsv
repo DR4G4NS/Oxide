@@ -1,0 +1,8 @@
+# unit_id speed rotate_speed homing_delay acceleration_time lifetime accel drag target_range weapon_range target_ground target_air (initialized160.5 JAR)
+46	3.35	2.5	10	0	99.6	0.5	0.3	6	20	true	true
+53	4.3	2.5	10	0	54.239998	0.5	0.3	6	20	true	false
+55	4.6	2.5	10	0	102	0.5	0.3	6	20	true	false
+65	4.6	0.25	10	50	330	0.5	0.3	6	43.333332	true	false
+66	2.5	0.2	10	50	586.2	0.5	0.3	6	80	true	false
+67	4.4	0.25	10	30	84	0.5	0.3	6	26.666666	true	false
+68	4.8	1.4	10	0	222	0.5	0.3	6	23.333334	true	false

@@ -297,7 +297,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
                     })
                 },
             )
-        } else if is_unit_payload_block(tile.block) {
+        } else if is_unit_payload_block(tile.block) || matches!(tile.block, 393..=396) {
             tile.payload_accum.is_empty()
                 || (tile.payload_accum.len() == 2
                     && tile.payload_accum.iter().all(|value| {
@@ -380,6 +380,7 @@ pub fn load_tiles(path: &Path, map_size: Option<(i32, i32)>) -> std::io::Result<
             && payload_valid
             && payload_accum_valid
             && (matches!(tile.block, 398..=409)
+                || matches!(tile.block, 393..=396)
                 || is_unit_payload_block(tile.block)
                 || (tile.payload.is_none() && tile.payload_progress == 0.0))
             && tile.health.is_finite()

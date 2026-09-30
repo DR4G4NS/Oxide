@@ -142,16 +142,79 @@ pub fn unit_type_is_enemy(id: i16) -> bool {
 /// `MissileUnitType` constructor defaults the field to `60f * 1.7f`;
 /// entries only list types that override it or rely on the default.
 pub fn unit_missile_lifetime(id: i16) -> Option<f32> {
-    match id {
-        46 => Some(99.6),  // anthicus-missile: 60f * 1.66f
-        53 => Some(54.24), // quell-missile: 60f * (1.4f - 0.496f)
-        55 => Some(102.0), // disrupt-missile: constructor default
-        65 => Some(330.0), // scathe-missile: 60f * 5.5f
-        66 => Some(586.2), // scathe-missile-phase: 60f * 9.77f
-        67 => Some(84.0),  // scathe-missile-surge: 60f * 1.4f
-        68 => Some(222.0), // scathe-missile-surge-split: 60f * 3.7f
-        _ => None,
-    }
+    unit_missile_spec(id).map(|spec| spec.lifetime)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MissileSpec {
+    pub speed: f32,
+    pub rotate_speed: f32,
+    pub homing_delay: f32,
+    pub acceleration_time: f32,
+    pub lifetime: f32,
+    pub accel: f32,
+    pub drag: f32,
+    pub target_range: f32,
+    pub weapon_range: f32,
+    pub target_ground: bool,
+    pub target_air: bool,
+}
+
+pub fn unit_missile_spec(id: i16) -> Option<MissileSpec> {
+    static SPECS: std::sync::OnceLock<std::collections::HashMap<i16, MissileSpec>> =
+        std::sync::OnceLock::new();
+    SPECS
+        .get_or_init(|| {
+            include_str!("unit_missiles.tsv")
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| {
+                    let mut columns = line.split_whitespace();
+                    let id = columns.next().unwrap().parse().unwrap();
+                    let mut number = || columns.next().unwrap().parse::<f32>().unwrap();
+                    (
+                        id,
+                        MissileSpec {
+                            speed: number(),
+                            rotate_speed: number(),
+                            homing_delay: number(),
+                            acceleration_time: number(),
+                            lifetime: number(),
+                            accel: number(),
+                            drag: number(),
+                            target_range: number(),
+                            weapon_range: number(),
+                            target_ground: columns.next().unwrap().parse().unwrap(),
+                            target_air: columns.next().unwrap().parse().unwrap(),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .get(&id)
+        .copied()
+}
+
+/// Target priority is authoritative content, not inferred from unit family.
+pub fn unit_target_priority(id: i16) -> f32 {
+    static PRIORITIES: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    let values = PRIORITIES.get_or_init(|| {
+        include_str!("unit_target_priority.tsv")
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .enumerate()
+            .map(|(index, line)| {
+                let mut fields = line.split_whitespace();
+                assert_eq!(fields.next().unwrap().parse::<usize>().unwrap(), index);
+                fields.next().unwrap().parse().unwrap()
+            })
+            .collect()
+    });
+    usize::try_from(id)
+        .ok()
+        .and_then(|id| values.get(id))
+        .copied()
+        .unwrap_or(0.0)
 }
 
 /// CoreBlock.unitType for vanilla core blocks (Blocks.java v160.5).

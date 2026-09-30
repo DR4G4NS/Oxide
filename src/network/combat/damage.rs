@@ -894,6 +894,8 @@ pub(crate) fn spawn_reign_fragments(
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         if let Ok(payload) = encode_create_bullet_payload(
@@ -973,6 +975,8 @@ pub(crate) fn spawn_cyerce_fragments(
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         if let Ok(payload) =
@@ -1052,6 +1056,8 @@ pub(crate) fn spawn_toxopid_fragments(
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         if let Ok(payload) = encode_create_bullet_payload(
@@ -2171,6 +2177,11 @@ fn apply_incoming_unit_damage_scaled(
 /// lightning roots, lightningLength, lightningDamage).
 pub(crate) fn scathe_death_explosion(unit_type: i16) -> Option<(f32, f32, f32, u8, u8, f32)> {
     match unit_type {
+        // Other MissileUnitType shootOnDeath explosions use their canonical
+        // weapon data too; they must not fire repeatedly while in flight.
+        46 | 53 | 55 => crate::game::content::unit_weapons(unit_type)
+            .first()
+            .map(|weapon| (weapon.splash_damage, weapon.splash_radius, 1.0, 0, 0, 0.0)),
         // scathe-missile -> ExplosionBulletType(1000f, 65f).
         65 => Some((1_000.0, 65.0, 0.1, 0, 0, 0.0)),
         // scathe-missile-phase -> ExplosionBulletType(320f, 120f).
@@ -2252,6 +2263,8 @@ fn spawn_scathe_artillery_frags(
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
         if let Ok(payload) =
@@ -2272,6 +2285,7 @@ pub(crate) fn kill_enemy(
     if !world.enemies.contains_key(&target_id) {
         return;
     }
+    world.weapon_aims.remove(&(false, target_id));
     let loot = world
         .enemies
         .get(&target_id)

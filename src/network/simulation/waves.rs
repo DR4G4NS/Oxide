@@ -389,30 +389,7 @@ pub fn simulate_waves_and_enemies(
     let mut exploded = Vec::new();
     let mut destroyed_buildings = HashSet::new();
     let mut health_updates = HashMap::new();
-    // TimedKillUnit self-expiry (all MissileUnitType content):
-    // `TimedKillUnit.updateTile` ages `time -= Time.delta` and kills the unit
-    // at zero. Snapshot first, drop the guard, then kill outside any
-    // iteration (DashMap DM rule).
-    let mut expired_missiles = Vec::new();
-    let mut aged_missiles = Vec::new();
-    for entry in world.enemies.iter() {
-        if entry.entity_class == 39 && entry.missile_time > 0.0 {
-            let remaining = entry.missile_time - delta_ticks;
-            if remaining <= 0.0 {
-                expired_missiles.push(*entry.key());
-            } else {
-                aged_missiles.push((*entry.key(), remaining));
-            }
-        }
-    }
-    for id in &expired_missiles {
-        crate::network::combat::kill_enemy(world, out, *id);
-    }
-    for (id, remaining) in &aged_missiles {
-        if let Some(mut missile) = world.enemies.get_mut(id) {
-            missile.missile_time = *remaining;
-        }
-    }
+    crate::network::combat::unit_combat::simulate_missile_units(world, out, delta_ticks);
     // RtsAI.assignSquads/handleSquad (RtsAI.java): same-type units within
     // squadRadius (60 + hitSize*1.5) form a squad and share ONE target -
     // the team-1 building nearest the squad centroid. Snapshot first; no
@@ -502,6 +479,9 @@ pub fn simulate_waves_and_enemies(
     };
     let wave_units: Vec<_> = world.enemies.iter().map(|unit| unit.clone()).collect();
     for mut enemy in wave_units {
+        if enemy.entity_class == 39 {
+            continue;
+        }
         if matches!(
             enemy.authority,
             crate::network::world::UnitAuthority::Player { .. }
@@ -575,6 +555,7 @@ pub fn simulate_waves_and_enemies(
                 .map(|(_, x, y)| (x, y))
                 .unwrap_or((target_x, target_y)),
         };
+        world.weapon_aims.insert((false, enemy.id), (aim_x, aim_y));
         let dx = aim_x - enemy.x;
         let dy = aim_y - enemy.y;
         let distance = if let Some((_, px, py, _, _)) = unit_target {
@@ -678,8 +659,11 @@ pub fn simulate_waves_and_enemies(
                     );
                 }
             } else if enemy.unit_type == 34 {
-                while enemy.attack_reload >= 130.0 {
-                    enemy.attack_reload -= 130.0;
+                for volley in crate::network::combat::unit_combat::collect_navanax_emp_mounts(
+                    &mut enemy,
+                    reload_delta,
+                    true,
+                ) {
                     let locked_building = if unit_target.is_some() {
                         None
                     } else {
@@ -691,28 +675,7 @@ pub fn simulate_waves_and_enemies(
                         enemy.id,
                         locked_building,
                         building_target.is_none(),
-                        scaled_projectile_volley(
-                            enemy_projectile_volley(34).unwrap(),
-                            damage_multiplier,
-                        ),
-                        enemy.x,
-                        enemy.y,
-                        aim_x,
-                        aim_y,
-                    );
-                }
-                enemy.secondary_attack_reload += reload_delta;
-                while enemy.secondary_attack_reload >= 170.0 && distance <= 90.0 {
-                    enemy.secondary_attack_reload -= 170.0;
-                    spawn_navanax_lasers(
-                        world,
-                        out,
-                        2,
-                        effective_unit_damage_multiplier(&enemy),
-                        enemy.id,
-                        enemy.id,
-                        building_target.map(|target| target.0),
-                        building_target.is_none(),
+                        scaled_projectile_volley(volley, damage_multiplier),
                         enemy.x,
                         enemy.y,
                         aim_x,

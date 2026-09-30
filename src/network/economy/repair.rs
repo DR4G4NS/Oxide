@@ -541,10 +541,7 @@ fn move_unit_to_range(
 }
 
 fn assembler_spawn_point(tile: &DynamicTile) -> (f32, f32) {
-    let (cx, cy) = tile_center(tile.position, tile.block);
-    let radians = (f32::from(tile.rotation) * 90.0).to_radians();
-    let len = 8.0 * (ASSEMBLER_AREA_SIZE + f32::from(block_size(tile.block))) / 2.0;
-    (cx + radians.cos() * len, cy + radians.sin() * len)
+    super::factories::factory_unit_spawn_position(tile)
 }
 
 fn assembler_drone_slot(spawn_x: f32, spawn_y: f32, index: usize) -> (f32, f32, f32) {
@@ -558,10 +555,39 @@ fn assembler_drone_slot(spawn_x: f32, spawn_y: f32, index: usize) -> (f32, f32, 
     )
 }
 
+/// UnitAssembler progress uses only drones satisfying AssemblerAI.inPosition
+/// (160.5): within 10 world units of the assigned slot and 15 degrees of its
+/// target angle. Movement's tighter arrival/look ranges are independent.
+pub(crate) fn assembler_positioned_drone_fraction(
+    world: &DynamicWorld,
+    assembler: &DynamicTile,
+) -> f32 {
+    let drones: Vec<EnemyUnit> = world
+        .assembler_drone_ids(assembler.position)
+        .into_iter()
+        .filter_map(|id| world.enemies.get(&id).map(|unit| unit.clone()))
+        .filter(|unit| {
+            unit.unit_type == ASSEMBLY_DRONE && unit.health > 0.0 && unit.team == assembler.team
+        })
+        .collect();
+    let (spawn_x, spawn_y) = assembler_spawn_point(assembler);
+    let positioned = drones
+        .iter()
+        .take(ASSEMBLER_DRONES_CREATED)
+        .enumerate()
+        .filter(|(index, unit)| {
+            let (x, y, angle) = assembler_drone_slot(spawn_x, spawn_y, *index);
+            (unit.x - x).hypot(unit.y - y) < 10.0
+                && super::spec::angle_near(unit.rotation, angle, 15.0)
+        })
+        .count();
+    positioned as f32 / ASSEMBLER_DRONES_CREATED as f32
+}
+
 /// AssemblerAI for assembly-drone units tethered to UnitAssembler 393-395.
 /// Spawns up to `dronesCreated` (4) drones on the official 240-tick construct
 /// timer and flies each to its perimeter slot (`targetPos` / `targetAngle`).
-/// Production progress on the assembler tile is unchanged (factory sibling).
+/// The factory sibling queries the positioned fraction for production.
 pub(crate) fn simulate_assembler_drones(
     world: &DynamicWorld,
     delta_ticks: f32,
@@ -648,6 +674,9 @@ fn tick_assembler_drones(
             {
                 set_unit_elevation(world, id, 1.0);
                 bind.unit_ids.push(id);
+                // Call.assemblerDroneSpawned invokes droneSpawned on the
+                // server too, resetting the per-drone construction timer.
+                bind.progress = 0.0;
                 if let Ok(frame) = encode_assembler_drone_spawned_frame(assembler.position, id) {
                     world.game_state.extras.queue_call(frame);
                 }

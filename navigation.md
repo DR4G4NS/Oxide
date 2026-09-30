@@ -46,6 +46,14 @@ For a full identity/manifest/probe check (broader than one gameplay smoke):
 bash tools/compat_jar_gate.sh
 ```
 
+The current-JAR gate also reads complete liquid-crafter sync/save fixtures,
+compares electrolyzer prediction across the 360- and 480-tick snapshots,
+checks assembler payload/module/drone contracts, verifies Oxynoe repair
+weapon ownership and firing gates, and compares the Navanax EMP/laser
+mount traces. These focused scenarios do not replace the full-world join
+and gameplay matrix described below.
+
+
 When a fact is not already extracted:
 
 ```bash

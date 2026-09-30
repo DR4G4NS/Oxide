@@ -22,4 +22,4 @@ We will acknowledge the report and work on a fix before any public write-up.
 
 ## Supported versions
 
-Only the latest `0.1.x-alpha` on `main` receives security fixes.
+Only the latest `0.2.x` on `main` receives security fixes.

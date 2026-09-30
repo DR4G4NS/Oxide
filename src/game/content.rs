@@ -790,6 +790,28 @@ impl ContentRegistry {
     }
 }
 
+/// Whether bullets/missiles may pass over a building unless explicitly targeted.
+pub fn block_under_bullets(id: i16) -> bool {
+    static FLAGS: std::sync::OnceLock<Vec<bool>> = std::sync::OnceLock::new();
+    let flags = FLAGS.get_or_init(|| {
+        include_str!("block_under_bullets.tsv")
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .enumerate()
+            .map(|(index, line)| {
+                let mut fields = line.split_whitespace();
+                assert_eq!(fields.next().unwrap().parse::<usize>().unwrap(), index);
+                fields.next().unwrap().parse::<bool>().unwrap()
+            })
+            .collect()
+    });
+    usize::try_from(id)
+        .ok()
+        .and_then(|id| flags.get(id))
+        .copied()
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod unit_weapon_tests {
     use super::*;

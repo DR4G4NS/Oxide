@@ -325,7 +325,7 @@ pub fn is_batch_snapshot_supported(block: i16) -> bool {
         || matches!(block, 193 | 194)
         || block == 271
         || matches!(block, 252 | 281 | 427 | 428)
-        || matches!(block, 384 | 385 | 393..=395)
+        || matches!(block, 384 | 385 | 393..=396)
         || matches!(block, 426 | 435 | 437 | 438 | 439)
         || storage_capacity(block).is_some()
         || (5..=20).contains(&block))
@@ -1113,14 +1113,19 @@ pub fn encode_unit_assembler_sync(
     // payload) + f32 progress + byte unit count + int unit ids +
     // PayloadSeq (negated size) + TypeIO.writeVecNullable(commandPos).
     encode_basic_modules_sync(output, tile, power, true, true, true)?;
-    output.write_f(0.0)?; // payVector.x
-    output.write_f(0.0)?; // payVector.y
+    let (x, y) = crate::network::economy::unit_block_pay_vector(tile);
+    output.write_f(x)?;
+    output.write_f(y)?;
     output.write_f(tile.payload_rotation)?;
-    output.write_bool(false)?; // no carried payload entity
-                               // JAR progress is a 0..1 fraction of the active plan time
-                               // (progress += edelta * speed * eff / plan.time, UnitAssembler.java:527).
-                               // Tier 0 without a linked module (the only state reachable while the
-                               // world snapshot is unavailable) uses the base plan time.
+    if let Some(payload) = tile.payload.as_deref() {
+        write_carried_payload(output, payload)?;
+    } else {
+        output.write_bool(false)?;
+    }
+    // JAR progress is a 0..1 fraction of the active plan time
+    // (progress += edelta * speed * eff / plan.time, UnitAssembler.java:527).
+    // Tier 0 without a linked module (the only state reachable while the
+    // world snapshot is unavailable) uses the base plan time.
     let tier = world
         .map(|w| crate::network::economy::assembler_tier(w, tile))
         .unwrap_or(0)
@@ -1150,8 +1155,15 @@ pub fn encode_unit_assembler_sync(
     #[allow(clippy::cast_possible_wrap)]
     output.write_s(-(entries.len() as i16))?;
     for (content, amount) in entries {
-        // Plan stacks are item payloads (ContentType.item.ordinal() == 1).
-        output.write_b(1)?;
+        // Vanilla assembler plans contain UnitPayloads and block payloads.
+        // These six unit IDs cover both tiers, including retained stacks
+        // after a module changes the selected tier. ContentType.unit=6;
+        // ContentType.block=1 in the pinned 160.5 JAR.
+        output.write_b(if matches!(*content, 38 | 39 | 43 | 44 | 49 | 50) {
+            6
+        } else {
+            1
+        })?;
         output.write_s(*content)?;
         output.write_i(*amount)?;
     }
@@ -1169,10 +1181,15 @@ pub fn encode_payload_block_base_sync(
     // UnitAssemblerModuleBuild inherits PayloadBlockBuild.write: base +
     // payVector.x/y + payRotation + Payload.write.
     encode_basic_modules_sync(output, tile, power, false, true, false)?;
-    output.write_f(0.0)?;
-    output.write_f(0.0)?;
+    let (x, y) = crate::network::economy::unit_block_pay_vector(tile);
+    output.write_f(x)?;
+    output.write_f(y)?;
     output.write_f(tile.payload_rotation)?;
-    output.write_bool(false)?;
+    if let Some(payload) = tile.payload.as_deref() {
+        write_carried_payload(output, payload)?;
+    } else {
+        output.write_bool(false)?;
+    }
     Ok(())
 }
 
@@ -1867,6 +1884,19 @@ pub fn is_snapshot_item_turret(block: i16) -> bool {
 pub fn write_liquid_module(output: &mut Vec<u8>, tile: &DynamicTile) -> std::io::Result<()> {
     use crate::network::codec::Writes;
 
+    if matches!(tile.block, 200 | 201) && !tile.liquid_inventory.is_empty() {
+        let liquids: Vec<_> = tile
+            .liquid_inventory
+            .iter()
+            .filter(|(_, amount)| amount.is_finite() && *amount > 0.000001)
+            .collect();
+        output.write_s(i16::try_from(liquids.len()).unwrap_or(i16::MAX))?;
+        for (liquid, amount) in liquids {
+            output.write_s(*liquid)?;
+            output.write_f(*amount)?;
+        }
+        return Ok(());
+    }
     let mut liquids = Vec::<(i16, f32)>::new();
     if tile.stored_liquid >= 0 && tile.liquid_amount > 0.0001 {
         liquids.push((tile.stored_liquid, tile.liquid_amount));

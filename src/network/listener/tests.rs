@@ -145,6 +145,14 @@ fn allied_multi_mount_timers_match_official_volleys() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -209,12 +217,7 @@ fn allied_multi_mount_timers_match_official_volleys() {
             .count(),
         1 // mirrored emp cannon pair fires every 130 ticks
     );
-    assert_eq!(
-        fire.iter()
-            .filter(|fire| matches!(fire, AlliedWeaponFire::NavanaxLasers(_)))
-            .count(),
-        1
-    );
+    // Autonomous plasma mounts update independently of manual/AI fire collection.
     let mut boosted_antumbra = make(5, ANTUMBRA, 10_000.0);
     boosted_antumbra.team = 1;
     boosted_antumbra.status_effect = 14;
@@ -652,25 +655,26 @@ fn periodic_block_snapshot_skips_live_block_while_breaking() {
 fn parallel_block_snapshots_match_sequential_bytes_and_are_deterministic() {
     let (world, _connections, _, _) = legacy_weapons_test_world();
     let mut power = std::collections::HashMap::new();
-    // Memory banks make each independent codec non-trivial (512 f64s),
-    // while their writeSync path reads only the owned DynamicTile clone.
-    for index in 0..128i32 {
-        let x = 10 + index % 16;
-        let y = 10 + index / 16;
+    // Memory banks (436) are not selected for periodic snapshots. Use the
+    // supported 64-cell codec (435) with enough real encoding work to test
+    // parallel participation, rather than timing 85 tiny crafter entries.
+    for index in 0..1024i32 {
+        let x = 2 + index % 32;
+        let y = 2 + index / 32;
         let position = (x << 16) | y;
         let mut tile = DynamicTile {
             position,
-            block: if index % 3 == 0 { 436 } else { 181 },
+            block: if index % 3 == 0 { 435 } else { 181 },
             rotation: (index % 4) as u8,
             team: 1,
             occupied: vec![position],
-            health: crate::game::content::block_health(if index % 3 == 0 { 436 } else { 181 }),
+            health: crate::game::content::block_health(if index % 3 == 0 { 435 } else { 181 }),
             production_progress: index as f32,
             inventory: vec![(0, index + 1)],
             ..DynamicTile::default()
         };
-        if tile.block == 436 {
-            tile.memory = (0..512).map(|cell| f64::from(index * 512 + cell)).collect();
+        if tile.block == 435 {
+            tile.memory = (0..64).map(|cell| f64::from(index * 64 + cell)).collect();
         }
         power.insert(position, (index % 10) as f32 / 10.0);
         world.tiles.insert(position, tile);
@@ -679,7 +683,7 @@ fn parallel_block_snapshots_match_sequential_bytes_and_are_deterministic() {
     // they consult topology/simulation state. The hybrid merge must still
     // retain the single globally sorted wire order.
     for (offset, block) in [302, 261, 262, 345].into_iter().enumerate() {
-        let position = ((30 + offset as i32) << 16) | 12;
+        let position = ((36 + offset as i32) << 16) | 12;
         world.tiles.insert(
             position,
             DynamicTile {
@@ -714,9 +718,28 @@ fn parallel_block_snapshots_match_sequential_bytes_and_are_deterministic() {
     assert!(!sequential_execution.parallel);
     assert!(parallel_execution.parallel);
     assert!(
-        parallel_execution.workers_used > 1,
-        "large block snapshot must execute on multiple Rayon workers: {parallel_execution:?}"
+        parallel_execution.items >= 1024,
+        "fixture must actually encode the heavy entries"
     );
+    // Rayon may legitimately finish one batch on one worker. Prove codec
+    // concurrency deterministically instead of asserting a scheduling choice:
+    // all four workers reach this barrier, then each encodes the full world.
+    // map_ordered's own test separately verifies multi-worker item dispatch.
+    let start = std::sync::Barrier::new(4);
+    let concurrent = pool.broadcast(|context| {
+        start.wait();
+        assert_eq!(rayon::current_thread_index(), Some(context.index()));
+        let (frames, _) =
+            encode_block_snapshots_with_threshold(&world, &power, usize::MAX).unwrap();
+        (context.index(), frames)
+    });
+    let mut worker_ids = Vec::new();
+    for (worker, frames) in concurrent {
+        worker_ids.push(worker);
+        assert_eq!(frames, sequential, "worker {worker} changed wire bytes");
+    }
+    worker_ids.sort_unstable();
+    assert_eq!(worker_ids, vec![0, 1, 2, 3]);
 }
 
 #[test]
@@ -1470,6 +1493,14 @@ fn export_desktop_158_post_join_fixtures() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -1506,6 +1537,14 @@ fn export_desktop_158_post_join_fixtures() {
                 authority: UnitAuthority::DefaultAi,
                 build_plans: Vec::new(),
                 update_building: true,
+                missile_retarget: 0.0,
+                missile_target: None,
+                missile_shooter: None,
+                navanax_emp_reload: [0.0; 2],
+                navanax_emp_side: [false; 2],
+                navanax_lasers: Default::default(),
+                missile_source_position: None,
+                missile_source_generation: None,
                 missile_time: 0.0,
                 status_agg: None,
                 drown_progress: 0.0,
@@ -2683,6 +2722,8 @@ fn active_projectile_replay_uses_remaining_position_and_lifetime() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     let payload = encode_projectile_replay_payload(&projectile, Some((100.0, 10.0))).unwrap();
     let mut input = std::io::Cursor::new(payload);
@@ -2951,6 +2992,14 @@ fn dynamic_tiles_survive_a_save_and_load_cycle() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -5003,6 +5052,8 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -5015,6 +5066,7 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -5205,6 +5257,14 @@ fn unit_factory_and_reconstructor_produce_persisted_sharded_units() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -6184,6 +6244,8 @@ fn live_team_plans_are_spliced_into_the_personalized_world_stream() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -6196,6 +6258,7 @@ fn live_team_plans_are_spliced_into_the_personalized_world_stream() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -6379,6 +6442,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -6391,6 +6456,7 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -6452,6 +6518,14 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -6744,12 +6818,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         if spec.unit_type == MACE.unit_type {
             let flame = world.projectiles.iter().next().unwrap();
             assert_eq!(flame.damage, 74.0);
-            // Muzzle offset shifts the flight distance slightly. Audit H12:
-            // the in-range player unit (core+40,+50/+10 geometry puts the
-            // mace 10,10 away from the player) now outranks the core as the
-            // aim target, so flight time reflects the player distance.
-            // Muzzle offset adds ~1.5 ticks of travel on this short hop.
-            assert!((flame.total_ticks - 10f32.hypot(10.0) / 4.2).abs() < 2.0);
+            // A physical flame retains its content lifetime even for a nearby aim.
+            assert!((flame.total_ticks - 13.0).abs() < 0.001);
             assert_eq!(flame.status_effect, 1);
             assert_eq!(flame.status_duration, 300.0);
             assert_eq!(flame.pierce_units, 2);
@@ -6810,13 +6880,12 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
         // launcher volleys; only pierced-building segments still reach it.
         let core_after = *world.game_state.core_health.read();
         if spec.unit_type == MACE.unit_type {
-            // The flame's simulated segment ends at the player, before the
-            // core. A stale target_core flag must not inflict remote damage.
-            assert_eq!(core_after, 6000.0);
+            // Piercing flames continue beyond the player to collide with the core.
+            assert_eq!(core_after, 6000.0 - 2.0 * 74.0);
         } else if spec.unit_type == REIGN.unit_type {
             assert!(
-                core_after > 6000.0 - volley_damage * 2.0,
-                "in-range player unit must absorb reign volleys"
+                core_after <= 6000.0 - volley_damage * 2.0,
+                "piercing reign volleys continue past the player into the core"
             );
         } else {
             assert_eq!(core_after, 6000.0 - volley_damage * 2.0);
@@ -7130,6 +7199,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     assert!(simulate_enemy_point_defense(&world, 9.0));
@@ -7192,6 +7263,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
                 damage_interval: None,
                 damage_timer: 0.0,
                 collided: Vec::new(),
+                aim_x: -1.0,
+                aim_y: -1.0,
             },
         );
     }
@@ -7390,39 +7463,23 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
     );
     *world.game_state.core_health.write() = 6000.0;
     simulate_waves_and_enemies(&world, &connections, 170.0);
+    // EMP mirrors alternate independently: the ready first mount fires once.
     assert_eq!(
         world
             .projectiles
             .iter()
-            .filter(|projectile| projectile.bullet_id == 60)
+            .filter(|p| p.bullet_id == 60)
             .count(),
-        2
+        1
     );
-    for bullet_id in 61..=64 {
-        assert_eq!(
-            world
-                .projectiles
-                .iter()
-                .filter(|projectile| projectile.bullet_id == bullet_id)
-                .count(),
-            1
-        );
-    }
-    assert!(simulate_projectiles(&world, &connections, 5.0));
-    assert_eq!(*world.game_state.core_health.read(), 5892.0);
-    let lasers: Vec<_> = world
-        .projectiles
-        .iter()
-        .filter(|projectile| (61..=64).contains(&projectile.bullet_id))
-        .map(|projectile| *projectile.key())
-        .collect();
-    for id in lasers {
-        world.projectiles.remove(&id);
-    }
-    assert!(simulate_projectiles(&world, &connections, 20.0));
-    assert_eq!(*world.game_state.core_health.read(), 5632.0);
+    assert!(world.projectiles.iter().all(|p| p.bullet_id == 60));
+    // Isolate the single EMP impact; autonomous plasma state/cadence and
+    // interval damage are exercised in combat::parity_regressions.
+    world.enemies.remove(&69);
+    assert!(simulate_projectiles(&world, &connections, 25.0));
+    assert_eq!(*world.game_state.core_health.read(), 5870.0);
     let emp_target = world.players.get(&2_700_200).unwrap();
-    assert_eq!(emp_target.health, 38.0);
+    assert_eq!(emp_target.health, 94.0);
     assert_eq!(emp_target.status_effect, 10);
     assert_eq!(emp_target.status_duration, 480.0);
     drop(emp_target);
@@ -7881,6 +7938,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     assert!(simulate_projectiles(&world, &connections, 20.0));
@@ -7953,6 +8012,8 @@ fn enemy_roles_apply_suicide_orbits_support_and_armor() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     let mut shockwave_power = std::collections::HashMap::new();
@@ -8033,6 +8094,8 @@ fn navanax_suppression_blocks_allied_healing() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -8045,6 +8108,7 @@ fn navanax_suppression_blocks_allied_healing() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -8107,6 +8171,14 @@ fn navanax_suppression_blocks_allied_healing() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -8206,6 +8278,8 @@ fn emp_bullet_heals_boosts_and_strikes_power_buildings() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -8218,6 +8292,7 @@ fn emp_bullet_heals_boosts_and_strikes_power_buildings() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -8348,6 +8423,8 @@ fn ground_enemies_damage_and_remove_route_buildings() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -8360,6 +8437,7 @@ fn ground_enemies_damage_and_remove_route_buildings() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -8476,6 +8554,14 @@ fn ground_enemies_damage_and_remove_route_buildings() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -8565,10 +8651,7 @@ fn ground_enemies_damage_and_remove_route_buildings() {
     assert!(health_updates.is_empty());
     assert_eq!(world.projectiles.len(), 2);
     assert!(simulate_projectiles(&world, &DashMap::new(), 26.0));
-    assert!(!world
-        .projectiles
-        .iter()
-        .any(|projectile| { projectile.enemy_target_position == Some(hit_pos) }));
+    // Other shots may continue ballistically beyond the demolished aim point.
     let frame = encode_build_destroyed_frame(hit_pos).unwrap();
     let packet = read_packet(std::io::Cursor::new(&frame[2..])).unwrap();
     assert_eq!(packet[0], BUILD_DESTROYED_PACKET_ID);
@@ -8766,6 +8849,8 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -8778,6 +8863,7 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -8890,6 +8976,14 @@ fn power_turrets_require_energy_and_meltdown_damage_is_continuous() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -9113,6 +9207,8 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -9125,6 +9221,7 @@ fn logistics_and_alpha_weapon_are_authoritative() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -9293,6 +9390,14 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -9676,6 +9781,14 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -9750,6 +9863,14 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -10106,6 +10227,14 @@ fn logistics_and_alpha_weapon_are_authoritative() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -10814,6 +10943,8 @@ fn legacy_weapons_test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -10826,6 +10957,7 @@ fn legacy_weapons_test_world() -> (DynamicWorld, DashMap<i32, PendingConnection>
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -10890,6 +11022,14 @@ fn legacy_weapons_make_enemy(id: i32, spec: EnemySpec, x: f32, y: f32, health: f
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -12063,6 +12203,14 @@ fn unit_control_requires_friendly_alive_ai_unit_and_possession_rule() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -13431,6 +13579,8 @@ fn pvp_shot_damages_enemy_core_not_own() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     world.projectiles.insert(
         4_200_001,
@@ -13574,6 +13724,8 @@ fn pvp_projectiles_damage_players_of_other_teams_only() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     assert!(simulate_pvp_player_damage(&world, &connections));
@@ -13618,6 +13770,8 @@ fn pvp_projectiles_damage_players_of_other_teams_only() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     assert!(!simulate_pvp_player_damage(&world, &connections));
@@ -14017,6 +14171,12 @@ fn legacy_units_fire_authoritative_projectiles_without_instant_damage() {
             .projectiles
             .iter()
             .map(|entry| entry.value().clone())
+            .chain(
+                world
+                    .pending_projectiles
+                    .iter()
+                    .map(|entry| entry.projectile.clone()),
+            )
             .collect();
         for (bullet_id, count, damage) in *expected {
             let hits: Vec<_> = projectiles
@@ -14037,6 +14197,7 @@ fn legacy_units_fire_authoritative_projectiles_without_instant_damage() {
         }
         world.enemies.clear();
         world.projectiles.clear();
+        world.pending_projectiles.clear();
     }
 
     // Status effects ride on the projectiles (tsv status_id -> server id).
@@ -14160,6 +14321,14 @@ fn legacy_units_allied_volleys_match_official_tables() {
         authority: UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
         missile_time: 0.0,
         status_agg: None,
         drown_progress: 0.0,
@@ -14374,6 +14543,14 @@ fn legacy_heal_bolts_repair_allied_buildings_and_quad_splash_heals_allies() {
             authority: UnitAuthority::DefaultAi,
             build_plans: Vec::new(),
             update_building: true,
+            missile_retarget: 0.0,
+            missile_target: None,
+            missile_shooter: None,
+            navanax_emp_reload: [0.0; 2],
+            navanax_emp_side: [false; 2],
+            navanax_lasers: Default::default(),
+            missile_source_position: None,
+            missile_source_generation: None,
             missile_time: 0.0,
             status_agg: None,
             drown_progress: 0.0,
@@ -14603,6 +14780,8 @@ fn oct_force_field_absorbs_damage_and_regenerates() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     // An allied bullet expiring inside the 140 radius is absorbed by the
     // area shield: the projectile is consumed and the field loses 9 hp.
@@ -14783,6 +14962,8 @@ fn allied_sap_lifesteal_heals_the_shooter() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     // spiroct-weapon: 23 damage * sapStrength 0.5 = 11.5 healed to the
     // allied shooter; the enemy dagger takes the full 23.
@@ -14857,6 +15038,8 @@ fn sap_lifesteal_skips_dead_players_and_caps_heal_by_target_health() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     // Target marked dead mid-flight: the beam expires without a collision
     // and the shooter never heals.
@@ -14916,7 +15099,7 @@ fn scepter_burst_shot_delay_spaces_impacts_by_four_ticks() {
         spawn_allied_unit_projectile(
             &world,
             &connections,
-            0,
+            -1,
             3_003_000,
             None,
             SCEPTER_BOLT,
@@ -14933,8 +15116,15 @@ fn scepter_burst_shot_delay_spaces_impacts_by_four_ticks() {
         .map(|projectile| projectile.total_ticks)
         .collect();
     lifetimes.sort_unstable_by(f32::total_cmp);
-    // 100 / 8 speed = 12.5 flight + 0/4/8 shot delay.
-    assert_eq!(lifetimes, vec![12.5, 16.5, 20.5]);
+    // Only the first shot is live; the others wait for creation at4/8ticks.
+    assert_eq!(lifetimes, vec![27.0]);
+    let mut delays: Vec<_> = world
+        .pending_projectiles
+        .iter()
+        .map(|p| p.remaining_ticks)
+        .collect();
+    delays.sort_unstable_by(f32::total_cmp);
+    assert_eq!(delays, vec![4.0, 8.0]);
     // The burst impacts are spaced 4 ticks apart: each step hits exactly
     // one 70-damage bolt.
     assert!(simulate_projectiles(&world, &connections, 12.5));
@@ -14986,6 +15176,8 @@ fn toxopid_cannon_spawns_nine_fragments() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     // Enemy toxopid-cannon: on expiry it spawns the official 9 fragments
     // (bullet 29, 30 damage, splash 40/70, sapped 600).
@@ -15113,6 +15305,8 @@ fn corvus_beam_heals_allied_building_twenty_five_percent() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     // An allied beam reaching an allied damaged wall heals 25% of max.
     world.projectiles.insert(4_020_001, beam(wall_position, 1));
@@ -15286,6 +15480,8 @@ fn atrax_ignores_burning_and_melting_statuses() {
         damage_interval: None,
         damage_timer: 0.0,
         collided: Vec::new(),
+        aim_x: -1.0,
+        aim_y: -1.0,
     };
     // Burning (1) direct hit: the atrax takes the damage but never the
     // status; the control dagger receives both the hit and the status.
@@ -15388,6 +15584,8 @@ fn item_bridge_transfers_across_linked_endpoints() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -15400,6 +15598,7 @@ fn item_bridge_transfers_across_linked_endpoints() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -15594,6 +15793,8 @@ fn client_command_dispatch_votekick_requires_players() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -15606,6 +15807,7 @@ fn client_command_dispatch_votekick_requires_players() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -16034,6 +16236,8 @@ fn pvp_projectiles_destroy_the_enemy_team_core() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     assert!(simulate_pvp_player_damage(&world, &connections));
@@ -19860,6 +20064,8 @@ fn ulocate_ore_finds_overlay_with_official_158_content_ids() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -19872,6 +20078,7 @@ fn ulocate_ore_finds_overlay_with_official_158_content_ids() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -20045,6 +20252,8 @@ fn enemy_projectile_collides_with_building_in_flight() {
         unit_group_order: parking_lot::Mutex::new(Vec::new()),
         damaged_window: parking_lot::Mutex::new(Vec::new()),
         projectiles: DashMap::new(),
+        pending_projectiles: Default::default(),
+        weapon_aims: Default::default(),
         next_projectile_id: AtomicI32::new(4_000_000),
         overdrive_boosts: DashMap::new(),
         heal_suppression: DashMap::new(),
@@ -20057,6 +20266,7 @@ fn enemy_projectile_collides_with_building_in_flight() {
         ai_rebuild_state: Default::default(),
         tile_footprint: DashMap::new(),
         navigation_revision: AtomicU64::new(0),
+        toward_navigation: Default::default(),
         ground_navigation: parking_lot::Mutex::new(None),
         leg_navigation: parking_lot::Mutex::new(None),
         naval_navigation: parking_lot::Mutex::new(None),
@@ -20140,6 +20350,8 @@ fn enemy_projectile_collides_with_building_in_flight() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     let connections = DashMap::new();
@@ -20528,6 +20740,8 @@ fn corvus_laser_hits_once_over_full_lifetime() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     // Step past the expiry in several ticks: exactly ONE application lands.
@@ -20593,6 +20807,8 @@ fn quell_launcher_routes_missile_insert_through_frag_carrier() {
             damage_interval: None,
             damage_timer: 0.0,
             collided: Vec::new(),
+            aim_x: -1.0,
+            aim_y: -1.0,
         },
     );
     assert!(simulate_projectiles(&world, &connections, 1.0));
@@ -20607,7 +20823,7 @@ fn quell_launcher_routes_missile_insert_through_frag_carrier() {
 }
 
 #[test]
-fn scathe_launcher_expiry_inserts_missile_with_no_splash() {
+fn scathe_launcher_fire_inserts_missile_with_no_splash() {
     // Blocks.java v159.7 (economy/erekir.rs module comment): the scathe
     // turret launchers 186/189/192 are BulletType(0f, 0f) payloads carrying
     // spawnUnit scathe-missile/-phase/-surge -- NO direct and NO splash
@@ -20625,58 +20841,37 @@ fn scathe_launcher_expiry_inserts_missile_with_no_splash() {
     assert_eq!(spawn_unit_bullet_payload(193), None);
     assert_eq!(spawn_unit_bullet_payload(194), None);
 
-    // End-to-end: an expired scathe launcher inserts exactly ONE
-    // scathe-missile at its impact point and deals NO damage on expiry
+    // End-to-end: an fired scathe launcher inserts exactly ONE
+    // scathe-missile at its muzzle and deals NO damage on expiry
     // (vanilla launcher BulletType(0f, 0f); see economy/erekir.rs ammo spec).
     let (world, connections, core_x, core_y) = legacy_weapons_test_world();
     let impact_x = core_x + 30.0;
     let impact_y = core_y;
     let before = *world.game_state.core_health.read();
-    world.projectiles.insert(
-        4_023_002,
-        Projectile {
-            target_id: -1,
-            shooter_id: 0,
-            team: 2,
-            bullet_id: 186,
-            damage: 0.0,
-            splash_damage: 0.0,
-            splash_radius: 0.0,
-            status_effect: -1,
-            status_duration: 0.0,
-            pierce_units: 0,
-            pierce_buildings: 0,
-            spawn_reign_frags: false,
-            homing_range: 0.0,
-            homing_power: 0.0,
-            homing_delay: -1.0,
-            collides_air: true,
-            collides_ground: true,
-            heals: false,
-            enemy_target_position: None,
-            enemy_target_core: false,
-            apply_direct_on_impact: false,
-            armor_multiplier: 1.0,
-            remaining_ticks: 1.0,
-            total_ticks: 1.0,
-            source_x: core_x - 200.0,
-            source_y: core_y - 200.0,
-            target_x: impact_x,
-            target_y: impact_y,
-            lifetime_scale: 1.0,
-            source_position: None,
-            damage_interval: None,
-            damage_timer: 0.0,
-            collided: Vec::new(),
-        },
+    let source_x = core_x - 200.0;
+    let source_y = core_y - 200.0;
+    spawn_projectile_for_team(
+        &world,
+        &connections,
+        Some(123),
+        -1,
+        186,
+        source_x,
+        source_y,
+        impact_x,
+        impact_y,
+        0.0,
+        1.0,
+        300.0,
+        1.0,
+        2,
     );
-    assert!(simulate_projectiles(&world, &connections, 1.0));
-    assert!(world.projectiles.get(&4_023_002).is_none());
+    assert!(world.projectiles.is_empty());
     // No launcher splash: the sharded core inside the old radius is untouched.
     let after = *world.game_state.core_health.read();
     assert!((before - after).abs() < 0.001);
     assert!(!world.players.iter().any(|player| player.dead));
-    // Exactly one missile of the right type at the impact point.
+    // Exactly one missile of the right type at the muzzle.
     let missiles: Vec<_> = world
         .enemies
         .iter()
@@ -20684,8 +20879,8 @@ fn scathe_launcher_expiry_inserts_missile_with_no_splash() {
         .map(|entry| (entry.x, entry.y))
         .collect();
     assert_eq!(missiles.len(), 1);
-    assert!((missiles[0].0 - impact_x).abs() < 0.01);
-    assert!((missiles[0].1 - impact_y).abs() < 0.01);
+    assert!((missiles[0].0 - source_x).abs() < 0.01);
+    assert!((missiles[0].1 - source_y).abs() < 0.01);
     // No insertion for non-scathe payloads: phase/surge/surge-split never
     // join through this expired shot.
     assert!(!world.enemies.iter().any(|entry| entry.unit_type == 66));
@@ -21118,3 +21313,6 @@ fn astra_review_checkpoint_keeps_factory_output_and_payload_order() {
     }
     std::fs::remove_file(path).unwrap();
 }
+
+#[path = "cache_repair_regressions.rs"]
+mod cache_repair_regressions;

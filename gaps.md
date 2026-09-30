@@ -73,12 +73,12 @@ full vanilla parity. The target oracle remains the pinned 160.5 JAR.
 
 | Area and owner | Remaining behaviour or required evidence |
 |---|---|
-| Projectiles — `src/network/combat/projectiles.rs` | Full trajectories beyond the aim point, homing, and nonphysical beam/rail impacts remain approximate. Close with matching target-JAR trajectories and collision scenarios. |
+| Projectiles — `src/network/combat/projectiles.rs` | Physical unit trajectories now retain content lifetime and emitted spread angle; homing uses original aim coordinates. Scheduled bursts re-evaluate live shooter position/aim, and missile guidance retains owner identity with content delay/turn/acceleration metadata. Deterministic spread sampling, inherited shooter velocity and nonphysical beam/rail impacts still require matching live target-JAR scenarios. |
 | Navigation — `src/network/combat/enemy.rs` | Compare the first pathfinding step with Java Pathfinder on a live `Vars.world`; coordinate conversion alone does not validate the path. |
-| Weapons — `src/network/simulation/units.rs`, `waves.rs` | Verify per-mount alternation, phase, rotation and delays against the JAR, plus firing while mining/building across the order matrix. |
+| Weapons — `src/network/simulation/units.rs`, `waves.rs` | Navanax EMP alternation and independent plasma-mount cadence have initialized-JAR trace regressions. Other units’ per-mount alternation/rotation and firing while mining/building across the order matrix still need matching JAR evidence. |
 | Unit death — `src/network/combat/damage.rs` | Stack flammability, fire, carried charge, passengers and drowning still need the complete vanilla lifecycle. |
 | Factory configuration — `src/network/wire/tile_config.rs` | Banned-plan deselection needs persistence and observation beyond 360 ticks and a BlockSnapshot. |
-| Payload production — `src/network/economy/factories.rs`, `payload.rs` | Complete retained-payload, rally and MSAV cycles, JAR rereading of `UnitPayload.dump`, and fractional liquid-supply/input traces beyond 360 ticks remain unverified. |
+| Payload production — `src/network/economy/factories.rs`, `payload.rs` | Assembler loaded/in-transit payloads and progress are not supported by MSAV export/import: `src/engine/save_io.rs` has no UnitAssembler tail reader/writer. The supported JSON state and 480-tick assembler snapshot continuity have dedicated regressions. Broader retained-payload/rally cycles, JAR rereading of `UnitPayload.dump`, and other fractional liquid-supply/input traces remain unverified. |
 | Possession — `src/network/wire/unit_control.rs` | Verify replacing LogicAI with player possession through a real client RPC. |
 | Support units — `src/network/units/mining.rs`, `simulation/units.rs` | Passive abilities under every controller and ore-selection behaviour still need the full matrix. |
 | Live rules — `src/network/units/rules.rs`, `wire/bootstrap.rs` | Complete NetworkIO world loading and the live-session rules matrix remain unverified; typed Rules decoding and TCP join/rejoin cover narrower contracts. |

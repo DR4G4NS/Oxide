@@ -77,7 +77,6 @@ pub(crate) fn invalidate_navigation_for_block(world: &DynamicWorld, block: i16) 
 #[derive(Clone, Copy)]
 pub(crate) enum AlliedWeaponFire {
     Projectile(EnemyProjectileVolley),
-    NavanaxLasers(f32),
 }
 
 pub(crate) fn generic_unit_weapon_volley(
@@ -95,11 +94,9 @@ pub(crate) fn generic_unit_weapon_volley(
     }
 
     let (direct_damage, splash_damage, splash_radius) = match weapon.bullet_id {
-        // SpawnUnitBulletType launchers (BulletType.create JAR 158.1): these
-        // bullets never become bullet entities and never reach hit(), so they
-        // carry NO terminal splash of their own. The spawnUnit MissileUnitType
-        // is inserted at impact (simulate_projectiles::spawn_projectile_unit)
-        // and the payload damage lives in the spawned missile's own weapon.
+        // Spawn-unit launchers have no terminal splash of their own. Direct
+        // carriers spawn at fire; Quell103 delegates to its104 fragment later.
+        // Damage belongs to the spawned missile's own death weapon.
         92 | 103 | 106 => (weapon.damage, 0.0, 0.0),
         _ => (
             weapon.damage,
@@ -190,6 +187,9 @@ pub(crate) fn accumulate_wave_weapon_timers(unit: &mut EnemyUnit, delta_ticks: f
 
 fn accumulate_idle_weapon_timers(unit: &mut EnemyUnit, delta_ticks: f32) {
     let delta = effective_unit_reload_delta(unit, delta_ticks);
+    if unit.unit_type == 34 {
+        collect_navanax_emp_mounts(unit, delta, false);
+    }
     let weapons = crate::game::content::unit_weapons(unit.unit_type);
     if weapons.is_empty() {
         unit.attack_reload =
@@ -254,7 +254,7 @@ pub(crate) fn collect_allied_weapon_fire_tick(
 fn collect_allied_weapon_fire_n(
     unit: &mut EnemyUnit,
     delta_ticks: f32,
-    target_distance: f32,
+    _target_distance: f32,
     max_bursts: usize,
 ) -> Option<Vec<AlliedWeaponFire>> {
     let damage_multiplier = effective_unit_damage_multiplier(unit);
@@ -422,23 +422,9 @@ fn collect_allied_weapon_fire_n(
             }
         }
         34 => {
-            unit.attack_reload += delta_ticks;
             unit.secondary_attack_reload += delta_ticks;
-            drain_weapon_timer_n(
-                &mut unit.attack_reload,
-                130.0,
-                AlliedWeaponFire::Projectile(enemy_projectile_volley(34).unwrap()),
-                &mut fire,
-                max_bursts,
-            );
-            if target_distance <= 90.0 {
-                drain_weapon_timer_n(
-                    &mut unit.secondary_attack_reload,
-                    170.0,
-                    AlliedWeaponFire::NavanaxLasers(damage_multiplier),
-                    &mut fire,
-                    max_bursts,
-                );
+            for volley in collect_navanax_emp_mounts(unit, delta_ticks, can_shoot) {
+                fire.push(AlliedWeaponFire::Projectile(volley));
             }
         }
         _ => {
@@ -470,9 +456,8 @@ fn collect_allied_weapon_fire_n(
         }
     }
     for shot in &mut fire {
-        if let AlliedWeaponFire::Projectile(volley) = shot {
-            *volley = scaled_projectile_volley(*volley, damage_multiplier);
-        }
+        let AlliedWeaponFire::Projectile(volley) = shot;
+        *volley = scaled_projectile_volley(*volley, damage_multiplier);
     }
     if !can_shoot {
         fire.clear();
@@ -491,22 +476,14 @@ pub(crate) fn collect_manual_weapon_fire(
     if unit.unit_type != 34 {
         return collect_allied_weapon_fire_tick(unit, delta_ticks, target_distance);
     }
-    let volley = scaled_projectile_volley(
-        enemy_projectile_volley(34).unwrap(),
-        effective_unit_damage_multiplier(unit),
-    );
-    let can_shoot = unit_can_shoot(unit);
-    unit.attack_reload += effective_unit_reload_delta(unit, delta_ticks);
     let mut fire = Vec::new();
-    drain_weapon_timer_n(
-        &mut unit.attack_reload,
-        65.0,
-        AlliedWeaponFire::Projectile(volley),
-        &mut fire,
-        1,
-    );
-    if !can_shoot {
-        fire.clear();
+    let multiplier = effective_unit_damage_multiplier(unit);
+    let delta = effective_unit_reload_delta(unit, delta_ticks);
+    let can_shoot = unit_can_shoot(unit);
+    for volley in collect_navanax_emp_mounts(unit, delta, can_shoot) {
+        fire.push(AlliedWeaponFire::Projectile(scaled_projectile_volley(
+            volley, multiplier,
+        )));
     }
     Some(fire)
 }
@@ -579,20 +556,6 @@ pub(crate) fn spawn_weapon_fire_for_team(
                     }
                 }
             }
-            AlliedWeaponFire::NavanaxLasers(multiplier) => spawn_navanax_lasers(
-                world,
-                out,
-                team,
-                *multiplier,
-                shooter_id,
-                target_id,
-                target_position,
-                false,
-                source_x,
-                source_y,
-                target_x,
-                target_y,
-            ),
         }
     }
 }
@@ -800,4 +763,286 @@ pub(crate) fn unit_hit_size(unit_type: i16) -> f32 {
         .and_then(|index| SIZES.get(index))
         .copied()
         .unwrap_or(8.0)
+}
+
+/// Initialized 160.5 EMP mounts: two independent 130-tick reloads. Preserve
+/// sequential half-reload side flips (the old side gates the current shot).
+/// Oracle Weapon.update trace: 1/0, 66/1, 132/0, 197/1, 263/0.
+pub(crate) fn collect_navanax_emp_mounts(
+    unit: &mut EnemyUnit,
+    delta: f32,
+    shooting: bool,
+) -> Vec<EnemyProjectileVolley> {
+    let mut shots = Vec::new();
+    for index in 0..2 {
+        let previous = unit.navanax_emp_reload[index];
+        unit.navanax_emp_reload[index] = (previous - delta.max(0.0)).max(0.0);
+        let side = unit.navanax_emp_side[index];
+        let flipped = index == 1;
+        if side == flipped && unit.navanax_emp_reload[index] <= 65.0 && previous > 65.0 {
+            unit.navanax_emp_side[0] = !unit.navanax_emp_side[0];
+            unit.navanax_emp_side[1] = !unit.navanax_emp_side[1];
+        }
+        if shooting && side == flipped && unit.navanax_emp_reload[index] <= 0.0001 {
+            unit.navanax_emp_reload[index] = 130.0;
+            let mut volley = enemy_projectile_volley(34).unwrap();
+            volley.mirrored_mounts = 1;
+            if flipped {
+                volley.mount_offset = -volley.mount_offset;
+            }
+            shots.push(volley);
+        }
+    }
+    shots
+}
+
+/// MissileAI has a forward-flight controller, not GroundAI/CommandAI pursuit.
+/// Velocity integration precedes steering; owner loss leaves the last heading.
+pub(crate) fn simulate_missile_units(
+    world: &DynamicWorld,
+    out: &dyn crate::network::outbound::FrameEmit,
+    delta: f32,
+) -> bool {
+    let missiles: Vec<_> = world
+        .enemies
+        .iter()
+        .filter(|u| u.entity_class == 39)
+        .map(|u| u.clone())
+        .collect();
+    let changed = !missiles.is_empty();
+    for mut missile in missiles {
+        let Some(spec) = crate::game::unit_types::unit_missile_spec(missile.unit_type) else {
+            continue;
+        };
+        missile.missile_time -= delta.max(0.0);
+        if missile.missile_time <= 0.0 {
+            super::kill_enemy(world, out, missile.id);
+            continue;
+        }
+        let aim = if let Some(owner) = missile.missile_shooter {
+            world
+                .enemies
+                .get(&owner)
+                .filter(|u| u.health > 0.0)
+                .map(|u| u.clone())
+                .and_then(|u| current_unit_weapon_aim(world, &u))
+        } else if let Some(position) = missile.missile_source_position {
+            let alive = world.tiles.get(&position).is_some_and(|t| {
+                t.block != 0
+                    && t.health > 0.0
+                    && Some(t.generation) == missile.missile_source_generation
+            }) || (missile.missile_source_generation == Some(u64::MAX)
+                && world
+                    .base_buildings
+                    .get(&position)
+                    .is_some_and(|b| b.health > 0.0));
+            alive
+                .then(|| world.weapon_aims.get(&(true, position)).map(|a| *a))
+                .flatten()
+        } else {
+            None
+        };
+        let unit_type = missile.unit_type;
+        crate::network::units::integrate_unit_velocity_drag(
+            &mut missile,
+            unit_type,
+            delta,
+            world.wave_rules.read().drag_multiplier,
+        );
+        let elapsed = (spec.lifetime - missile.missile_time).max(0.0);
+        if elapsed >= spec.homing_delay {
+            if let Some((x, y)) = aim {
+                let desired = (y - missile.y).atan2(x - missile.x).to_degrees();
+                missile.rotation = crate::network::units::unit_move_toward_angle(
+                    missile.rotation,
+                    desired,
+                    spec.rotate_speed * delta,
+                );
+            }
+        }
+        let acceleration = if spec.acceleration_time > 0.0 {
+            (elapsed / spec.acceleration_time).min(1.0).powi(2)
+        } else {
+            1.0
+        };
+        let speed = effective_unit_speed(&missile) * acceleration;
+        let radians = missile.rotation.to_radians();
+        crate::network::units::logic_move_at(
+            &mut missile,
+            radians.cos() * speed,
+            radians.sin() * speed,
+            delta,
+        );
+        let position = ((super::world_to_tile(missile.x)) << 16)
+            | (super::world_to_tile(missile.y) as u16 as i32);
+        let aimed_position = aim
+            .map(|(x, y)| (super::world_to_tile(x) << 16) | (super::world_to_tile(y) as u16 as i32))
+            .map(|p| dynamic_at(world, p).map(|b| b.position).unwrap_or(p));
+        let hittable = |block, team, center| {
+            spec.target_ground
+                && team != missile.team
+                && (!crate::game::content::block_under_bullets(block)
+                    || aimed_position == Some(center))
+        };
+        missile.missile_retarget -= delta;
+        if missile.missile_retarget <= 0.0 {
+            missile.missile_target =
+                missile_proximity_target(world, &missile, spec, aimed_position);
+            missile.missile_retarget = 4.0;
+        }
+        let proximity = missile
+            .missile_target
+            .and_then(|target| {
+                let size = match target {
+                    ProjectileHit::Unit(id) => world
+                        .enemies
+                        .get(&id)
+                        .map(|u| crate::game::content::unit_movement(u.unit_type).hit_size),
+                    ProjectileHit::Player(id) => world
+                        .players
+                        .get(&id)
+                        .map(|p| (p.team, p.x, p.y))
+                        .map(|(team, x, y)| {
+                            crate::game::content::unit_movement(
+                                crate::network::wire::unit_control::player_core_unit_content_id(
+                                    world, team, x, y,
+                                ),
+                            )
+                            .hit_size
+                        }),
+                    ProjectileHit::Building(p) | ProjectileHit::Core(_, p) => dynamic_at(world, p)
+                        .map(|b| f32::from(crate::game::content::block_size(b.block)) * 8.0)
+                        .or_else(|| {
+                            super::base_building_at(world, p)
+                                .map(|b| f32::from(crate::game::content::block_size(b.block)) * 8.0)
+                        }),
+                }
+                .unwrap_or(0.0);
+                weapon_target_position(world, target, missile.team).map(|(x, y)| {
+                    (x - missile.x).hypot(y - missile.y) <= spec.weapon_range + size / 2.0
+                })
+            })
+            .unwrap_or(false)
+            && unit_can_shoot(&missile);
+        let contact = dynamic_at(world, position)
+            .is_some_and(|b| b.block != 0 && hittable(b.block, b.team, b.position))
+            || super::base_building_at(world, position)
+                .is_some_and(|b| hittable(b.block, b.team, b.position));
+        let id = missile.id;
+        world.enemies.insert(id, missile);
+        if contact || proximity {
+            super::kill_enemy(world, out, id);
+        }
+    }
+    changed
+}
+
+pub(crate) fn missile_proximity_target(
+    world: &DynamicWorld,
+    missile: &EnemyUnit,
+    spec: crate::game::unit_types::MissileSpec,
+    aimed: Option<i32>,
+) -> Option<ProjectileHit> {
+    let mut candidates = Vec::new();
+    for unit in world.enemies.iter() {
+        let movement = crate::game::content::unit_movement(unit.unit_type);
+        let air = movement.flying || unit.elevation >= 0.09;
+        if unit.team == 0
+            || unit.team == missile.team
+            || unit.health <= 0.0
+            || unit.entity_class == 39
+            || (air && !spec.target_air)
+            || (!air && !spec.target_ground)
+        {
+            continue;
+        }
+        let dx = unit.x - missile.x;
+        let dy = unit.y - missile.y;
+        // Strict UnitTree rectangle overlap precedes the adjusted circle test.
+        let broadphase = spec.target_range + movement.hit_size / 2.0;
+        if dx.abs() >= broadphase || dy.abs() >= broadphase {
+            continue;
+        }
+        let distance = dx.powi(2) + dy.powi(2) - movement.hit_size.powi(2);
+        if distance < spec.target_range.powi(2) {
+            candidates.push((
+                crate::game::unit_types::unit_target_priority(unit.unit_type),
+                distance,
+                ProjectileHit::Unit(unit.id),
+            ));
+        }
+    }
+    if spec.target_air {
+        for player in world.players.iter() {
+            if player.team == 0
+                || player.team == missile.team
+                || player.dead
+                || possessed_unit_id(world, *player.key()).is_some()
+            {
+                continue;
+            }
+            let unit_type = crate::network::wire::unit_control::player_core_unit_content_id(
+                world,
+                player.team,
+                player.x,
+                player.y,
+            );
+            let size = crate::game::content::unit_movement(unit_type).hit_size;
+            let dx = player.x - missile.x;
+            let dy = player.y - missile.y;
+            if dx.abs() >= spec.target_range + size / 2.0
+                || dy.abs() >= spec.target_range + size / 2.0
+            {
+                continue;
+            }
+            let distance = dx.powi(2) + dy.powi(2) - size.powi(2);
+            if distance < spec.target_range.powi(2) {
+                candidates.push((
+                    crate::game::unit_types::unit_target_priority(unit_type),
+                    distance,
+                    ProjectileHit::Player(*player.key()),
+                ));
+            }
+        }
+    }
+    if let Some((_, _, target)) = candidates
+        .into_iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)))
+    {
+        return Some(target);
+    }
+    if !spec.target_ground {
+        return None;
+    }
+    let mut buildings = Vec::new();
+    let mut candidate = |position, block, team, health| {
+        if team == missile.team
+            || health <= 0.0
+            || block == 0
+            || (crate::game::content::block_under_bullets(block) && aimed != Some(position))
+        {
+            return;
+        }
+        let x = (position >> 16) as i16 as f32 * 8.0;
+        let y = position as i16 as f32 * 8.0;
+        let distance = (x - missile.x).hypot(y - missile.y)
+            - f32::from(crate::game::content::block_size(block)) * 4.0;
+        if distance < spec.target_range {
+            buildings.push((
+                building_target_priority(block),
+                distance,
+                ProjectileHit::Building(position),
+            ));
+        }
+    };
+    for b in world.tiles.iter() {
+        candidate(b.position, b.block, b.team, b.health);
+    }
+    for b in world.base_buildings.iter() {
+        candidate(b.position, b.block, b.team, b.health);
+    }
+    buildings
+        .into_iter()
+        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)))
+        .map(|(_, _, t)| t)
 }
