@@ -1,0 +1,13 @@
+{
+"turrets": [
+{"name": "afflict", "kind": "power", "bulletId": 183, "damage": 180.0, "speed": 5.0, "splashDamage": 0.0, "splashRadius": -1.0, "reload": 50.0, "range": 368.0, "heatReq": 20.0}
+,
+{"name": "lustre", "kind": "continuous", "bulletId": 185, "damage": 157.5, "range": 250.0, "reload": 10.0}
+,
+{"name": "sublimate", "kind": "continuous-liquid", "liquids": [{"liquid": "ozone", "bulletId": 170, "damage": 45.0, "continuous": true}, {"liquid": "cyanogen", "bulletId": 171, "damage": 97.5, "continuous": true}], "range": 130.0, "reload": 10.0}
+,
+{"name": "malign", "kind": "power", "bulletId": 199, "damage": 70.0, "speed": 8.0, "splashDamage": 0.0, "splashRadius": 34.0, "reload": 3.5, "range": 410.0, "heatReq": 144.0}
+,
+{"name": "smite", "kind": "unknown"}
+]
+}

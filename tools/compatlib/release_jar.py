@@ -5,12 +5,11 @@ validation.  The latter is deterministic and hermetic, which lets
 ``compat_selftest.py`` exercise all failure modes without downloading the
 82-MB current target on every run.
 
-The values in ``compat/current.toml`` are authoritative.  GitHub metadata is
-used to validate the exact source tag/commit; the binary is discovered from
-the official itch.io Linux distribution because its embedded desktop JAR is
-the target artifact.  A downloaded or cached file is accepted only after its
-size, SHA-256, ZIP structure, ``version.properties`` and build have all been
-checked.
+The values in ``compat/current.toml`` are authoritative. GitHub metadata is
+used to validate the exact source tag/commit and to select the official
+``Mindustry.jar`` asset from that same immutable release. A downloaded or
+cached file is accepted only after its size, SHA-256, ZIP structure,
+``version.properties`` and build have all been checked.
 """
 
 from __future__ import annotations
@@ -506,8 +505,8 @@ def select_release_asset(
 ) -> ReleaseAsset:
     """Select exactly one official desktop JAR from release API metadata.
 
-    GitHub's v159.7 release names this desktop artifact ``Mindustry.jar`` while
-    local distributions may rename it to ``159.7.jar``.  The small alias set
+    GitHub releases name this desktop artifact ``Mindustry.jar`` while local
+    caches may rename it to the build number. The small alias set
     accepts either official naming convention, and any second matching asset
     is an error rather than an arbitrary choice.
     """
@@ -844,16 +843,13 @@ def resolve_current_jar(
     tag_metadata: Mapping[str, Any] | None = None,
     release_metadata: Mapping[str, Any] | None = None,
 ) -> Path:
-    """Return a verified current-target JAR, using the itch Linux distribution.
+    """Return the verified JAR from the exact pinned GitHub release.
 
-    GitHub remains the immutable source authority: the tag is resolved on
-    every invocation and must point to ``current.toml``'s commit.  The binary
-    is intentionally resolved from itch.io because the GitHub release asset
-    named ``Mindustry.jar`` is not byte-identical to the target profile.  The
-    separate ``tag_metadata`` seam can inject a GitHub tag response in
-    hermetic tests, but cannot bypass commit validation.  There is deliberately
-    no release-asset override: the current-target binary source is always the
-    itch.io Linux distribution.
+    The tag is resolved on every invocation and must point to
+    ``current.toml``'s commit. The separate metadata seams support hermetic
+    tests but cannot bypass commit or artifact identity validation. Unlike the
+    itch.io landing page, the tag-specific release URL cannot silently advance
+    to a newer build.
     """
 
     target = target_from_file(Path(current_path))
@@ -866,14 +862,12 @@ def resolve_current_jar(
         fetch_tag_commit(target, repository=repository, opener=opener)
     else:
         validate_tag_commit_metadata(target, tag_metadata, repository=repository, opener=opener)
-    # The GitHub release must exist and advertise exactly one official desktop
-    # asset, but its bytes are intentionally not used (the itch Linux bundle
-    # contains the target desktop JAR).  Do not apply the target JAR size check
-    # here: the known GitHub asset is a different packaging artifact.
+    # The exact release must advertise one official desktop asset. Its declared
+    # size is checked before downloading so a packaging change fails early.
     release_metadata = release_metadata or fetch_release_metadata(
         target, repository=repository, opener=opener
     )
-    select_release_asset(release_metadata, target, check_size=False)
+    asset = select_release_asset(release_metadata, target)
     if destination.exists():
         try:
             verify_current_jar(destination, target)
@@ -883,18 +877,11 @@ def resolve_current_jar(
             # exact release below; no alternate release/build is considered.
             pass
 
-    itch = resolve_itch_download(
-        target,
-        opener=opener,
-        landing_html=itch_landing_html,
-        file_url=itch_file_url,
-    )
-    archive_path = output_dir / f".{target.jar_filename}.itch.zip"
-    try:
-        download_itch_archive(itch.archive_url, archive_path, opener=opener)
-        extract_itch_desktop_jar(archive_path, destination, target)
-    finally:
-        archive_path.unlink(missing_ok=True)
+    # Retain the legacy keyword arguments for callers during the migration,
+    # but never use mutable itch.io state for a pinned compatibility target.
+    del itch_landing_html, itch_file_url
+    download_asset(asset, destination, opener=opener)
+    verify_current_jar(destination, target)
     return destination
 
 

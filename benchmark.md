@@ -15,7 +15,7 @@ Reproducible measurement of the same harness against:
 | scales | 10, 100, 500 players |
 | raw artifacts | `target/bench-workload-full/comparison.json` (local, untracked) |
 
-Table numbers match that JSON (join_ms, rss_mb, construct rx, UPS/FPS). They were not rewritten by hand.
+The tables below record that run (join_ms, rss_mb, construct rx, UPS/FPS). The raw JSON is a local, untracked artifact; a new run produces new measurements, not a verification of those historical bytes.
 
 ## How to read this (fidelity)
 
@@ -45,8 +45,8 @@ After the tools were reorganized, a shorter 10-player run (12 s) reproduced the 
 | Scale | Winner (memory) | Winner (join) | Simulation under load |
 |------:|-----------------|---------------|------------------------|
 | 10 | **Rust** (~15 MB vs ~280 MB) | **Rust** | Both hold ~60 UPS/FPS |
-| 100 | **Rust** (~24 MB vs ~365 MB) | **Rust** | Rust 60 UPS; Java ~57 FPS |
-| 500 | **Rust** (~80–100 MB vs ~476–513 MB) | **Rust** (~6× faster avg join) | Rust ~33 UPS; **Java collapses to 1 FPS** |
+| 100 | **Rust** (avg 23.4 MB vs 347.4 MB) | **Rust** | Rust 60 UPS; Java ~57 FPS |
+| 500 | **Rust** (avg 65.2 MB vs 430.9 MB) | **Rust** (~6× faster avg join) | Rust ~33 UPS; **Java collapses to 1 FPS** |
 
 ## Summary table
 

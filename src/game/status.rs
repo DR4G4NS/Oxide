@@ -1,8 +1,10 @@
 //! P0-06/07/08 — StatusEntry runtime, vanilla transitions, and tick aggregate.
 //!
-//! Mirrors Mindustry 158.1 `StatusEntry` + `StatusComp.apply/update` without
-//! porting the Java object graph. Insertion order is authoritative. Legacy
-//! `(effect, duration)` JSON arrays still deserialize.
+//! Mirrors `StatusEntry` + `UnitEntity.apply` without porting the Java object
+//! graph. Insertion order is authoritative. Legacy `(effect, duration)` JSON
+//! arrays still deserialize. Transition table verified against the 159.7 JAR:
+//! burning/melting x tarred affinities, wet x shocked, freezing x blasted,
+//! and `handleOpposite` conversions (StatusEffects$1/$2/$6/$8/$12 lambdas).
 
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::ser::SerializeStruct;
@@ -410,11 +412,13 @@ pub fn apply_status_transition(
             damage: 0.0,
         }),
         (left, right) if are_opposites(left, right) => {
+            // lambda$handleOpposite$2 (159.7): halve by the incoming
+            // duration, and only swap effect + duration once depleted.
+            // StatusEntry.damageTime is intentionally left untouched.
             existing.time -= incoming_time * 0.5;
             if existing.time <= 0.0 {
                 existing.effect = incoming;
                 existing.time = incoming_time;
-                existing.damage_time = 0.0;
             }
             Some(StatusReaction::default())
         }
@@ -632,6 +636,30 @@ mod tests {
         apply_status(&mut statuses, STATUS_SHOCKED, 10.0, false);
         apply_status(&mut statuses, STATUS_BLASTED, 10.0, false);
         assert!(statuses.is_empty());
+    }
+
+    #[test]
+    fn wet_then_burning_extinguishes_and_reignites() {
+        // wet survives a smaller burning dose, halved per handleOpposite.
+        let mut statuses = vec![ActiveStatus::simple(STATUS_WET, 30.0)];
+        apply_status(&mut statuses, STATUS_BURNING, 20.0, false);
+        assert_eq!(statuses[0].effect, STATUS_WET);
+        assert_eq!(statuses[0].time, 20.0);
+        // Depleted wet converts to the incoming effect at full duration.
+        apply_status(&mut statuses, STATUS_BURNING, 40.0, false);
+        assert_eq!(statuses[0].effect, STATUS_BURNING);
+        assert_eq!(statuses[0].time, 40.0);
+        // Reverse order: burning quenched by wet keeps its interval timer.
+        let mut quenched = vec![ActiveStatus {
+            effect: STATUS_BURNING,
+            time: 5.0,
+            damage_time: 3.0,
+            dynamic: None,
+        }];
+        apply_status(&mut quenched, STATUS_WET, 40.0, false);
+        assert_eq!(quenched[0].effect, STATUS_WET);
+        assert_eq!(quenched[0].time, 40.0);
+        assert_eq!(quenched[0].damage_time, 3.0);
     }
 
     #[test]

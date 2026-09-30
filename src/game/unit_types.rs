@@ -1,14 +1,14 @@
 //! Unit content registry (SOL-AUDIT P1: unified UnitTypes registry).
 //!
 //! This module is the single owner of the unit content table for the
-//! 158.1 baseline. The id<->name pairs were dumped from `desktop.jar` 158.1
-//! by enumerating `Vars.content.units()` (69 UnitTypes, including Erekir
+//! 160.5 target. The id<->name pairs were dumped from the pinned desktop JAR
+//! by enumerating `Vars.content.units()` (70 UnitTypes, including Erekir
 //! units and internal missiles) — IDs are never inferred from source order.
 //!
 //! Per ARCHITECTURE.md, domain modules (logic, network/units, save_io)
 //! delegate here instead of keeping their own unit tables.
 
-/// Official v158.1 unit content ids and names (jar dump, 69 entries).
+/// Official v160.5 unit content ids and names (JAR dump, 70 entries).
 pub const UNIT_NAMES: &[(i16, &str)] = &[
     (0, "dagger"),
     (1, "mace"),
@@ -74,37 +74,150 @@ pub const UNIT_NAMES: &[(i16, &str)] = &[
     (61, "block"),
     (62, "manifold"),
     (63, "assembly-drone"),
-    (64, "scathe-missile"),
-    (65, "scathe-missile-phase"),
-    (66, "scathe-missile-surge"),
-    (67, "scathe-missile-surge-split"),
-    (68, "turret-unit-build-tower"),
+    (64, "dummy"),
+    (65, "scathe-missile"),
+    (66, "scathe-missile-phase"),
+    (67, "scathe-missile-surge"),
+    (68, "scathe-missile-surge-split"),
+    (69, "turret-unit-build-tower"),
 ];
 
-/// Number of registered unit content ids in the 158.1 baseline.
+/// Number of registered unit content ids in the v160.5 target.
 pub const UNIT_COUNT: usize = UNIT_NAMES.len();
 
-/// Official `Vars.defaultEnv` (v159.7): terrestrial + spores + groundOil +
+/// Official `Vars.defaultEnv` (v160.5): terrestrial + spores + groundOil +
 /// groundWater + oxygen.
 pub const RULES_ENV_DEFAULT: i32 = 1 | 8 | 32 | 64 | 128;
 
-/// Official v159.7 internal UnitTypes: hidden `block` plus the generated
-/// `turret-unit-build-tower` created by `BuildTurret.init()`.
-pub fn unit_type_internal(id: i16) -> bool {
-    // `block` plus the generated turret-unit-build-tower content type.
-    matches!(id, 61 | 68)
+/// Exact v160.5 `UnitType.commands` membership used by CommandAI.
+/// Move (0) is universal. Mine (4) is mining units. Payload loop commands
+/// (6-9) require payloadCapacity. enterPayload (5) is issued to reconstructors
+/// by every player-commandable type.
+pub fn unit_type_allows_command(id: i16, command: u8) -> bool {
+    if !unit_player_controllable_like(id) {
+        return false;
+    }
+    match command {
+        0 | 5 => true,
+        1 => matches!(id, 22 | 31),
+        2 => matches!(id, 21 | 22 | 23 | 24 | 35..=37),
+        3 => matches!(id, 21 | 22),
+        4 => matches!(id, 6 | 7 | 20 | 21),
+        6..=9 => matches!(id, 22..=24),
+        _ => false,
+    }
 }
 
-/// Exact v159.7 `UnitType.useUnitCap` metadata.
+fn unit_player_controllable_like(id: i16) -> bool {
+    !matches!(id, 46 | 53 | 55 | 62..=68)
+}
+
+/// Official v160.5 internal UnitTypes: hidden `block`, `dummy`, and the generated
+/// `turret-unit-build-tower` created by `BuildTurret.init()`.
+pub fn unit_type_internal(id: i16) -> bool {
+    matches!(id, 61 | 64 | 69)
+}
+
+/// Exact v160.5 `UnitType.useUnitCap` metadata.
 ///
 /// `UnitType` defaults this field to true. `MissileUnitType` sets it false
 /// for all seven vanilla missile content types, and `UnitTypes.assemblyDrone`
 /// overrides it to false. Unknown IDs retain the default true value.
 pub fn unit_type_use_unit_cap(id: i16) -> bool {
-    !matches!(id, 46 | 53 | 55 | 63 | 64..=67)
+    !matches!(id, 46 | 53 | 55 | 63..=68)
 }
 
-/// CoreBlock.unitType for vanilla core blocks (Blocks.java v159.7).
+/// Official `UnitType.isEnemy` (desktop 160.5 dump). Default is true.
+/// `hostile_unit_count` / `waitEnemies` / wave victory use this, not team
+/// membership alone (ASTRA W06): mono, mega and core units are not enemies.
+pub fn unit_type_is_enemy(id: i16) -> bool {
+    !matches!(
+        id,
+        20 | 22 | 35 | 36 | 37 | 46 | 53 | 55 | 58 | 59 | 60 | 62 | 63 | 64 | 65 | 66 | 67 | 68
+    )
+}
+
+/// Exact v160.5 `MissileUnitType.lifetime` values, emitted as
+/// `TimedKillUnit.lifetime`/`.time` in the unit sync stream. The
+/// `MissileUnitType` constructor defaults the field to `60f * 1.7f`;
+/// entries only list types that override it or rely on the default.
+pub fn unit_missile_lifetime(id: i16) -> Option<f32> {
+    unit_missile_spec(id).map(|spec| spec.lifetime)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MissileSpec {
+    pub speed: f32,
+    pub rotate_speed: f32,
+    pub homing_delay: f32,
+    pub acceleration_time: f32,
+    pub lifetime: f32,
+    pub accel: f32,
+    pub drag: f32,
+    pub target_range: f32,
+    pub weapon_range: f32,
+    pub target_ground: bool,
+    pub target_air: bool,
+}
+
+pub fn unit_missile_spec(id: i16) -> Option<MissileSpec> {
+    static SPECS: std::sync::OnceLock<std::collections::HashMap<i16, MissileSpec>> =
+        std::sync::OnceLock::new();
+    SPECS
+        .get_or_init(|| {
+            include_str!("unit_missiles.tsv")
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| {
+                    let mut columns = line.split_whitespace();
+                    let id = columns.next().unwrap().parse().unwrap();
+                    let mut number = || columns.next().unwrap().parse::<f32>().unwrap();
+                    (
+                        id,
+                        MissileSpec {
+                            speed: number(),
+                            rotate_speed: number(),
+                            homing_delay: number(),
+                            acceleration_time: number(),
+                            lifetime: number(),
+                            accel: number(),
+                            drag: number(),
+                            target_range: number(),
+                            weapon_range: number(),
+                            target_ground: columns.next().unwrap().parse().unwrap(),
+                            target_air: columns.next().unwrap().parse().unwrap(),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .get(&id)
+        .copied()
+}
+
+/// Target priority is authoritative content, not inferred from unit family.
+pub fn unit_target_priority(id: i16) -> f32 {
+    static PRIORITIES: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    let values = PRIORITIES.get_or_init(|| {
+        include_str!("unit_target_priority.tsv")
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .enumerate()
+            .map(|(index, line)| {
+                let mut fields = line.split_whitespace();
+                assert_eq!(fields.next().unwrap().parse::<usize>().unwrap(), index);
+                fields.next().unwrap().parse().unwrap()
+            })
+            .collect()
+    });
+    usize::try_from(id)
+        .ok()
+        .and_then(|id| values.get(id))
+        .copied()
+        .unwrap_or(0.0)
+}
+
+/// CoreBlock.unitType for vanilla core blocks (Blocks.java v160.5).
 pub fn core_block_unit_type(block: i16) -> Option<i16> {
     match block {
         339 => Some(35),
@@ -117,6 +230,13 @@ pub fn core_block_unit_type(block: i16) -> Option<i16> {
     }
 }
 
+/// Official `UnitType.coreUnitDock`. Only Erekir core ships dock in place
+/// on `InputHandler.unitClear`; Serpulo alpha/beta/gamma fall through to
+/// `playerSpawn` at the best core (ASTRA C07).
+pub fn core_unit_dock(unit_type: i16) -> bool {
+    matches!(unit_type, 58..=60)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnitEnvFlags {
     pub enabled: i32,
@@ -124,9 +244,9 @@ pub struct UnitEnvFlags {
     pub required: i32,
 }
 
-/// Exact v159.7 `UnitType.supportsEnv` flag triple for vanilla core units.
+/// Exact v160.5 `UnitType.supportsEnv` flag triple for vanilla core units.
 ///
-/// Verified against tag `v159.7` (`c9686eb5…`):
+/// Verified against tag `v160.5` (`067c720a…`):
 /// - `UnitType` defaults: `envEnabled=terrestrial(1)`, `envDisabled=scorching(16)`,
 ///   `envRequired=0`; `init()` adds `Env.space` when `flying`.
 /// - `ErekirUnitType` sets `envDisabled=space`, then evoke/incite/emanate override
@@ -165,18 +285,17 @@ pub fn unit_supports_env(id: i16, env: i32) -> bool {
         && (flags.required == 0 || (flags.required & env) == flags.required)
 }
 
-/// Official v158.1 `UnitType.logicControllable` (desktop 158.1): true unless
+/// Official v160.5 `UnitType.logicControllable`: true unless
 /// explicitly disabled. False for exactly nine content ids:
 /// - `manifold` (62) and `assembly-drone` (63) — UnitTypes.java 4572/4613;
 /// - every `MissileUnitType` (MissileUnitType.java 18 sets the flag false):
-///   anthicus-missile (46), quell-missile (53), disrupt-missile (55)
-///   (UnitTypes.java 3451/4101/4222) and the scathe missiles (64-67)
-///   (Blocks.java 5224/5312/5417/5473).
+///   anthicus-missile (46), quell-missile (53), disrupt-missile (55),
+///   and the scathe missiles (65-68).
 ///
 /// `ubind` refuses these types (`type.logicControllable` gate in
 /// LExecutor.UnitBindI) — the type never reaches the round-robin cache.
 pub fn unit_type_logic_controllable(id: i16) -> bool {
-    !matches!(id, 46 | 53 | 55 | 62 | 63 | 64 | 65 | 66 | 67)
+    !matches!(id, 46 | 53 | 55 | 62..=68)
 }
 
 /// Official unit content name by id (None for unregistered ids).
@@ -206,12 +325,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unit_registry_matches_desktop_158_dump() {
-        // The 69 id/name pairs were dumped from desktop.jar 158.1
-        // (Vars.content.units()); ids are contiguous 0..=68.
-        assert_eq!(UNIT_COUNT, 69);
+    fn unit_registry_matches_desktop_1605_dump() {
+        // The 70 id/name pairs were dumped from desktop.jar 160.5
+        // (Vars.content.units()); ids are contiguous 0..=69.
+        assert_eq!(UNIT_COUNT, 70);
         for (index, (id, name)) in UNIT_NAMES.iter().enumerate() {
-            assert_eq!(*id as usize, index, "ids are contiguous 0..=68");
+            assert_eq!(*id as usize, index, "ids are contiguous 0..=69");
             assert!(!name.is_empty());
             assert_eq!(unit_name_from_id(*id), Some(*name));
             assert_eq!(unit_id_from_name(name), Some(*id));
@@ -219,9 +338,10 @@ mod tests {
         // Round-trip and explicit rejection.
         assert_eq!(unit_id_from_name("DAGGER"), Some(0));
         assert_eq!(unit_id_from_name("stell"), Some(38));
-        assert_eq!(unit_name_from_id(68), Some("turret-unit-build-tower"));
+        assert_eq!(unit_name_from_id(64), Some("dummy"));
+        assert_eq!(unit_name_from_id(69), Some("turret-unit-build-tower"));
         assert_eq!(unit_name_from_id(-1), None);
-        assert_eq!(unit_name_from_id(69), None);
+        assert_eq!(unit_name_from_id(70), None);
         assert_eq!(unit_id_from_name("not-a-unit"), None);
         assert_eq!(unit_id_from_name(""), None);
         // Historical alias.
@@ -229,17 +349,18 @@ mod tests {
     }
 
     #[test]
-    fn unit_type_internal_matches_v1597() {
+    fn unit_type_internal_matches_v1605() {
         assert!(unit_type_internal(61));
-        assert!(unit_type_internal(68));
+        assert!(unit_type_internal(64));
+        assert!(unit_type_internal(69));
         assert!(!unit_type_internal(0));
         assert!(!unit_type_internal(46));
     }
 
     #[test]
-    fn unit_type_use_unit_cap_matches_v1597_metadata() {
+    fn unit_type_use_unit_cap_matches_v1605_metadata() {
         // MissileUnitType.java:20 and UnitTypes.java:4612.
-        for id in [46, 53, 55, 64, 65, 66, 67, 63] {
+        for id in [46, 53, 55, 63, 64, 65, 66, 67, 68] {
             assert!(!unit_type_use_unit_cap(id), "id {id} must ignore unit cap");
         }
         assert!(unit_type_use_unit_cap(0));
@@ -248,9 +369,21 @@ mod tests {
             "manifold retains UnitType default"
         );
         assert!(
-            unit_type_use_unit_cap(69),
+            unit_type_use_unit_cap(70),
             "unknown IDs retain UnitType default"
         );
+    }
+
+    #[test]
+    fn unit_type_is_enemy_matches_v1605_dump() {
+        assert!(unit_type_is_enemy(0), "dagger");
+        assert!(unit_type_is_enemy(21), "poly");
+        assert!(!unit_type_is_enemy(20), "mono");
+        assert!(!unit_type_is_enemy(22), "mega");
+        assert!(!unit_type_is_enemy(35), "alpha");
+        assert!(!unit_type_is_enemy(36), "beta");
+        assert!(!unit_type_is_enemy(37), "gamma");
+        assert!(unit_type_is_enemy(61), "block keeps UnitType default");
     }
 
     #[test]
@@ -264,12 +397,12 @@ mod tests {
     }
 
     #[test]
-    fn logic_controllable_flag_matches_desktop_1581_sources() {
+    fn logic_controllable_flag_matches_desktop_1605_sources() {
         // Every regular unit is logic-controllable...
         for (id, _) in UNIT_NAMES {
             let name = unit_name_from_id(*id).unwrap();
             match *id {
-                46 | 53 | 55 | 62 | 63 | 64 | 65 | 66 | 67 => {
+                46 | 53 | 55 | 62..=68 => {
                     assert!(
                         !unit_type_logic_controllable(*id),
                         "{name} must not be logic-controllable"
@@ -281,10 +414,10 @@ mod tests {
                 ),
             }
         }
-        // Unknown ids (outside the 0..=68 registry) keep the permissive
-        // default: only the nine known 158.1 non-controllable types are
+        // Unknown ids (outside the 0..=69 registry) keep the permissive
+        // default: only the known 160.5 non-controllable types are
         // refused, and they must not panic.
         assert!(unit_type_logic_controllable(-1));
-        assert!(unit_type_logic_controllable(69));
+        assert!(unit_type_logic_controllable(70));
     }
 }

@@ -207,12 +207,12 @@ pub(crate) fn acquire_logic_control(
 pub(crate) const LOGIC_CONTROL_TIMEOUT_TICKS: f32 = 60.0 * 10.0;
 
 /// Whether the block may hold a unit's Logic lease: the processor family
-/// micro 431, logic 432, hyper 433 and the (privileged) world processor
-/// 442. A lease holder whose tile is gone or was replaced by any other
+/// micro 432, logic 433, hyper 434 and the (privileged) world processor
+/// 443. A lease holder whose tile is gone or was replaced by any other
 /// building is invalid the way Java's `Building.isValid()`
 /// (`tile.build == this && !dead`, Building.class 158.1) is.
 pub(crate) fn block_is_logic_processor(block: i16) -> bool {
-    matches!(block, 431..=433 | 442)
+    matches!(block, 432..=434 | 443)
 }
 
 /// Whether the lease still points at the same processor instance Java would

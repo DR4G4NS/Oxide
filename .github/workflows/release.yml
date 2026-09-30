@@ -133,7 +133,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |
-            Prebuilt Oxide server binaries for Mindustry v8 **159.7**.
+            Prebuilt Oxide server binaries for Mindustry v8 **160.5**.
 
             | Platform | File |
             |---|---|

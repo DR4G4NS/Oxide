@@ -49,4 +49,105 @@ impl SpatialHashGrid {
             None
         }
     }
+
+    /// World-space DDA over 8-px tiles (Arc `Intersector` + tile iteration).
+    pub fn tiles_along_segment(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<(i16, i16)> {
+        tiles_along_segment(x0, y0, x1, y1)
+    }
+}
+
+/// Grid traversal used by bullet/building collision (audit M23).
+pub fn tiles_along_segment(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<(i16, i16)> {
+    let mut tile_x = (x0 / 8.0).floor() as i32;
+    let mut tile_y = (y0 / 8.0).floor() as i32;
+    let end_x = (x1 / 8.0).floor() as i32;
+    let end_y = (y1 / 8.0).floor() as i32;
+    let mut tiles = vec![(tile_x as i16, tile_y as i16)];
+    if tile_x == end_x && tile_y == end_y {
+        return tiles;
+    }
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let step_x = if dx > 0.0 {
+        1
+    } else if dx < 0.0 {
+        -1
+    } else {
+        0
+    };
+    let step_y = if dy > 0.0 {
+        1
+    } else if dy < 0.0 {
+        -1
+    } else {
+        0
+    };
+    let next_boundary_x = if step_x > 0 {
+        (tile_x as f32 + 1.0) * 8.0
+    } else {
+        tile_x as f32 * 8.0
+    };
+    let next_boundary_y = if step_y > 0 {
+        (tile_y as f32 + 1.0) * 8.0
+    } else {
+        tile_y as f32 * 8.0
+    };
+    let mut t_max_x = if step_x == 0 {
+        f32::INFINITY
+    } else {
+        (next_boundary_x - x0) / dx
+    };
+    let mut t_max_y = if step_y == 0 {
+        f32::INFINITY
+    } else {
+        (next_boundary_y - y0) / dy
+    };
+    let t_delta_x = if step_x == 0 {
+        f32::INFINITY
+    } else {
+        8.0 / dx.abs()
+    };
+    let t_delta_y = if step_y == 0 {
+        f32::INFINITY
+    } else {
+        8.0 / dy.abs()
+    };
+    for _ in 0..4096 {
+        if t_max_x < t_max_y {
+            tile_x += step_x;
+            t_max_x += t_delta_x;
+        } else {
+            tile_y += step_y;
+            t_max_y += t_delta_y;
+        }
+        tiles.push((tile_x as i16, tile_y as i16));
+        if tile_x == end_x && tile_y == end_y {
+            break;
+        }
+    }
+    tiles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tiles_along_segment;
+
+    #[test]
+    fn zero_length_segment_is_the_origin_tile() {
+        assert_eq!(tiles_along_segment(4.0, 4.0, 4.0, 4.0), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn horizontal_segment_visits_each_crossed_tile() {
+        let tiles = tiles_along_segment(4.0, 4.0, 20.0, 4.0);
+        assert_eq!(tiles, vec![(0, 0), (1, 0), (2, 0)]);
+    }
+
+    #[test]
+    fn diagonal_segment_includes_start_and_end() {
+        let tiles = tiles_along_segment(4.0, 4.0, 20.0, 20.0);
+        assert_eq!(tiles.first().copied(), Some((0, 0)));
+        assert_eq!(tiles.last().copied(), Some((2, 2)));
+        assert!(tiles.contains(&(1, 1)));
+    }
 }

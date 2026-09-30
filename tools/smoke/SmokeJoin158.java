@@ -134,7 +134,10 @@ public final class SmokeJoin158 {
         int port = args.length == 0 ? 6567 : Integer.parseInt(args[0]);
         boolean joinOnly = args.length > 1 && args[1].equals("join-only");
         boolean consoleMode = args.length > 1 && args[1].equals("console");
-        Version.build = 158;
+        // Server rejects mismatched builds (NetClient/KickReason); the
+        // scenario runs against any server generation by overriding
+        // -Doxide.smoke.build (159.7 evaluation).
+        Version.build = Integer.getInteger("oxide.smoke.build", 158);
         Vars.content = new ContentLoader();
         Vars.content.createBaseContent();
         Vars.net = clientNet();

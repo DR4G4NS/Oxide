@@ -1,7 +1,7 @@
-"""Portable G2/G4 text scans. CI runners do not ship ripgrep (`rg`).
+"""Portable G2/G3 text scans. CI runners do not ship ripgrep (`rg`).
 
 G2: fail-closed god-context struct detection (no `|| true` on missing tools).
-G4: DashMap suppression line count under `src/`, matching `rg -c` + sum.
+G3: DashMap suppression line count under `src/`, matching `rg -c` + sum.
 """
 from __future__ import annotations
 

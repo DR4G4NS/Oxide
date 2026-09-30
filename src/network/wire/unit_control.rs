@@ -48,14 +48,10 @@ pub(crate) fn unit_control_allowed(
         2 => {
             world.enemies.get(&id).is_some_and(|unit| {
                 unit.team == actor_team
-                && unit.health > 0.0
-                && unit_player_controllable(unit.unit_type)
-                // P0-01: possession is resolved from the authority model
-                // (`unit_possessed_by`), never from order existence. A logic
-                // binding (Logic authority or a transient ucontrol order,
-                // kinds 6-9) keeps the unit conservatively non-possessable
-                // until LogicAI authority is fully modeled.
-                && !unit_bound_to_logic(world, id)
+                    && unit.health > 0.0
+                    && unit_player_controllable(unit.unit_type)
+                // ASTRA C02: LogicAI is still isAI/playerControllable. Possession
+                // replaces that controller; switch_player_unit drops the lease.
             }) && unit_possessed_by(world, id).is_none()
                 && player.controlled_unit != ControlledUnit::Standard(id)
         }
@@ -116,10 +112,20 @@ pub(crate) fn apply_unit_control(
         }
         2 => {
             let unit = world.enemies.get(&id)?;
-            player.x = unit.x;
-            player.y = unit.y;
-            player.rotation = unit.rotation;
+            let ux = unit.x;
+            let uy = unit.y;
+            let rotation = unit.rotation;
             drop(unit);
+            // ASTRA C07: leaving a spawned-by-core ship records dockedType
+            // from the core ship being left (InputHandler.unitControl).
+            if previous == ControlledUnit::Core {
+                let team = player_team(world, player);
+                player.docked_type =
+                    Some(player_core_unit_content_id(world, team, player.x, player.y));
+            }
+            player.x = ux;
+            player.y = uy;
+            player.rotation = rotation;
             ControlledUnit::Standard(id)
         }
         _ => return None,
@@ -245,6 +251,29 @@ pub(crate) fn best_core_position_for_team(
         }
     }
     best.map(|(pos, _, _)| pos)
+}
+
+/// CoreBlock.unitType of the core `best_core_position_for_team` would dock at.
+pub(crate) fn player_core_unit_content_id(
+    world: &DynamicWorld,
+    team: u8,
+    player_x: f32,
+    player_y: f32,
+) -> i16 {
+    best_core_position_for_team(world, team, player_x, player_y)
+        .and_then(|pos| {
+            world
+                .team_core_lists
+                .get(&team)
+                .and_then(|list| {
+                    list.iter()
+                        .find(|core| core.position == pos)
+                        .map(|core| core.block)
+                })
+                .or_else(|| world.tiles.get(&pos).map(|tile| tile.block))
+        })
+        .and_then(crate::game::unit_types::core_block_unit_type)
+        .unwrap_or(ALPHA_CONTENT_ID)
 }
 
 fn live_team_cores(world: &DynamicWorld, team: u8) -> Vec<TeamCore> {

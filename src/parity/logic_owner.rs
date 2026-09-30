@@ -32,7 +32,7 @@ pub(super) fn owner_logic_of(world: &DynamicWorld, unit_id: i32) -> Option<(i32,
 }
 
 pub(super) fn stamp_micro_processor(world: &DynamicWorld, pos: i32, team: u8) -> u64 {
-    let mut tile = tile_at_pos(pos, 431);
+    let mut tile = tile_at_pos(pos, 432);
     tile.team = team;
     crate::network::world::stamp_new_building(world, &mut tile);
     let generation = tile.generation;

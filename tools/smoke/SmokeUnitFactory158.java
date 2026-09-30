@@ -81,7 +81,10 @@ public final class SmokeUnitFactory158 {
     public static void main(String[] args) throws Exception {
         int port = args.length == 0 ? 6593 : Integer.parseInt(args[0]);
         boolean reconstructor = args.length > 1 && args[1].equals("reconstructor");
-        Version.build = 158;
+        // Server rejects mismatched builds (NetClient/KickReason); the
+        // scenario runs against any server generation by overriding
+        // -Doxide.smoke.build (159.7 evaluation).
+        Version.build = Integer.getInteger("oxide.smoke.build", 158);
         Vars.headless = true;
         Vars.content = new ContentLoader();
         Vars.content.createBaseContent();

@@ -33,7 +33,10 @@ public final class DebugState158 {
 
     public static void main(String[] args) throws Exception {
         int port = args.length == 0 ? 6567 : Integer.parseInt(args[0]);
-        Version.build = 158;
+        // Server rejects mismatched builds (NetClient/KickReason); the
+        // scenario runs against any server generation by overriding
+        // -Doxide.smoke.build (159.7 evaluation).
+        Version.build = Integer.getInteger("oxide.smoke.build", 158);
         Vars.content = new ContentLoader();
         Vars.content.createBaseContent();
         Vars.net = new Net(new Net.NetProvider() {

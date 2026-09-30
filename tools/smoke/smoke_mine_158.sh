@@ -5,6 +5,9 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 desktop_jar="${MINDUSTRY_DESKTOP_JAR:-/home/ubuntu/Mindustry/desktop.jar}"
 smoke_port="${1:-6591}"
 class_dir="$project_dir/target/protocol-158-classes"
+# Optional server-generation override: SMOKE_BUILD=159 recompiles the
+# client against the same jar announcing Version.build = 159.
+[[ "${SMOKE_BUILD:-}" =~ ^[0-9]+$ ]] && class_dir="$project_dir/target/protocol-smoke-$SMOKE_BUILD-classes"
 
 cd "$project_dir"
 cargo build --release
@@ -27,7 +30,7 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 0.5
-java -cp "$desktop_jar:$class_dir" SmokeMine158 "$smoke_port"
+java ${SMOKE_BUILD:+-Doxide.smoke.build=$SMOKE_BUILD} -cp "$desktop_jar:$class_dir" SmokeMine158 "$smoke_port"
 
 mine_health="$(jq '[.tiles[] | select(.position == 3801188) | .health][0] // 0' "$save_file")"
 minimum_enemy_health="$(jq '[.enemies[].health] | min // 0' "$save_file")"

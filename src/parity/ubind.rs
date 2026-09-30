@@ -50,7 +50,17 @@ pub(super) fn ubind_probe_unit(id: i32, team: u8, flag: f64) -> crate::network::
         authority: crate::network::world::UnitAuthority::DefaultAi,
         build_plans: Vec::new(),
         update_building: true,
+        missile_retarget: 0.0,
+        missile_target: None,
+        missile_shooter: None,
+        navanax_emp_reload: [0.0; 2],
+        navanax_emp_side: [false; 2],
+        navanax_lasers: Default::default(),
+        missile_source_position: None,
+        missile_source_generation: None,
+        missile_time: 0.0,
         status_agg: Default::default(),
+        drown_progress: 0.0,
     }
 }
 
@@ -80,11 +90,11 @@ pub(super) fn compare_ubind_fixture(fixture: &Value) -> Result<(), String> {
     let unit_count = as_u64(fixture, &probe, "unit_count")?;
     let processor_team = as_u64(fixture, &probe, "processor_team")? as u8;
 
-    // Same scenario as the probe: a micro processor (431) of the executor
+    // Same scenario as the probe: a micro processor (432) of the executor
     // team, five daggers created in id order with flags 11..15.
     let world = parity_bare_world("parity-ubind-20.json");
     let processor_pos = (1 << 16) | 1;
-    let mut processor_tile = tile_at_pos(processor_pos, 431);
+    let mut processor_tile = tile_at_pos(processor_pos, 432);
     processor_tile.team = processor_team;
     world.tiles.insert(processor_pos, processor_tile);
     for index in 1..=unit_count as i32 {
@@ -184,7 +194,7 @@ pub(super) fn compare_ubind_object_fixture(fixture: &Value) -> Result<(), String
     let processor_team = as_u64(fixture, &probe, "processor_team")? as u8;
     let world = parity_bare_world("parity-ubind-object.json");
     let processor_pos = (1 << 16) | 1;
-    let mut processor_tile = tile_at_pos(processor_pos, 431);
+    let mut processor_tile = tile_at_pos(processor_pos, 432);
     processor_tile.team = processor_team;
     world.tiles.insert(processor_pos, processor_tile);
 
@@ -379,7 +389,7 @@ const UBIND_REINSERT_SCENARIOS: &[&str] = &[
 
 fn reinsert_processor(world: &DynamicWorld, team: u8) -> i32 {
     let processor_pos = (1 << 16) | 1;
-    let mut processor_tile = tile_at_pos(processor_pos, 431);
+    let mut processor_tile = tile_at_pos(processor_pos, 432);
     processor_tile.team = team;
     world.tiles.insert(processor_pos, processor_tile);
     processor_pos

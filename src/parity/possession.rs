@@ -21,6 +21,7 @@ fn compare_possession_fixture(fixture: &Value) -> Result<(), String> {
 
     let probe = validate_common(fixture)?;
     let world = parity_bare_world("parity-possession.json");
+    world.wave_rules.write().waves_enabled = true;
     let fresh_order = |unit_id: i32, command: u8| UnitOrder {
         unit_id,
         command,
@@ -46,9 +47,13 @@ fn compare_possession_fixture(fixture: &Value) -> Result<(), String> {
         mouse_x: 0.0,
         mouse_y: 0.0,
         rotation: 0.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
+        building: true,
         last_command: None,
+        docked_type: None,
         active_plans: std::collections::HashSet::new(),
         mining_position: None,
         mining_progress: 0.0,

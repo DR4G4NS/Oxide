@@ -68,14 +68,30 @@ pub struct PuddleState {
 }
 
 /// Authoritative tile fire spawned by a hot puddle (`Fires.create`).
-/// Visual sync (`Fire.writeSync`) is out of scope; damage and lifetime
-/// match `FireComp.update` on the server.
+/// Damage/lifetime/spread follow `FireComp.update`; `entity_id` backs the
+/// `Fire.writeSync` entity stream (classId 10, audit H10).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FireState {
     pub time: f32,
     pub lifetime: f32,
     pub damage_timer: f32,
+    /// Official spreadTimer (FireComp): random neighbor ignition cadence.
+    pub spread_timer: f32,
+    /// Official fireballTimer (FireComp): `Bullets.fireball` emission.
+    pub fireball_timer: f32,
+    /// Stable sync entity id (shared puddle allocator).
+    pub entity_id: i32,
 }
+
+/// Constants of the official fire model (FireComp.java / Fires.java).
+pub const FIRE_SPREAD_DELAY: f32 = 22.0;
+pub const FIRE_FIREBALL_DELAY: f32 = 40.0;
+/// `Bullets.fireball` (official 159.7 JAR probe): damage 4, speed 1,
+/// lifetime 40.
+pub const FIRE_BALL_BULLET_ID: i16 = 4;
+pub const FIRE_BALL_DAMAGE: f32 = 4.0;
+pub const FIRE_BALL_SPEED: f32 = 1.0;
+pub const FIRE_BALL_LIFETIME_TICKS: f32 = 40.0;
 
 /// P1: puddle service owned by the coordinator; pure domain transitions
 /// (deposit/tick) never touch network or DashMap guards of other maps.
@@ -83,15 +99,6 @@ pub struct PuddleSystem {
     pub puddles: Arc<DashMap<i32, PuddleState>>,
     /// Entity-id allocator for puddles (see `PuddleState.entity_id`).
     next_entity_id: AtomicI32,
-    /// A3: per-conduit 1 Hz flow timer (official `Conduit.timerFlow`, an
-    /// `Interval` in game seconds — Building.timer JAR offsets 0-18,
-    /// Interval.get/check). The official timer is transient per-Building
-    /// state that is never serialized, so it lives here (not in
-    /// `DynamicTile`, whose schema is fixed by the save/stream codecs):
-    /// a save/load resets every conduit to "fire after 1 s", matching the
-    /// official reset-on-load behaviour. Keyed by conduit tile position;
-    /// stale entries are pruned by `simulate_liquids`.
-    pub conduit_flow_timers: Arc<DashMap<i32, f32>>,
     /// Authoritative tile fires (`Fires` / `FireComp`). Kept next to
     /// puddles so `DynamicWorld` constructors stay untouched; fires are
     /// transient and are not part of puddle writeSync.
@@ -103,7 +110,6 @@ impl Default for PuddleSystem {
         Self {
             puddles: Arc::new(DashMap::new()),
             next_entity_id: AtomicI32::new(100),
-            conduit_flow_timers: Arc::new(DashMap::new()),
             fires: Arc::new(DashMap::new()),
         }
     }
@@ -244,11 +250,11 @@ impl PuddleSystem {
     /// Removes every puddle (map teardown / game reset).
     pub fn clear(&self) {
         self.puddles.clear();
-        self.conduit_flow_timers.clear();
         self.fires.clear();
     }
 
-    /// Official `Fires.create(tile)`: spawn or refresh lifetime.
+    /// Official `Fires.create(tile)`: spawn or refresh lifetime
+    /// (refresh resets BOTH time and lifetime per Fires.java).
     pub fn create_fire(&self, tile: i32) {
         if let Some(mut existing) = self.fires.get_mut(&tile) {
             existing.lifetime = FIRE_BASE_LIFETIME;
@@ -261,8 +267,16 @@ impl PuddleSystem {
                 time: 0.0,
                 lifetime: FIRE_BASE_LIFETIME,
                 damage_timer: 0.0,
+                spread_timer: 0.0,
+                fireball_timer: 0.0,
+                entity_id: self.allocate_entity_id(),
             },
         );
+    }
+
+    /// Shared stable-id allocator for puddles and fires (never collides).
+    pub fn allocate_entity_id(&self) -> i32 {
+        self.next_entity_id.fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn has_fire(&self, tile: i32) -> bool {
@@ -301,13 +315,18 @@ impl PuddleSystem {
         pulses
     }
 
-    /// Official `FireComp.update` lifetime clock. Returns tiles whose
-    /// `damageTimer` just crossed `damageDelay` (40 ticks).
-    pub fn tick_fires(&self, delta_ticks: f32) -> Vec<i32> {
+    /// Official `FireComp.update` lifetime + damage cadence. Returns
+    /// `(expired_tiles, damage_tiles)`; spread/fireball/lifetime-extension
+    /// need world lookups and run in the economy fire pass instead.
+    pub fn tick_fires(&self, delta_ticks: f32) -> (Vec<i32>, Vec<i32>) {
         let delta = delta_ticks.max(0.0);
         let mut expired = Vec::new();
         let mut damage = Vec::new();
         for mut entry in self.fires.iter_mut() {
+            if entry.time >= entry.lifetime {
+                expired.push(*entry.key());
+                continue;
+            }
             entry.time += delta;
             if entry.time >= entry.lifetime {
                 expired.push(*entry.key());
@@ -319,10 +338,20 @@ impl PuddleSystem {
                 damage.push(*entry.key());
             }
         }
-        for tile in expired {
-            self.fires.remove(&tile);
+        for tile in &expired {
+            self.fires.remove(tile);
         }
-        damage
+        (expired, damage)
+    }
+
+    /// Official `Fires.extinguish(tile, intensity)`: shortens life by
+    /// `intensity` ticks per call.
+    pub fn extinguish_fire(&self, tile: i32, intensity: f32) -> bool {
+        let Some(mut fire) = self.fires.get_mut(&tile) else {
+            return false;
+        };
+        fire.time += intensity;
+        fire.time < fire.lifetime
     }
 }
 
@@ -378,7 +407,7 @@ pub(crate) fn liquid_moves_through_blocks(liquid: i16) -> bool {
     false
 }
 
-fn liquid_flammability(liquid: i16) -> f32 {
+pub(crate) fn liquid_flammability(liquid: i16) -> f32 {
     match liquid {
         2 => 1.2, // oil
         5 => 1.2, // fuel

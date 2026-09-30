@@ -234,9 +234,9 @@ pub fn decompress_lz4(
 }
 
 pub const FRAMEWORK_MESSAGE_ID: i8 = -2;
-/// Mindustry creates its ArcNet server with a 32 KiB TCP read buffer. Although
-/// the wire prefix is a u16, larger objects are rejected by the official peer.
-pub const MAX_PACKET_SIZE: usize = 32 * 1024;
+/// Mindustry creates its ArcNet server with a 32 KiB TCP read buffer, but the
+/// official client object-read cap is 25_000 bytes (`clientReadBufferSize`).
+pub const MAX_PACKET_SIZE: usize = 25_000;
 pub const PACKET_HEADER_SIZE: usize = 4;
 pub const MAX_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - PACKET_HEADER_SIZE;
 /// `ArcNetProvider.PacketSerializer`: payloads shorter than this skip LZ4

@@ -44,7 +44,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("setting default subscriber failed");
     }
 
-    info!("Starting Mindustry High-Performance Rust Server v0.1.0");
+    info!(
+        "Starting Mindustry High-Performance Rust Server v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     info!(
         "Configuration: Port={}, MaxPlayers={}, TargetTPS={}",
         config.port, config.max_players, config.tps

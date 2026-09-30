@@ -32,11 +32,10 @@ pass() { echo "  [ok] $1"; }
 fail() { echo "  [FAIL] $1" >&2; exit 1; }
 step() { echo; echo "== $1 =="; }
 
-step "1 Schema / ledger / current.toml"
+step "1 Schema / current.toml"
 python3 tools/compat_selftest.py || fail "compat self-tests"
 python3 tools/mindustry_manifest.py --build "$TARGET_BUILD" || fail "committed artifacts"
-python3 tools/cert_ledger.py --build "$TARGET_BUILD" || fail "certification ledger"
-pass "schema + ledger"
+pass "schema + manifests"
 
 step "2 DashMap Guard"
 cargo test --manifest-path tools/dashmap_guard/Cargo.toml --quiet
@@ -67,7 +66,9 @@ fi
 
 step "6 Focused compatibility tests"
 cargo test --lib rust_packet_ids_match_committed_159_7_packets_json -- --test-threads=1
-cargo test --lib official_159_7_save13_fixture_reads rust_save12_empty_patches_round_trip_read_map current_personalize_keeps_159_7_data_patch_prefix -- --test-threads=1
+for fixture in official_159_7_save13_fixture_reads rust_save12_empty_patches_round_trip_read_map current_personalize_keeps_159_7_data_patch_prefix; do
+  cargo test --lib "$fixture" -- --test-threads=1
+done
 cargo test --test msav_world_entity_framing -- --test-threads=1
 pass "focused tests"
 
@@ -84,4 +85,4 @@ git diff --check
 pass "clean tree"
 
 echo
-echo "== Compatibility Gate A PASSED: Build $TARGET_BUILD (not a JAR certification) =="
+echo "== Compatibility Gate A PASSED: Build $TARGET_BUILD (JAR checks run separately) =="

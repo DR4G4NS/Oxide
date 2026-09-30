@@ -50,9 +50,11 @@ impl TickEngine {
             );
             let tick_duration = Duration::from_secs_f64(1.0 / self.target_tps as f64);
             let delta = tick_delta_for_tps(self.target_tps);
-            let mut next_tick = Instant::now();
+            let mut timer = tokio::time::interval(tick_duration);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             loop {
+                timer.tick().await;
                 if self.state.is_active() {
                     // Rayon work must stay off the Tokio worker pool.  The
                     // blocking closure owns only the engine Arc and acquires
@@ -67,16 +69,6 @@ impl TickEngine {
                         // task after the blocking worker has gone away.
                         break;
                     }
-                }
-
-                next_tick += tick_duration;
-                let now = Instant::now();
-                if next_tick > now {
-                    tokio::time::sleep(next_tick.duration_since(now)).await;
-                } else {
-                    // Tick catch-up threshold.  As in the current world
-                    // simulation, a missed wakeup does not replay stale ticks.
-                    next_tick = now;
                 }
             }
         })

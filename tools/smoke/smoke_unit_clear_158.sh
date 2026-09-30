@@ -5,6 +5,9 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 desktop_jar="${MINDUSTRY_DESKTOP_JAR:-/home/ubuntu/Mindustry/desktop.jar}"
 smoke_port="${1:-6585}"
 class_dir="$project_dir/target/protocol-158-classes"
+# Optional server-generation override: SMOKE_BUILD=159 recompiles the
+# client against the same jar announcing Version.build = 159.
+[[ "${SMOKE_BUILD:-}" =~ ^[0-9]+$ ]] && class_dir="$project_dir/target/protocol-smoke-$SMOKE_BUILD-classes"
 
 cd "$project_dir"
 cargo build --release
@@ -30,7 +33,7 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 0.5
-java -cp "$desktop_jar:$class_dir" SmokeUnitClear158 "$smoke_port"
+java ${SMOKE_BUILD:+-Doxide.smoke.build=$SMOKE_BUILD} -cp "$desktop_jar:$class_dir" SmokeUnitClear158 "$smoke_port"
 
 if ! grep -q "finished loading the world" "$server_log" \
         || ! grep -q '"unit_id": 2500000' "$save_file"; then

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/compat_jar_gate.sh — exact JAR-backed certification (layer B).
+# tools/compat_jar_gate.sh — JAR-backed compatibility checks (layer B).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -23,7 +23,7 @@ if got != want_sha:
 with zipfile.ZipFile(jar) as z:
     props = z.read("version.properties").decode()
 if f"build={build}" not in props.replace(" ", ""):
-    # properties uses build=159.7
+    # Accept the formatting variants emitted by upstream version.properties.
     if f"build={build}" not in props and f"build = {build}" not in props:
         if f"build={build}" not in props.replace("\r", ""):
             if not any(line.strip() == f"build={build}" for line in props.splitlines()):

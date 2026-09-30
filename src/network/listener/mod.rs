@@ -97,9 +97,10 @@ use crate::network::world::*;
 
 pub(crate) use crate::network::wire::bootstrap::{
     apply_game_mode_to_wave_rules, apply_wave_rules_overrides, assign_team_for_join,
-    emit_game_over_packet, emit_game_over_packet_with_winner, enforce_strict_spawn_groups,
-    extend_attack_spawns, extend_attack_spawns_for_team, fresh_world_from_template_for_mode,
-    mode_transition_rules, network_building_tile, parse_team_id,
+    client_visible_rules_json, emit_game_over_packet, emit_game_over_packet_with_winner,
+    enforce_strict_spawn_groups, extend_attack_spawns, extend_attack_spawns_for_team,
+    fresh_world_from_template_for_mode, mode_transition_rules, network_building_tile,
+    parse_team_id,
 };
 pub use crate::network::wire::bootstrap::{
     fresh_world_from_template, host_map, resolve_host_map, HostMapResult, HostMapSource,
@@ -107,10 +108,11 @@ pub use crate::network::wire::bootstrap::{
 };
 
 pub(crate) use crate::network::wire::persistence::{
-    apply_loaded_team_cores, apply_loaded_team_items, encode_construct_finish,
-    encode_construct_finish_for_unit, outbound_typeio_object, persist_world_sync,
-    sanitize_standalone_payload, sanitize_unit_payloads, snapshot_persisted_world,
-    valid_build_position, CorePersistenceSource, PersistJob, PersistenceWorker,
+    apply_loaded_team_cores, apply_loaded_team_items, apply_loaded_wave_rules,
+    checkpoint_rules_json, encode_construct_finish, encode_construct_finish_for_unit,
+    outbound_typeio_object, persist_world_sync, sanitize_standalone_payload,
+    sanitize_unit_payloads, snapshot_persisted_world, valid_build_position, CorePersistenceSource,
+    PersistJob, PersistenceWorker,
 };
 pub use crate::network::wire::persistence::{
     decode_typeio_string, encode_typeio_string, load_tiles, persist_tiles,
@@ -124,8 +126,11 @@ pub(crate) use crate::network::wire::encode::{
     batch_block_snapshot_entries, block_snapshot_requires_world, coalesce_build_health,
     encode_block_snapshot, encode_block_snapshot_entry, encode_block_snapshots,
     encode_block_snapshots_with_threshold, encode_build_destroyed_frame,
-    encode_build_health_update_frame, encode_construct_block_snapshot, encode_debug_status_client,
-    encode_enemy_entity_snapshots, encode_initial_entity_snapshot, encode_player_disconnect_frames,
+    encode_build_health_update_frame, encode_construct_block_snapshot,
+    encode_construct_block_snapshot_with_previous, encode_construct_block_snapshot_with_progress,
+    encode_debug_status_client, encode_enemy_entity_snapshots,
+    encode_enemy_entity_snapshots_visible_to, encode_initial_entity_snapshot,
+    encode_initial_entity_snapshot_in, encode_player_disconnect_frames, encode_set_rules_frame,
     encode_state_snapshot_for, encode_unit_spawn_payload, finish_block_snapshot_batch,
     frame_generated_packet, max_synced_plans, state_snapshot_teams, take_coalesced_build_health,
     write_puddle_sync, write_unit_plans_queue, write_unit_sync, ENEMY_SNAPSHOT_BATCH_BYTES,
@@ -144,8 +149,9 @@ pub(crate) use crate::network::wire::unit_control::{
 };
 
 pub(crate) use crate::network::wire::client_snapshot::{
-    apply_client_snapshot, apply_controlled_client_snapshot, mine_result, raw_mine_result,
-    update_mining,
+    apply_client_snapshot, apply_controlled_client_snapshot, client_snapshot_applies,
+    client_snapshot_applies_build_plans, client_snapshot_id_is_new, client_snapshot_unit_matches,
+    mine_result, raw_mine_result, update_mining,
 };
 
 pub(crate) use crate::network::wire::auth::{
@@ -157,7 +163,7 @@ pub(crate) use crate::network::wire::transfer::{
     broadcast_player_snapshot, broadcast_respawn, deposit_player_inventory,
     encode_take_items_frame, encode_transfer_item_to_frame, enemy_weapon_mount_count,
     item_storage_target, nearest_opposing_unit, player_can_transfer, respawn_session_player,
-    withdraw_items_to_player, ItemStorageTarget,
+    unit_clear_session_player, withdraw_items_to_player, ItemStorageTarget,
 };
 
 pub(crate) use crate::network::wire::tile_config::{
@@ -194,11 +200,15 @@ pub(crate) const UDP_KEEPALIVE: std::time::Duration = std::time::Duration::from_
 pub(crate) const PACKET_SPAM_WINDOW_MS: u64 = 3000;
 pub(crate) const PACKET_SPAM_LIMIT: u32 = 300;
 
+/// The world stream a joining client receives: the template with the live team
+/// build plans and the live rules spliced in.
+pub use crate::network::buildings::construction::network_template_with_plans;
+pub(crate) use crate::network::buildings::construction::network_template_with_plans_and_rules;
 use crate::network::buildings::construction::{
     add_team_plan, apply_build_plans, block_footprint, block_footprint_in, consume_requirements,
     consume_requirements_for, dynamic_at, encode_begin_place_for_unit, finish_pending_build,
-    network_template_with_plans, refund_requirements, remove_team_plan, remove_team_plan_from,
-    schedule_break, schedule_build, simulate_breaks, simulate_constructions,
+    refund_requirements, remove_team_plan, remove_team_plan_from, schedule_break, schedule_build,
+    simulate_breaks, simulate_constructions,
 };
 
 pub struct NetworkListener {
@@ -278,6 +288,7 @@ impl NetworkListener {
         let udp = UdpSocket::bind(&addr).await?;
         let std_sock = udp.into_std()?;
         std_sock.set_nonblocking(true)?;
+        let _ = std_sock.set_broadcast(true);
         let tokio_std = std_sock.try_clone()?;
         let std_udp = Arc::new(std_sock);
         let udp = Arc::new(UdpSocket::from_std(tokio_std)?);
@@ -341,6 +352,8 @@ impl NetworkListener {
         }
         apply_loaded_team_cores(&world, &loaded);
         apply_loaded_team_items(&world, &loaded);
+        apply_loaded_wave_rules(&world, &loaded);
+        apply_wave_rules_overrides(&world, &self.admin);
         if let Some(simulation_time) = loaded.simulation_time {
             *self.state.simulation_time.write() = simulation_time;
         }
@@ -365,15 +378,19 @@ impl NetworkListener {
         }
         *world.game_state.game_stats.write() = loaded.game_stats;
         if let Some(items) = loaded.core_items {
+            *world.game_state.core_items.write() = items.clone();
             *self.state.core_items.write() = items;
         }
         if let Some(wave) = loaded.wave {
+            world.game_state.wave.store(wave, Ordering::Relaxed);
             self.state.wave.store(wave, Ordering::Relaxed);
         }
         if let Some(wave_time) = loaded.wave_time {
+            *world.game_state.wave_time.write() = wave_time;
             *self.state.wave_time.write() = wave_time;
         }
         if let Some(core_health) = loaded.core_health {
+            *world.game_state.core_health.write() = core_health;
             *self.state.core_health.write() = core_health;
         }
         // Game-over is ephemeral runtime state (like the official server,
@@ -392,6 +409,10 @@ impl NetworkListener {
             world.enemies.insert(enemy_id, enemy);
             world.register_unit_group(enemy_id);
         }
+        world
+            .game_state
+            .enemies_count
+            .store(hostile_unit_count(&world), Ordering::Relaxed);
         self.state
             .enemies_count
             .store(hostile_unit_count(&world), Ordering::Relaxed);
@@ -421,6 +442,7 @@ impl NetworkListener {
             }
         }
         if loaded.core_health.is_none() {
+            *world.game_state.core_health.write() = world.core_max_health;
             *self.state.core_health.write() = world.core_max_health;
         }
         let saved_base_health: HashMap<_, _> = loaded
@@ -486,6 +508,7 @@ impl NetworkListener {
             self.admin.clone(),
         );
         self.spawn_udp(udp.clone(), connections.clone());
+        self.spawn_multicast_discovery();
         self.spawn_tcp(tcp, connections, store, udp, std_udp);
         Ok(())
     }
@@ -494,6 +517,70 @@ impl NetworkListener {
     /// starts the required UDP endpoint too.
     pub async fn start_tcp_listener(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.start().await
+    }
+
+    fn spawn_multicast_discovery(&self) {
+        const MULTICAST_GROUP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(227, 2, 7, 7);
+        const MULTICAST_PORT: u16 = 20151;
+
+        let state = self.state.clone();
+        let admin = self.admin.clone();
+        let info = self.server_info.clone();
+        let port = self.port;
+        tokio::spawn(async move {
+            let std_socket = match std::net::UdpSocket::bind(format!("0.0.0.0:{}", MULTICAST_PORT))
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        "Could not bind multicast discovery on port {}: {}",
+                        MULTICAST_PORT, e
+                    );
+                    return;
+                }
+            };
+            let _ = std_socket.set_broadcast(true);
+            let _ =
+                std_socket.join_multicast_v4(&MULTICAST_GROUP, &std::net::Ipv4Addr::UNSPECIFIED);
+            for ip in local_ipv4_interfaces() {
+                let _ = std_socket.join_multicast_v4(&MULTICAST_GROUP, &ip);
+            }
+            if let Err(e) = std_socket.set_nonblocking(true) {
+                warn!("Could not set multicast socket nonblocking: {}", e);
+                return;
+            }
+            let tokio_socket = match UdpSocket::from_std(std_socket) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Could not convert multicast socket to tokio: {}", e);
+                    return;
+                }
+            };
+            info!(
+                "Multicast LAN discovery listening on {}:{}",
+                MULTICAST_GROUP, MULTICAST_PORT
+            );
+
+            let mut buf = [0u8; 1024];
+            loop {
+                let (len, source) = match tokio_socket.recv_from(&mut buf).await {
+                    Ok(res) => res,
+                    Err(err) => {
+                        error!("Multicast receive error: {}", err);
+                        continue;
+                    }
+                };
+                if len > 0 {
+                    let response = encode_server_info(&info, &state, &admin, port);
+                    if let Err(err) = tokio_socket.send_to(&response, source).await {
+                        warn!(
+                            "Could not answer multicast discovery from {}: {}",
+                            source, err
+                        );
+                    }
+                }
+            }
+        });
     }
 
     fn spawn_udp(&self, socket: Arc<UdpSocket>, connections: Arc<DashMap<i32, PendingConnection>>) {
@@ -654,8 +741,16 @@ impl NetworkListener {
                                 broadcast(&task_connections, frame);
                             }
                         }
-                        // Console registry: forget the disconnected player.
-                        teardown_admin.unregister_connection(&session.uuid);
+                        // Forget this session's console row only. A reconnect
+                        // with the same UUID already replaced the registry
+                        // entry; unregistering blindly would drop the new
+                        // player when this TCP task finally times out.
+                        if teardown_admin
+                            .find_connected_by_uuid(&session.uuid)
+                            .is_some_and(|connected| connected.player_id == session.id)
+                        {
+                            teardown_admin.unregister_connection(&session.uuid);
+                        }
                         // PlayerComp.remove() calls clearUnit(), including the
                         // exact incoming-save/old-restore transition.
                         if matches!(session.controlled_unit, ControlledUnit::Standard(_)) {
@@ -702,6 +797,9 @@ pub(crate) enum RegisterUdpOutcome {
     Bound,
     AlreadyBound,
     UnknownId,
+    /// Kept so the match at the RegisterUDP dispatch site documents the
+    /// historical NAT-rejection path; vanilla ArcNet never emits this.
+    #[allow(dead_code)]
     IpMismatch,
 }
 
@@ -716,9 +814,9 @@ pub(crate) fn apply_register_udp(
     let Some(connection) = connections.get(&connection_id) else {
         return RegisterUdpOutcome::UnknownId;
     };
-    if connection.ip != source.ip() {
-        return RegisterUdpOutcome::IpMismatch;
-    }
+    // ArcNet Server.RegisterUDP binds whatever address presents the matching
+    // connection id (Server.java 293-312). Checking TCP IP here rejected
+    // NAT/symmetric-NAT clients vanilla accepts.
     {
         let mut endpoint = connection.udp_endpoint.write();
         if endpoint.is_some() {
@@ -1326,6 +1424,29 @@ fn write_discovery_string(out: &mut Vec<u8>, value: &str, max: usize) {
     }
     out.push(end as u8);
     out.extend_from_slice(&value.as_bytes()[..end]);
+}
+
+fn local_ipv4_interfaces() -> Vec<std::net::Ipv4Addr> {
+    let mut addrs = Vec::new();
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(content) = std::fs::read_to_string("/proc/net/fib_trie") {
+            let lines: Vec<_> = content.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains("/32 host LOCAL") && i > 0 {
+                    let prev = lines[i - 1].trim();
+                    if let Some(ip_str) = prev.strip_prefix("|-- ") {
+                        if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() {
+                            if !ip.is_loopback() && !ip.is_unspecified() && !addrs.contains(&ip) {
+                                addrs.push(ip);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    addrs
 }
 
 #[cfg(test)]

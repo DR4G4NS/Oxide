@@ -7,12 +7,13 @@ use dashmap::DashMap;
 use oxide::console::command::ServerCommand;
 use oxide::engine::typeio::{TeamBlockPlan, TeamBlocks, TeamPlans};
 use oxide::engine::world_stream::{
-    embedded_template, inspect_map, personalize_current_with_state_mode, replace_map_from_msav,
+    embedded_template, inspect_map, personalize_current_with_state_mode_and_rand,
+    replace_map_from_msav,
 };
 use oxide::network::codec::read_packet;
 use oxide::network::listener::{
-    fresh_world_from_template, host_map, load_tiles, persist_tiles, resolve_host_map,
-    world_stream_frames, HostMapResult, HostMapSource, OUTBOUND_QUEUE_CAPACITY,
+    fresh_world_from_template, host_map, load_tiles, network_template_with_plans, persist_tiles,
+    resolve_host_map, world_stream_frames, HostMapResult, HostMapSource, OUTBOUND_QUEUE_CAPACITY,
 };
 use oxide::network::world::{PendingConnection, SessionPlayer, WorldStore};
 use oxide::state::game_state::{GameMode, GameState};
@@ -63,15 +64,19 @@ fn joined_session() -> SessionPlayer {
         uuid: "uuid-hot-host".to_string(),
         name: "Tester".to_string(),
         color: 0x11223344,
-        last_snapshot: 3,
+        last_snapshot: 3, // stale; host_map must reset so the client can accept id 0 after restream
         x: 320.0,
         y: 800.0,
         mouse_x: 320.0,
         mouse_y: 800.0,
         rotation: 90.0,
+        velocity_x: 0.0,
+        velocity_y: 0.0,
         boosting: false,
         shooting: false,
+        building: true,
         last_command: None,
+        docked_type: None,
         active_plans: Default::default(),
         mining_position: None,
         mining_progress: 0.0,
@@ -290,8 +295,9 @@ fn host_map_swaps_resets_persists_and_restreams_players() {
     assert_eq!(*state.wave_time.read(), 16800.0);
     assert!(!state.game_over.load(Ordering::Relaxed));
     let items = state.core_items.read();
-    assert_eq!(items[0], 100);
-    assert!(items[1..].iter().all(|amount| *amount == 0));
+    // Archipelago's Rules.loadout: copper, lead, metaglass and graphite.
+    assert_eq!(&items[..4], &[400, 500, 400, 200]);
+    assert!(items[4..].iter().all(|amount| *amount == 0));
 
     // The shared world is the new map; the player respawns at its core.
     let world = store.load();
@@ -302,6 +308,11 @@ fn host_map_swaps_resets_persists_and_restreams_players() {
         .expect("player session re-inserted into the new world");
     assert_eq!(session.id, PLAYER_ID);
     assert_eq!(session.name, "Tester");
+    assert_eq!(
+        session.last_snapshot, -1,
+        "host_map must reset last_snapshot so restreamed ClientSnapshot id 0 is accepted"
+    );
+    assert!(session.active_plans.is_empty());
     let (core_x, core_y) = (
         (world.core_position() >> 16) as f32 * 8.0,
         (world.core_position() as i16 as f32) * 8.0,
@@ -345,8 +356,12 @@ fn host_map_swaps_resets_persists_and_restreams_players() {
     assert_eq!(stream.len(), total, "reassembled stream length");
     // The stream carries the new map's first-wave delay: archipelago sets
     // waveSpacing=8400, so Java's Logic.play() uses waveSpacing * 2 = 16800.
-    let expected = personalize_current_with_state_mode(
-        world.network_template(),
+    // The served stream carries the live rules, not the map file's: the
+    // official NetworkIO.writeWorld serializes `state.rules`, so the Gamemode
+    // preset has to reach the client.
+    let served = network_template_with_plans(&world).unwrap();
+    let expected = personalize_current_with_state_mode_and_rand(
+        &served,
         PLAYER_ID,
         "Tester",
         0x11223344,
@@ -354,8 +369,7 @@ fn host_map_swaps_resets_persists_and_restreams_players() {
         1,
         16800.0,
         0.0,
-        false,
-        false,
+        world.game_state().extras.rand_seeds(),
     )
     .unwrap();
     assert_eq!(stream, expected);
@@ -373,7 +387,7 @@ fn host_map_swaps_resets_persists_and_restreams_players() {
     // The active save now belongs to the new map, revision 9, and loads back.
     let json: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&save_path).unwrap()).unwrap();
-    assert_eq!(json["version"], 14);
+    assert_eq!(json["version"], 15);
     assert_eq!(json["map_name"], "archipelago");
     assert_eq!(json["wave"], 1);
     // Game-over is ephemeral runtime state and is NOT persisted (official
@@ -500,12 +514,13 @@ fn team_build_plans_survive_persist_and_load() {
         &world.cores,
         &world.logic_flags,
         &world.puddles,
+        String::new(),
     )
     .unwrap();
 
     let json: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&save_path).unwrap()).unwrap();
-    assert_eq!(json["version"], 14);
+    assert_eq!(json["version"], 15);
     assert_eq!(json["team_build_plans"]["teams"][0]["team"], 1);
     assert_eq!(
         json["team_build_plans"]["teams"][0]["plans"][0]["block"],
@@ -869,6 +884,7 @@ fn game_over_is_ephemeral_never_persisted_nor_restored() {
         &world.cores,
         &world.logic_flags,
         &world.puddles,
+        String::new(),
     )
     .unwrap();
     let json: serde_json::Value =

@@ -1,0 +1,2 @@
+import arc.Core;import arc.Settings;import mindustry.Vars;import mindustry.core.ContentLoader;
+class ExportBlockUnderBullets {public static void main(String[] args){arc.util.Log.logger=(l,t)->{};Vars.headless=true;Core.settings=new Settings();Vars.content=new ContentLoader();Vars.content.createBaseContent();Vars.content.init();System.out.println("# block_id under_bullets (initialized160.5 JAR)");for(var b:Vars.content.blocks())System.out.println(b.id+"\t"+b.underBullets);}}

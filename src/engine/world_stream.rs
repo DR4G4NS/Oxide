@@ -82,6 +82,8 @@ struct PlayerOffsets {
     wave: usize,
     wave_time: usize,
     tick: usize,
+    seed0: usize,
+    seed1: usize,
     id: usize,
     color: usize,
     name_length: usize,
@@ -100,7 +102,15 @@ pub fn personalize(
     name: &str,
     color: i32,
 ) -> std::io::Result<Vec<u8>> {
-    personalize_impl(compressed_template, player_id, name, color, None, None)
+    personalize_impl(
+        compressed_template,
+        player_id,
+        name,
+        color,
+        None,
+        None,
+        None,
+    )
 }
 
 pub fn personalize_with_position(
@@ -110,7 +120,15 @@ pub fn personalize_with_position(
     color: i32,
     position: Option<(f32, f32)>,
 ) -> std::io::Result<Vec<u8>> {
-    personalize_impl(compressed_template, player_id, name, color, position, None)
+    personalize_impl(
+        compressed_template,
+        player_id,
+        name,
+        color,
+        position,
+        None,
+        None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -139,6 +157,38 @@ pub fn personalize_with_state(
         color,
         Some(position),
         Some((wave, wave_time, tick)),
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn personalize_with_state_and_rand(
+    compressed_template: &[u8],
+    player_id: i32,
+    name: &str,
+    color: i32,
+    position: (f32, f32),
+    wave: u32,
+    wave_time: f32,
+    tick: f64,
+    rand_seeds: (i64, i64),
+) -> std::io::Result<Vec<u8>> {
+    let wave = i32::try_from(wave)
+        .map_err(|_| Error::new(ErrorKind::InvalidInput, "wave exceeds protocol range"))?;
+    if !wave_time.is_finite() || wave_time < 0.0 || !tick.is_finite() || tick < 0.0 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "invalid world timing state",
+        ));
+    }
+    personalize_impl(
+        compressed_template,
+        player_id,
+        name,
+        color,
+        Some(position),
+        Some((wave, wave_time, tick)),
+        Some(rand_seeds),
     )
 }
 
@@ -157,35 +207,6 @@ pub fn personalize_desktop_158_with_state(
     wave_time: f32,
     tick: f64,
 ) -> std::io::Result<Vec<u8>> {
-    personalize_desktop_158_with_state_pvp(
-        compressed_template,
-        player_id,
-        name,
-        color,
-        position,
-        wave,
-        wave_time,
-        tick,
-        false,
-    )
-}
-
-/// Like `personalize_desktop_158_with_state` but rewrites the embedded rules
-/// JSON to set `"pvp": true` when the server runs in PvP mode (the official
-/// `state.rules.pvp` is serialized into the world stream via
-/// `NetworkIO.writeWorld` -> `JsonIO.write(state.rules)`).
-#[allow(clippy::too_many_arguments)]
-pub fn personalize_desktop_158_with_state_pvp(
-    compressed_template: &[u8],
-    player_id: i32,
-    name: &str,
-    color: i32,
-    position: (f32, f32),
-    wave: u32,
-    wave_time: f32,
-    tick: f64,
-    pvp: bool,
-) -> std::io::Result<Vec<u8>> {
     personalize_desktop_158_with_state_mode(
         compressed_template,
         player_id,
@@ -195,13 +216,13 @@ pub fn personalize_desktop_158_with_state_pvp(
         wave,
         wave_time,
         tick,
-        pvp,
-        false,
     )
 }
 
 /// Personalize a world stream for the current official client (Build 159.7).
 /// Keeps the Save13 `writeDataPatches` prefix required by `NetworkIO.writeWorld`.
+/// Mode flags (`pvp`, sandbox `allowEditRules` / `infiniteResources`) are
+/// already in the template via `replace_rules`; this only fills player/timing.
 #[allow(clippy::too_many_arguments)]
 pub fn personalize_current_with_state_mode(
     compressed_template: &[u8],
@@ -212,16 +233,41 @@ pub fn personalize_current_with_state_mode(
     wave: u32,
     wave_time: f32,
     tick: f64,
-    pvp: bool,
-    sandbox: bool,
 ) -> std::io::Result<Vec<u8>> {
-    let template = if pvp || sandbox {
-        inject_rules_mode(compressed_template, pvp, sandbox)?
-    } else {
-        compressed_template.to_vec()
-    };
     personalize_with_state(
-        &template, player_id, name, color, position, wave, wave_time, tick,
+        compressed_template,
+        player_id,
+        name,
+        color,
+        position,
+        wave,
+        wave_time,
+        tick,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn personalize_current_with_state_mode_and_rand(
+    compressed_template: &[u8],
+    player_id: i32,
+    name: &str,
+    color: i32,
+    position: (f32, f32),
+    wave: u32,
+    wave_time: f32,
+    tick: f64,
+    rand_seeds: (i64, i64),
+) -> std::io::Result<Vec<u8>> {
+    personalize_with_state_and_rand(
+        compressed_template,
+        player_id,
+        name,
+        color,
+        position,
+        wave,
+        wave_time,
+        tick,
+        rand_seeds,
     )
 }
 
@@ -237,16 +283,16 @@ pub fn personalize_desktop_158_with_state_mode(
     wave: u32,
     wave_time: f32,
     tick: f64,
-    pvp: bool,
-    sandbox: bool,
 ) -> std::io::Result<Vec<u8>> {
-    let template = if pvp || sandbox {
-        inject_rules_mode(compressed_template, pvp, sandbox)?
-    } else {
-        compressed_template.to_vec()
-    };
     let personalized = personalize_with_state(
-        &template, player_id, name, color, position, wave, wave_time, tick,
+        compressed_template,
+        player_id,
+        name,
+        color,
+        position,
+        wave,
+        wave_time,
+        tick,
     )?;
     let mut world = decompress_limited(&personalized, "personalized world stream")?;
     let (_, content_end) = locate_network_content_range(&world)?;
@@ -271,6 +317,7 @@ fn personalize_impl(
     color: i32,
     position: Option<(f32, f32)>,
     state: Option<(i32, f32, f64)>,
+    rand_seeds: Option<(i64, i64)>,
 ) -> std::io::Result<Vec<u8>> {
     if name.is_empty() || name.len() > u16::MAX as usize {
         return Err(Error::new(
@@ -300,6 +347,17 @@ fn personalize_impl(
         world[offsets.wave_time..offsets.wave_time + 4].copy_from_slice(&wave_time.to_be_bytes());
         world[offsets.tick..offsets.tick + 8].copy_from_slice(&tick.to_be_bytes());
     }
+    // M18: world-stream rand seeds must not stay as template constants.
+    // Live worlds pass GlobalVars.rand state so every client sees the same
+    // seeds; tests without extras keep a deterministic per-player fallback.
+    let (seed0, seed1) = rand_seeds.unwrap_or_else(|| {
+        let seed0 = (i64::from(player_id) << 32)
+            ^ (offsets.tick as i64).wrapping_mul(0x9E37_79B9_7F4A_7C15u64 as i64);
+        let seed1 = seed0.rotate_left(17) ^ 0xA076_1D64_78BD_642F_u64 as i64;
+        (seed0, seed1)
+    });
+    world[offsets.seed0..offsets.seed0 + 8].copy_from_slice(&seed0.to_be_bytes());
+    world[offsets.seed1..offsets.seed1 + 8].copy_from_slice(&seed1.to_be_bytes());
     world[offsets.name_length..offsets.name_length + 2]
         .copy_from_slice(&(name.len() as u16).to_be_bytes());
     world.splice(
@@ -489,6 +547,41 @@ pub fn replace_map_from_msav(
     Ok(compressed)
 }
 
+/// Replaces the rules JSON of a network-world template. The official
+/// `NetworkIO.writeWorld` serializes the LIVE `state.rules` (`stream.writeUTF(
+/// JsonIO.write(state.rules))`), not the rules baked into the map file, so a
+/// client that joins a sandbox-hosted survival map must receive
+/// `infiniteResources` even though the map itself does not set it. `state.map
+/// .tags` is written separately and stays untouched, like in the official
+/// writer.
+pub fn replace_rules(compressed_template: &[u8], rules_json: &str) -> std::io::Result<Vec<u8>> {
+    let mut template = decompress_limited(compressed_template, "world stream")?;
+    let mut metadata = read_network_metadata(&template)?;
+    if metadata.rules == rules_json {
+        return Ok(compressed_template.to_vec());
+    }
+    let (metadata_start, metadata_end) = locate_network_metadata_range(&template)?;
+    metadata.rules = rules_json.to_owned();
+    let encoded = encode_network_metadata(&metadata)?;
+    template.splice(metadata_start..metadata_end, encoded);
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(&template)?;
+    let compressed = encoder.finish()?;
+    // Re-validate the finished stream: every offset after the metadata section
+    // shifted, so the map and the trailing sections must still resolve.
+    let world = decompress_limited(&compressed, "re-encoded world stream")?;
+    let decoded = read_network_metadata(&world)?;
+    if decoded.rules != rules_json {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "rules section did not round trip after replacement",
+        ));
+    }
+    let (_, map_end) = locate_network_map_range(&world)?;
+    let _ = locate_trailing_sections(&world, map_end)?;
+    Ok(compressed)
+}
+
 /// Replaces the `SaveVersion.writeTeamBlocks` section of a network-world
 /// template with the given live plans, exactly like the official server's
 /// `NetServer.sendWorldData` (which writes the current `TeamData.plans` of
@@ -574,68 +667,6 @@ fn decompress_limited(compressed: &[u8], label: &str) -> std::io::Result<Vec<u8>
         ));
     }
     Ok(decoded)
-}
-
-/// Rewrites the embedded rules JSON of a compressed network template to force
-/// `"pvp": true` (official `state.rules.pvp` serialized into the world
-/// stream). The rules string is the first MUTF-8 after the 8-byte data-patch
-/// header; the stream is recompressed with the patched rules (length changed,
-/// all following offsets are relative to the recompressed buffer, so
-/// `personalize_impl` re-locates them afterwards).
-fn inject_rules_pvp(compressed_template: &[u8]) -> std::io::Result<Vec<u8>> {
-    inject_rules_mode(compressed_template, true, false)
-}
-
-/// Applies mode fields to the serialized Rules JSON after loading map rules,
-/// matching `Gamemode.apply`. Sandbox intentionally forces the v158.1 preset:
-/// infinite resources, editable rules, waves available, and no wave timer.
-fn inject_rules_mode(
-    compressed_template: &[u8],
-    pvp: bool,
-    sandbox: bool,
-) -> std::io::Result<Vec<u8>> {
-    let world = decompress_limited(compressed_template, "template for mode rules")?;
-    if world.len() < 8 || world[..8] != [0, 0, 0, 2, 0, 0, 0, 0] {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "unexpected data-patch header in mode template",
-        ));
-    }
-    let mut cursor = Cursor::new(&world[8..]);
-    let rules = crate::network::codec::read_modified_utf8_public(&mut cursor)?;
-    let consumed = cursor.position() as usize;
-    let rules_start = 8;
-    let rules_end = rules_start + consumed;
-    // The template rules use arc's unquoted-key JSON ({waveSpacing:...});
-    // convert to strict JSON first (same helper as parse_wave_rules).
-    let strict_rules = crate::network::units::arc_json_to_strict(&rules);
-    let mut rules_value: serde_json::Value = serde_json::from_str(&strict_rules)
-        .map_err(|err| Error::new(ErrorKind::InvalidData, format!("invalid rules JSON: {err}")))?;
-    if let serde_json::Value::Object(map) = &mut rules_value {
-        if pvp {
-            map.insert("pvp".to_string(), serde_json::Value::Bool(true));
-        }
-        if sandbox {
-            map.insert(
-                "infiniteResources".to_string(),
-                serde_json::Value::Bool(true),
-            );
-            map.insert("allowEditRules".to_string(), serde_json::Value::Bool(true));
-            map.insert("waves".to_string(), serde_json::Value::Bool(true));
-            map.insert("waveTimer".to_string(), serde_json::Value::Bool(false));
-        }
-    }
-    let patched = serde_json::to_string(&rules_value)
-        .map_err(|err| Error::new(ErrorKind::InvalidData, format!("rules JSON: {err}")))?;
-    let patched_bytes = crate::network::codec::encode_modified_utf8(&patched);
-    let mut out = Vec::with_capacity(world.len() + 8);
-    out.extend_from_slice(&world[..rules_start]);
-    out.extend_from_slice(&(patched_bytes.len() as u16).to_be_bytes());
-    out.extend_from_slice(&patched_bytes);
-    out.extend_from_slice(&world[rules_end..]);
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-    encoder.write_all(&out)?;
-    encoder.finish()
 }
 
 fn locate_network_map_range(world: &[u8]) -> std::io::Result<(usize, usize)> {
@@ -928,6 +959,15 @@ fn block_name_fallback(name: &str) -> &str {
         "steam-vent" => "rhyolite-vent",
         "fabricator" => "tank-fabricator",
         "basic-reconstructor" => "refabricator",
+        // Editor-playtesting maps (meta build = -1) store synthetic content
+        // names that are not placeable blocks: multi-tile part fragments and
+        // BuildBlock construction stages. The desktop client resolves them
+        // through internal registered blocks; here they carry no simulation
+        // state, so they degrade to air. NOTE: `spawn` is NOT synthetic — it
+        // is canonical overlay block 1 (the wave spawn marker).
+        "build1" | "build2" | "build3" | "build4" | "build5" | "build6" | "build7" | "build8"
+        | "build9" => "air",
+        _ if name.starts_with("part_") => "air",
         _ => name,
     }
 }
@@ -967,6 +1007,12 @@ pub struct MsavWorldEntitySection {
 /// World-entity bytes of an MSAV (`writeWorldEntities` after the team table).
 pub fn msav_world_entity_bytes(compressed_msav: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(msav_world_entity_section(compressed_msav)?.bytes)
+}
+
+/// Markers region JSON (`MapMarkers.write` / JsonIO). Empty saves are `{}`.
+pub fn msav_markers_json(compressed_msav: &[u8]) -> std::io::Result<String> {
+    let extracted = extract_msav_regions(compressed_msav)?;
+    Ok(String::from_utf8_lossy(&extracted.markers).into_owned())
 }
 
 pub fn msav_world_entity_section(
@@ -1958,6 +2004,8 @@ fn locate_player(world: &[u8]) -> std::io::Result<PlayerOffsets> {
     let wave_time = cursor.position() as usize;
     advance(&mut cursor, 4, world.len())?;
     let tick = cursor.position() as usize;
+    let seed0 = tick + 8;
+    let seed1 = tick + 16;
     // tick and two RNG seeds
     advance(&mut cursor, 8 + 8 + 8, world.len())?;
     let id = cursor.position() as usize;
@@ -2001,6 +2049,8 @@ fn locate_player(world: &[u8]) -> std::io::Result<PlayerOffsets> {
         wave,
         wave_time,
         tick,
+        seed0,
+        seed1,
         id,
         color,
         name_length,
@@ -2074,6 +2124,22 @@ mod tests {
     use crate::engine::typeio::{TeamBlockPlan, TeamBlocks, TeamPlans};
     use flate2::read::ZlibDecoder;
     use std::io::Read;
+
+    #[test]
+    fn editor_playtesting_block_names_degrade_to_air() {
+        // Editor maps (meta build = -1) carry synthetic content names such as
+        // the ones found in the official canyon.msav playtesting map.
+        // `spawn` must stay canonical (overlay block 1 = wave spawn marker).
+        assert_eq!(block_name_fallback("spawn"), "spawn");
+        for build in 1..=9 {
+            assert_eq!(block_name_fallback(&format!("build{build}")), "air");
+        }
+        assert_eq!(block_name_fallback("part_-2_-2"), "air");
+        assert_eq!(block_name_fallback("part_4_4"), "air");
+        // Real blocks must pass through untouched.
+        assert_eq!(block_name_fallback("duo"), "duo");
+        assert_eq!(block_name_fallback("graphite-press"), "graphite-press");
+    }
 
     fn decompress(data: &[u8]) -> Vec<u8> {
         let mut decoder = ZlibDecoder::new(data);
@@ -2496,14 +2562,16 @@ mod tests {
     }
 
     #[test]
-    fn inject_rules_pvp_sets_pvp_flag_in_world_stream() {
+    fn replace_rules_can_set_pvp_flag_in_world_stream() {
         // The official server serializes state.rules.pvp into the world
         // stream (NetworkIO.writeWorld -> JsonIO.write(state.rules)); the
-        // client reads it to enable PvP UI/teams. inject_rules_pvp rewrites
-        // the embedded rules JSON of the bundled template.
+        // client reads it to enable PvP UI/teams. `replace_rules` is the
+        // single injection point — personalize must not rewrite the document.
         let template = include_bytes!("../dummy_world.dat");
-        let injected = inject_rules_pvp(template).unwrap();
-        // Decompress and read the rules string (first MUTF-8 after header).
+        let meta = inspect_metadata(template).unwrap();
+        let patched_json =
+            crate::network::units::rules::patch_rules_json(&meta.rules, &[("pvp", "true".into())]);
+        let injected = replace_rules(template, &patched_json).unwrap();
         let world = decompress_limited(&injected, "pvp-injected").unwrap();
         assert_eq!(&world[..8], &[0, 0, 0, 2, 0, 0, 0, 0]);
         let mut cursor = Cursor::new(&world[8..]);
@@ -2513,9 +2581,8 @@ mod tests {
         assert_eq!(
             value.get("pvp"),
             Some(&serde_json::Value::Bool(true)),
-            "rules JSON must carry pvp:true after injection"
+            "rules JSON must carry pvp:true after replacement"
         );
-        // The default template rules (without injection) has no pvp:true.
         let plain = decompress_limited(template, "plain").unwrap();
         let mut pcursor = Cursor::new(&plain[8..]);
         let plain_rules = crate::network::codec::read_modified_utf8_public(&mut pcursor).unwrap();
@@ -2525,37 +2592,6 @@ mod tests {
             pvalue.get("pvp"),
             Some(&serde_json::Value::Bool(true)),
             "default template must not already be pvp"
-        );
-    }
-
-    #[test]
-    fn inject_rules_sandbox_applies_the_complete_mode_preset() {
-        // A Survival map commonly stores infiniteResources=false and
-        // waveTimer=true. Hosting it with `--mode sandbox` must override those
-        // values in the Rules JSON consumed by the client.
-        let template = include_bytes!("../dummy_world.dat");
-        let injected = inject_rules_mode(template, false, true).unwrap();
-        let world = decompress_limited(&injected, "sandbox-injected").unwrap();
-        let mut cursor = Cursor::new(&world[8..]);
-        let rules = crate::network::codec::read_modified_utf8_public(&mut cursor).unwrap();
-        let value: serde_json::Value =
-            serde_json::from_str(&crate::network::units::arc_json_to_strict(&rules)).unwrap();
-        for key in ["infiniteResources", "allowEditRules", "waves"] {
-            assert_eq!(
-                value.get(key),
-                Some(&serde_json::Value::Bool(true)),
-                "sandbox Rules must carry {key}:true"
-            );
-        }
-        assert_eq!(
-            value.get("waveTimer"),
-            Some(&serde_json::Value::Bool(false)),
-            "sandbox Rules must carry waveTimer:false"
-        );
-        assert_ne!(
-            value.get("pvp"),
-            Some(&serde_json::Value::Bool(true)),
-            "sandbox must not accidentally enable PvP"
         );
     }
 
@@ -2605,9 +2641,9 @@ mod tests {
     }
 
     #[test]
-    fn personalize_with_pvp_produces_valid_stream() {
+    fn personalize_158_produces_valid_stream() {
         let template = include_bytes!("../dummy_world.dat");
-        let stream = personalize_desktop_158_with_state_pvp(
+        let stream = personalize_desktop_158_with_state(
             template,
             42,
             "pvptest",
@@ -2616,36 +2652,14 @@ mod tests {
             1,
             3600.0,
             0.0,
-            true,
         )
         .unwrap();
-        // The final stream is the network layout (data-patch header already
-        // stripped); it must be non-empty and comparable in size to the
-        // non-pvp stream. The rules injection is verified at the template
-        // level (inject_rules_pvp_sets_pvp_flag_in_world_stream); the client
-        // decode of the final stream is exercised by smoke_join.
         let _ = std::fs::create_dir_all("target/protocol-158-fixtures");
         let _ = std::fs::write("target/protocol-158-fixtures/pvp-stream.bin", &stream);
-        let world = decompress_limited(&stream, "pvp stream").unwrap();
+        let world = decompress_limited(&stream, "158 stream").unwrap();
         assert!(!world.is_empty(), "stream must not be empty");
-        let plain = personalize_desktop_158_with_state(
-            include_bytes!("../dummy_world.dat"),
-            42,
-            "pvptest",
-            -5_915_137,
-            (320.0, 800.0),
-            1,
-            3600.0,
-            0.0,
-        )
-        .unwrap();
-        let plain_world = decompress_limited(&plain, "plain stream").unwrap();
-        assert!(
-            (world.len() as i64 - plain_world.len() as i64).abs() < 4096,
-            "pvp rules injection should not change stream size much ({} vs {})",
-            world.len(),
-            plain_world.len()
-        );
+        // 158.1 layout: data-patch header already stripped.
+        assert_ne!(&world[..8], &[0, 0, 0, 2, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2683,8 +2697,6 @@ mod tests {
             1,
             3600.0,
             0.0,
-            false,
-            false,
         )
         .unwrap();
         let world = decompress_limited(&stream, "current stream").unwrap();

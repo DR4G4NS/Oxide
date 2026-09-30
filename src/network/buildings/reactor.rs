@@ -13,8 +13,9 @@ pub const THORIUM_ITEM: i16 = 7;
 pub const CRYOFLUID: i16 = 3;
 pub const ITEM_CAPACITY: i32 = 30;
 pub const ITEM_DURATION: f32 = 360.0;
-pub const HEATING: f32 = 0.02;
-pub const COOLANT_POWER: f32 = 0.5;
+pub const HEATING: f32 = 0.005;
+pub const COOLANT_POWER: f32 = 0.125;
+pub const HEAT_CONSUME_RATE: f32 = 10.0;
 pub const AMBIENT_COOLDOWN_TIME: f32 = 60.0 * 20.0;
 pub const OVERHEAT_THRESHOLD: f32 = 0.999;
 pub const EXPLOSION_RADIUS: f32 = 19.0 * 8.0;
@@ -48,6 +49,7 @@ pub fn advance_nuclear_reactor(
     let initial_fuel = state.fuel.max(0);
     let fullness = initial_fuel as f32 / ITEM_CAPACITY as f32;
 
+    let mut fuel_consumed = 0;
     if initial_fuel > 0 && state.enabled {
         // Official NuclearReactor$NuclearReactorBuild.updateTile JAR offsets
         // 43-68: `heat += fullness * heating * Math.min(delta(), 4f)` — the
@@ -59,18 +61,27 @@ pub fn advance_nuclear_reactor(
         // previous uncapped per-tick formula. `delta()` already includes
         // timeScale (Building.delta = Time.delta * timeScale), hence
         // `scaled_delta.min(4.0)`.
-        state.heat += fullness * HEATING * scaled_delta.min(4.0);
+        let increment = fullness * HEATING * scaled_delta.min(4.0);
+        state.heat += increment;
+        // Official: timer(timerFuel, itemDuration / (timeScale +
+        // (heat > heatLastFrame ? heat * heatConsumeRate : 0)))
+        // where heatLastFrame is this frame's increment.
+        let extra = if state.heat > increment {
+            state.heat * HEAT_CONSUME_RATE
+        } else {
+            0.0
+        };
+        let period = ITEM_DURATION / (time_scale.max(0.0) + extra).max(0.0001);
         state.fuel_timer += scaled_delta;
+        while state.fuel > 0 && state.fuel_timer >= period {
+            state.fuel_timer -= period;
+            state.fuel -= 1;
+            fuel_consumed += 1;
+        }
     } else {
         state.heat = (state.heat - delta_ticks / AMBIENT_COOLDOWN_TIME).max(0.0);
     }
 
-    let mut fuel_consumed = 0;
-    while state.fuel > 0 && state.fuel_timer >= ITEM_DURATION {
-        state.fuel_timer -= ITEM_DURATION;
-        state.fuel -= 1;
-        fuel_consumed += 1;
-    }
     if state.fuel <= 0 {
         state.fuel = 0;
         state.fuel_timer = state.fuel_timer.min(ITEM_DURATION);
@@ -207,24 +218,33 @@ mod tests {
             fuel_timer: 0.0,
             enabled: true,
         };
-        // A zero-delta step is a no-op; the loop then advances exactly 50
-        // single-tick frames.
-        let mut step = advance_nuclear_reactor(state, 0.0, 1.0);
-        for tick in 1..=50 {
+        let first = advance_nuclear_reactor(state, 1.0, 1.0);
+        assert!(
+            (first.state.heat - HEATING).abs() < 1e-5,
+            "full uncooled reactor heats at {HEATING}/tick, got {}",
+            first.state.heat
+        );
+        assert!(!first.overheated);
+        // Fuel burn (heatConsumeRate) lowers fullness, so time-to-meltdown is
+        // longer than the naive 1/heating = 200 ticks of a frozen-full core.
+        let mut step = first;
+        let mut overheat_tick = 0;
+        for tick in 2..=2_000 {
             step = advance_nuclear_reactor(step.state, 1.0, 1.0);
-            if tick < 50 {
-                assert!(
-                    !step.overheated,
-                    "overheat only at tick 50 (tick {tick}, heat {})",
-                    step.state.heat
-                );
+            if step.overheated {
+                overheat_tick = tick;
+                break;
             }
         }
         assert!(
-            step.overheated,
-            "full uncooled reactor overheats at tick 50"
+            overheat_tick >= 200,
+            "naive full-core bound is 200 ticks; fuel drain only delays (tick {overheat_tick})"
         );
-        assert!((step.state.heat - 1.0).abs() < 0.0001);
+        assert!(
+            overheat_tick > 0,
+            "full uncooled reactor must eventually overheat"
+        );
+        assert!(step.state.heat >= OVERHEAT_THRESHOLD);
     }
 
     #[test]
@@ -240,20 +260,20 @@ mod tests {
             enabled: true,
         };
         let capped = advance_nuclear_reactor(state, 10.0, 1.0);
-        assert!((capped.state.heat - 0.02 * 4.0).abs() < 0.0001);
+        assert!((capped.state.heat - 0.005 * 4.0).abs() < 0.0001);
         let capped_60 = advance_nuclear_reactor(state, 60.0, 1.0);
-        assert!((capped_60.state.heat - 0.02 * 4.0).abs() < 0.0001);
+        assert!((capped_60.state.heat - 0.005 * 4.0).abs() < 0.0001);
         // At 60 TPS (delta = 1) the cap never binds and the integration is
         // exactly fullness * heating per tick.
         let per_tick = advance_nuclear_reactor(state, 1.0, 1.0);
-        assert!((per_tick.state.heat - 0.02).abs() < 0.0001);
+        assert!((per_tick.state.heat - 0.005).abs() < 0.0001);
         // timeScale is part of delta(): scaled 2 ticks still cap at 4.
         let scaled = advance_nuclear_reactor(state, 3.0, 2.0);
-        assert!((scaled.state.heat - 0.02 * 4.0).abs() < 0.0001);
+        assert!((scaled.state.heat - 0.005 * 4.0).abs() < 0.0001);
     }
 
     #[test]
-    fn cryofluid_removes_half_a_heat_unit_per_liquid_unit() {
+    fn cryofluid_removes_heat_by_coolant_power() {
         let result = advance_nuclear_reactor(
             NuclearReactorState {
                 fuel: 30,
@@ -265,7 +285,7 @@ mod tests {
             0.0,
             1.0,
         );
-        assert!((result.state.heat - 0.1).abs() < 0.0001);
+        assert!((result.state.heat - (0.6 - 0.125)).abs() < 0.0001);
         assert_eq!(result.coolant_consumed, 1.0);
     }
 }

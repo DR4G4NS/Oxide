@@ -16,7 +16,7 @@ use crate::network::economy::spec::{
     storage_linked_to_core,
 };
 use crate::network::wire::auth::player_team;
-use crate::network::wire::encode::{encode_initial_entity_snapshot, frame_generated_packet};
+use crate::network::wire::encode::{encode_initial_entity_snapshot_in, frame_generated_packet};
 
 pub(crate) fn nearest_opposing_unit(
     world: &DynamicWorld,
@@ -33,13 +33,62 @@ pub(crate) fn nearest_opposing_unit(
         .map(|(_, id, x, y)| (id, x, y))
 }
 
+// Every id is listed explicitly (no range patterns) so this table stays a
+// 1:1 auditable mirror of the desktop.jar probe dump.
+#[allow(clippy::manual_range_patterns)]
 pub(crate) fn enemy_weapon_mount_count(unit_type: i16) -> u8 {
+    // Authoritative v160.5 oracle (desktop.jar): full ContentLoader dump with
+    // per-type UnitType.init applied, so every mirror weapon is counted the
+    // way UnitType.init appends flipped copies to `weapons` and WeaponsComp
+    // sizes its mounts array. Weapon.mirror defaults TRUE.
     match unit_type {
-        3 | 18 | 19 | 30 => 3,
-        8 | 12 | 14 | 22 | 25 | 26 | 27 | 28 | 31 | 32 | 33 => 2,
-        13 => 4,
-        34 => 5,
-        20 | 24 => 0,
+        0 | 1 | 2 => 2,
+        3 => 6,
+        4 | 5 | 6 | 7 => 2,
+        8 => 3,
+        9 | 10 => 1,
+        11 => 2,
+        12 => 4,
+        13 => 8,
+        14 => 3,
+        15 => 1,
+        16 | 17 => 2,
+        18 | 19 => 6,
+        20 => 0,
+        21 => 2,
+        22 => 4,
+        23 => 1,
+        24 => 0,
+        25 => 3,
+        26 => 4,
+        27 | 28 => 3,
+        29 => 1,
+        30 => 4,
+        31 => 3,
+        32 | 33 => 4,
+        34 => 6,
+        35 | 36 | 37 => 2,
+        38 | 39 | 40 => 1,
+        41 => 5,
+        42 | 43 => 1,
+        44 => 4,
+        45 => 2,
+        46 => 1,
+        47 | 48 | 49 => 2,
+        50 | 51 => 1,
+        52 => 2,
+        53 => 1,
+        54 => 2,
+        55 => 1,
+        56 | 57 => 0,
+        58 => 1,
+        59 => 3,
+        60 => 2,
+        61 | 62 | 63 | 64 => 0,
+        65 | 66 => 1,
+        67 => 2,
+        68 => 1,
+        69 => 0,
         _ => 1,
     }
 }
@@ -56,12 +105,18 @@ pub(crate) enum ItemStorageTarget {
         capacity: i32,
         team: u8,
     },
+    Conveyor {
+        position: i32,
+        team: u8,
+    },
 }
 
 impl ItemStorageTarget {
     fn position(self) -> i32 {
         match self {
-            Self::Core { position, .. } | Self::Dynamic { position, .. } => position,
+            Self::Core { position, .. }
+            | Self::Dynamic { position, .. }
+            | Self::Conveyor { position, .. } => position,
         }
     }
 }
@@ -71,18 +126,41 @@ pub(crate) fn item_storage_target(
     requested: i32,
 ) -> Option<ItemStorageTarget> {
     let base_origin = base_origin(world, requested);
-    if base_origin == world.core_position && matches!(base_block(world, base_origin), 339..=344) {
-        // The target core's OWN team (official `CoreBuild.items` of that
-        // team); maps without a registered per-team core fall back to 1.
-        let team = crate::network::world::core_team_at_position(world, base_origin).unwrap_or(1);
+    let base_block_id = base_block(world, base_origin);
+    if matches!(base_block_id, 339..=344) {
+        let team = crate::network::world::core_team_at_position(world, base_origin)
+            .or_else(|| world.base_buildings.get(&base_origin).map(|b| b.team))
+            .unwrap_or(1);
         return Some(ItemStorageTarget::Core {
             position: base_origin,
             team,
         });
     }
     let storage = dynamic_at(world, requested)?;
-    let capacity = storage_capacity(storage.block)?;
-    (storage.team != 0).then(|| ItemStorageTarget::Dynamic {
+    if matches!(storage.block, 339..=344) {
+        return Some(ItemStorageTarget::Core {
+            position: storage.position,
+            team: storage.team,
+        });
+    }
+    if is_plain_conveyor(storage.block) || matches!(storage.block, 259 | 272 | 273 | 279) {
+        return Some(ItemStorageTarget::Conveyor {
+            position: storage.position,
+            team: storage.team,
+        });
+    }
+    let capacity = storage_capacity(storage.block)
+        .or(match storage.block {
+            271 => Some(120),
+            266 => Some(1),
+            267 => Some(2),
+            265 => Some(32),
+            268 | 269 => Some(1),
+            262 | 263 => Some(10),
+            _ => None,
+        })
+        .unwrap_or(30);
+    Some(ItemStorageTarget::Dynamic {
         position: storage.position,
         linked_to_core: storage_linked_to_core(world, &storage),
         capacity,
@@ -107,11 +185,20 @@ pub(crate) fn player_can_transfer(
         && {
             // SOL-002: only transfer items with the owner team (or derelict).
             let owner = match target {
-                ItemStorageTarget::Core { team, .. } | ItemStorageTarget::Dynamic { team, .. } => {
-                    team
-                }
+                ItemStorageTarget::Core { team, .. }
+                | ItemStorageTarget::Dynamic { team, .. }
+                | ItemStorageTarget::Conveyor { team, .. } => team,
             };
             owner == 0 || owner == player_team(world, player)
+        }
+        && {
+            // BuildingComp.allowDeposit: cores always accept; otherwise
+            // `!state.rules.onlyDepositCore`.
+            if world.wave_rules.read().only_deposit_core {
+                matches!(target, ItemStorageTarget::Core { .. })
+            } else {
+                true
+            }
         }
 }
 
@@ -137,6 +224,29 @@ pub(crate) fn deposit_player_inventory(
             ..
         } => {
             crate::network::core_inventory::deposit_core_items(world, team, item, requested_amount)
+        }
+        ItemStorageTarget::Conveyor { position, .. } => {
+            let mut conveyor = world.tiles.get_mut(&position)?;
+            let max_capacity: usize = if matches!(conveyor.block, 259 | 279) {
+                10
+            } else {
+                4
+            };
+            let space = max_capacity.saturating_sub(conveyor.conveyor_items.len());
+            let accepted = (requested_amount as usize).min(space) as i32;
+            for _ in 0..accepted {
+                conveyor.conveyor_items.push((item, 0.0));
+            }
+            if accepted > 0 {
+                let front = conveyor.conveyor_items.first().copied();
+                conveyor.stored_item = front.map(|(item, _)| item).unwrap_or(-1);
+                conveyor.stored_amount = i32::try_from(conveyor.conveyor_items.len()).unwrap_or(0);
+                conveyor.transport_progress = front.map(|(_, progress)| progress).unwrap_or(0.0);
+                if matches!(conveyor.block, 259 | 279) && conveyor.stack_link == -1 {
+                    conveyor.stack_link = position;
+                }
+            }
+            accepted
         }
         ItemStorageTarget::Dynamic {
             position, capacity, ..
@@ -190,13 +300,81 @@ pub(crate) fn withdraw_items_to_player(
             *stored -= taken;
             taken
         }
+        ItemStorageTarget::Conveyor { position, .. } => {
+            let mut conveyor = world.tiles.get_mut(&position)?;
+            // Materialize the legacy stack before removing items. Otherwise
+            // rebuilding the counters from an empty queue erases the remainder.
+            if conveyor.conveyor_items.is_empty() && matches!(conveyor.block, 259 | 279) {
+                let items = if conveyor.inventory.is_empty() {
+                    vec![(conveyor.stored_item, conveyor.stored_amount)]
+                } else {
+                    std::mem::take(&mut conveyor.inventory)
+                };
+                for (stored, count) in items {
+                    if stored >= 0 {
+                        let progress = conveyor.transport_progress;
+                        conveyor.conveyor_items.extend(std::iter::repeat_n(
+                            (stored, progress),
+                            count.clamp(0, 10) as usize,
+                        ));
+                    }
+                }
+            }
+            let mut taken = 0;
+            conveyor.conveyor_items.retain(|&(conveyor_item, _)| {
+                if conveyor_item == item && taken < wanted {
+                    taken += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            if taken == 0 && !conveyor.inventory.is_empty() {
+                let available = inventory_count(&conveyor.inventory, item);
+                let count = wanted.min(available);
+                if count > 0 {
+                    inventory_remove(&mut conveyor.inventory, item, count);
+                    taken = count;
+                }
+            } else if taken == 0 && conveyor.stored_item == item && conveyor.stored_amount > 0 {
+                let count = wanted.min(conveyor.stored_amount);
+                conveyor.stored_amount -= count;
+                if conveyor.stored_amount == 0 {
+                    conveyor.stored_item = -1;
+                }
+                taken = count;
+            }
+            if taken > 0
+                && (is_plain_conveyor(conveyor.block) || matches!(conveyor.block, 259 | 279))
+            {
+                let front = conveyor.conveyor_items.first().copied();
+                conveyor.stored_item = front.map(|(item, _)| item).unwrap_or(-1);
+                conveyor.stored_amount = i32::try_from(conveyor.conveyor_items.len()).unwrap_or(0);
+                conveyor.transport_progress = front.map(|(_, progress)| progress).unwrap_or(0.0);
+                if conveyor.conveyor_items.is_empty()
+                    && conveyor.inventory.is_empty()
+                    && conveyor.stored_amount <= 0
+                {
+                    conveyor.stack_link = -1;
+                    conveyor.stack_cooldown = 0.0;
+                }
+            }
+            taken
+        }
         ItemStorageTarget::Dynamic { position, .. } => {
             let mut storage = world.tiles.get_mut(&position)?;
             let available = inventory_count(&storage.inventory, item);
-            let taken = wanted.min(available);
+            let mut taken = wanted.min(available);
             if taken > 0 {
                 let removed = inventory_remove(&mut storage.inventory, item, taken);
                 debug_assert!(removed);
+            } else if storage.stored_item == item && storage.stored_amount > 0 {
+                let count = wanted.min(storage.stored_amount);
+                storage.stored_amount -= count;
+                if storage.stored_amount == 0 {
+                    storage.stored_item = -1;
+                }
+                taken = count;
             }
             taken
         }
@@ -252,14 +430,66 @@ pub(crate) fn broadcast_player_snapshot(
     world: &DynamicWorld,
     out: &dyn crate::network::outbound::FrameEmit,
 ) -> std::io::Result<()> {
-    let combat = world.players.get(&player.unit_id);
-    let payload = encode_initial_entity_snapshot(player, combat.as_deref())?;
+    let combat = world
+        .players
+        .get(&player.unit_id)
+        .map(|entry| entry.clone());
+    let payload = encode_initial_entity_snapshot_in(player, combat.as_ref(), Some(world))?;
     out.broadcast(frame_generated_packet(
         ENTITY_SNAPSHOT_PACKET_ID,
         &payload,
         true,
     )?);
     Ok(())
+}
+
+/// Official `InputHandler.unitClear`: if the possessed unit carries a
+/// `dockedType` with `coreUnitDock`, spawn that core ship at the left unit
+/// instead of `playerSpawn` at the core. Serpulo alpha/beta/gamma do not
+/// dock and fall through to [`respawn_session_player`] (ASTRA C07).
+pub(crate) fn unit_clear_session_player(
+    player: &mut SessionPlayer,
+    world: &DynamicWorld,
+) -> Option<i32> {
+    let team = world
+        .players
+        .get(&player.unit_id)
+        .map(|combat| combat.team)
+        .unwrap_or(1);
+    let possessing = matches!(player.controlled_unit, ControlledUnit::Standard(_));
+    let docked = player.docked_type.unwrap_or_else(|| {
+        crate::network::wire::unit_control::player_core_unit_content_id(
+            world, team, player.x, player.y,
+        )
+    });
+    if possessing && crate::game::unit_types::core_unit_dock(docked) {
+        let (x, y, rotation) = match player.controlled_unit {
+            ControlledUnit::Standard(id) => world
+                .enemies
+                .get(&id)
+                .map(|unit| (unit.x, unit.y, unit.rotation))
+                .unwrap_or((player.x, player.y, player.rotation)),
+            _ => (player.x, player.y, player.rotation),
+        };
+        switch_player_unit(world, player, None);
+        player.controlled_unit = ControlledUnit::Core;
+        player.x = x;
+        player.y = y;
+        player.rotation = rotation;
+        player.docked_type = None;
+        if let Some(mut combat) = world.players.get_mut(&player.unit_id) {
+            combat.x = x;
+            combat.y = y;
+            combat.health = enemy_spec(docked)
+                .map(|spec| spec.health)
+                .unwrap_or(combat.health);
+            combat.dead = false;
+        }
+        world.player_sessions.insert(player.unit_id, player.clone());
+        return None;
+    }
+    player.docked_type = None;
+    respawn_session_player(player, world)
 }
 
 pub(crate) fn respawn_session_player(
@@ -276,7 +506,27 @@ pub(crate) fn respawn_session_player(
     combat.unit_id = new_unit_id;
     combat.x = core_x;
     combat.y = core_y;
-    combat.health = 150.0;
+    combat.health = crate::network::wire::unit_control::best_core_position_for_team(
+        world,
+        combat.team,
+        core_x,
+        core_y,
+    )
+    .and_then(|pos| {
+        world
+            .team_core_lists
+            .get(&combat.team)
+            .and_then(|list| {
+                list.iter()
+                    .find(|core| core.position == pos)
+                    .map(|c| c.block)
+            })
+            .or_else(|| world.tiles.get(&pos).map(|tile| tile.block))
+    })
+    .and_then(crate::game::unit_types::core_block_unit_type)
+    .and_then(enemy_spec)
+    .map(|spec| spec.health)
+    .unwrap_or(150.0);
     combat.shield = 0.0;
     combat.status_effect = -1;
     combat.statuses.clear();

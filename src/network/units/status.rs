@@ -173,7 +173,7 @@ pub(crate) fn floor_id_under_unit(
     {
         return 0;
     }
-    world.floors[(tile_y * world.width + tile_x) as usize]
+    crate::network::combat::floor_at_tile(world, tile_x, tile_y)
 }
 
 /// Reapply the tile floor's status through the normal `apply_status` path.
@@ -207,8 +207,11 @@ pub(crate) fn tick_unit_statuses_with_floor(
 }
 
 pub(crate) fn immune_to_status(unit_type: i16, status_effect: i16) -> bool {
+    // Mirrors combat::damage::unit_immune_to_status (UnitTypes.java
+    // `immunities`, 159.7 source): navanax (34) burning; renale (56) /
+    // latum (57) burning+melting via NeoplasmUnitType.
     matches!(
         (unit_type, status_effect),
-        (1, 1) | (8, 1) | (11, 1 | 8) | (40..=42, 1 | 8)
+        (1, 1) | (8, 1) | (11, 1 | 8) | (34, 1) | (40..=42, 1 | 8) | (56 | 57, 1 | 8)
     )
 }

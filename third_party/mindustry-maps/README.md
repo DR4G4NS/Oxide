@@ -7,6 +7,7 @@ These `.msav` files are **verbatim official maps** from [Anuken/Mindustry](https
 | `groundZero.msav` | `core/assets/maps/serpulo/groundZero.msav` |
 | `frozenForest.msav` | `core/assets/maps/serpulo/frozenForest.msav` |
 | `frontier.msav` | `core/assets/maps/serpulo/frontier.msav` |
+| `archipelago.msav` | `core/assets/maps/default/archipelago.msav` |
 
 ## License
 

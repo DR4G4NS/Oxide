@@ -1,9 +1,174 @@
 #![allow(dead_code)]
 
 use dashmap::DashMap;
-use parking_lot::RwLock;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use parking_lot::{Mutex, RwLock};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+
+/// Mid-game simulation extras that do not belong on `WaveRules` (weather,
+/// fog vision, map objectives, queued S→C Call packets, map-area clamp).
+#[derive(Debug)]
+pub struct WorldExtras {
+    pub weather: RwLock<Vec<WeatherEntry>>,
+    pub objectives: RwLock<Vec<MapObjective>>,
+    pub markers_json: RwLock<String>,
+    pub pending_calls: Mutex<Vec<Vec<u8>>>,
+    pub fog_visible: DashMap<(u8, i32), ()>,
+    /// Logic `setblock floor` live layer (Vec floors is otherwise read-only).
+    pub floor_overrides: DashMap<i32, i16>,
+    /// Logic `setblock ore` live layer.
+    pub overlay_overrides: DashMap<i32, i16>,
+    /// Player drownTime, keyed by unit id (audit H4).
+    pub player_drown: DashMap<i32, f32>,
+    pub limit_x: AtomicI32,
+    pub limit_y: AtomicI32,
+    pub limit_w: AtomicI32,
+    pub limit_h: AtomicI32,
+    pub rand_seed0: AtomicI64,
+    pub rand_seed1: AtomicI64,
+    /// Units queued for `kill_enemy` from domains that lack a `FrameEmit`.
+    pub pending_unit_kills: Mutex<Vec<i32>>,
+    /// Surge-wall lightning strikes queued so `damage_building` never re-enters `enemies`.
+    pub pending_wall_lightning: Mutex<Vec<(f32, f32, u8)>>,
+    /// Ground item stacks from unit death (audit M9). 159.7 `entities.json`
+    /// has no serialized ItemEntity class, so these are server-side pickups.
+    pub ground_items: Mutex<Vec<GroundItem>>,
+    /// UnitAssembler tether: assembler tile position -> live assembly-drone
+    /// ids plus the official `droneProgress` accumulator (`droneConstructTime`
+    /// = 240 ticks). Runtime-only; the drones themselves live in `enemies`.
+    pub assembler_drones: Mutex<HashMap<i32, AssemblerDroneBind>>,
+    /// Simulation tick until which `WaveSpawner.isSpawning()` is true
+    /// (121 ticks after `runWave`; ASTRA W06).
+    pub spawner_until: AtomicU32,
+}
+
+/// Per-assembler AssemblerAI bind (UnitAssemblerBuild.units + droneProgress).
+#[derive(Clone, Debug, Default)]
+pub struct AssemblerDroneBind {
+    pub unit_ids: Vec<i32>,
+    pub progress: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct GroundItem {
+    pub x: f32,
+    pub y: f32,
+    pub item: i16,
+    pub amount: i32,
+    /// Remaining ticks (vanilla ItemComp.lifetime = 60*60*3).
+    pub life: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct WeatherEntry {
+    pub weather_id: i16,
+    pub intensity: f32,
+    pub remaining: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct MapObjective {
+    pub kind: MapObjectiveKind,
+    pub complete: bool,
+    /// Timer elapsed ticks (MapObjectives.TimerObjective.countup).
+    pub progress: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum MapObjectiveKind {
+    WinWave(i32),
+    DestroyCores,
+    Flag(u64),
+    Item {
+        item: i16,
+        amount: i32,
+    },
+    CoreItem {
+        item: i16,
+        amount: i32,
+    },
+    BuildCount {
+        block: i16,
+        count: i32,
+    },
+    UnitCount {
+        unit: i16,
+        count: i32,
+    },
+    DestroyUnits {
+        count: i32,
+    },
+    Timer {
+        duration: f32,
+    },
+    DestroyBlock {
+        x: i16,
+        y: i16,
+        team: u8,
+        block: i16,
+    },
+    CommandMode,
+}
+
+impl Default for WorldExtras {
+    fn default() -> Self {
+        Self {
+            weather: RwLock::new(Vec::new()),
+            objectives: RwLock::new(Vec::new()),
+            markers_json: RwLock::new("{}".to_string()),
+            pending_calls: Mutex::new(Vec::new()),
+            fog_visible: DashMap::new(),
+            floor_overrides: DashMap::new(),
+            overlay_overrides: DashMap::new(),
+            player_drown: DashMap::new(),
+            limit_x: AtomicI32::new(0),
+            limit_y: AtomicI32::new(0),
+            limit_w: AtomicI32::new(0),
+            limit_h: AtomicI32::new(0),
+            rand_seed0: AtomicI64::new(0x9E37_79B9_7F4A_7C15u64 as i64),
+            rand_seed1: AtomicI64::new(0xA076_1D64_78BD_642Fu64 as i64),
+            pending_unit_kills: Mutex::new(Vec::new()),
+            pending_wall_lightning: Mutex::new(Vec::new()),
+            ground_items: Mutex::new(Vec::new()),
+            assembler_drones: Mutex::new(HashMap::new()),
+            spawner_until: AtomicU32::new(0),
+        }
+    }
+}
+
+impl WorldExtras {
+    pub fn queue_call(&self, frame: Vec<u8>) {
+        self.pending_calls.lock().push(frame);
+    }
+
+    pub fn take_calls(&self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut *self.pending_calls.lock())
+    }
+
+    pub fn rand_seeds(&self) -> (i64, i64) {
+        (
+            self.rand_seed0.load(Ordering::Relaxed),
+            self.rand_seed1.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn queue_unit_kill(&self, unit_id: i32) {
+        self.pending_unit_kills.lock().push(unit_id);
+    }
+
+    pub fn take_unit_kills(&self) -> Vec<i32> {
+        std::mem::take(&mut *self.pending_unit_kills.lock())
+    }
+
+    pub fn queue_wall_lightning(&self, x: f32, y: f32, team: u8) {
+        self.pending_wall_lightning.lock().push((x, y, team));
+    }
+
+    pub fn take_wall_lightning(&self) -> Vec<(f32, f32, u8)> {
+        std::mem::take(&mut *self.pending_wall_lightning.lock())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameMode {
@@ -43,6 +208,17 @@ impl GameStats {
         match counter.iter_mut().find(|(id, _)| *id == block) {
             Some((_, count)) => *count += 1,
             None => counter.push((block, 1)),
+        }
+    }
+
+    /// Add `amount` to a content counter (core-item ingress).
+    pub fn bump_amount(counter: &mut Vec<(i16, u32)>, id: i16, amount: u32) {
+        if amount == 0 {
+            return;
+        }
+        match counter.iter_mut().find(|(existing, _)| *existing == id) {
+            Some((_, count)) => *count = count.saturating_add(amount),
+            None => counter.push((id, amount)),
         }
     }
 }
@@ -109,6 +285,10 @@ pub struct GameState {
     pub world_tick_max_us: Arc<AtomicU64>,
     /// Total outbound frames dropped across connections (slow consumers).
     pub dropped_frames_total: Arc<AtomicU64>,
+    /// Set when `setrule` mutates live Rules; the world loop broadcasts SetRules.
+    pub rules_dirty: Arc<AtomicBool>,
+    /// Fog/weather/objectives/queued Call packets (audit M11/M13–M19).
+    pub extras: Arc<WorldExtras>,
 }
 
 impl Default for GameState {
@@ -153,6 +333,8 @@ impl GameState {
             world_tick_us_sum: Arc::new(AtomicU64::new(0)),
             world_tick_max_us: Arc::new(AtomicU64::new(0)),
             dropped_frames_total: Arc::new(AtomicU64::new(0)),
+            rules_dirty: Arc::new(AtomicBool::new(false)),
+            extras: Arc::new(WorldExtras::default()),
         }
     }
 
